@@ -17,10 +17,14 @@ Veil is a blazingly fast code indexing and search engine designed for AI agents 
 
 ## Performance
 
-**Warm query latency (p95):**
-- File queries: **0.07ms** (97% faster than baseline)
-- Symbol queries: **0.06ms** (86% faster than baseline)
-- Chunk search: **0.03ms** (95% faster than baseline)
+**Veil vs Traditional Tools:**
+- **8,548x faster** on average than find/grep/ripgrep
+- **Status check**: 1,039x faster (0.16ms vs 163ms)
+- **Symbol search**: 28,418x faster (0.05ms vs 1,465ms)
+- **Code search**: 1,113x faster (0.07ms vs 77ms)
+- **Discovery**: 12,160x faster (0.12ms vs 1,453ms)
+
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed comparison with traditional tools.
 
 **Memory usage:** <100MB for typical workloads  
 **Test coverage:** 100% (29 tests)
@@ -120,8 +124,11 @@ bun run src/cli.ts diagnostics
 # Run tests
 bun run src/test.ts
 
-# Benchmark
+# Benchmark (internal performance)
 bun run src/bench-harness.ts --workspace <path> --warm 50
+
+# Benchmark (vs traditional tools)
+bun run src/bench-comparison.ts --workspace <path>
 ```
 
 ## MCP Tools

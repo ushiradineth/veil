@@ -1,10 +1,15 @@
 import { buildIndex, discoverIndex, getStatus } from "./indexer";
 import type { BuildMode } from "./types";
+import { profiler, diagnostics } from "./diagnostics";
 
 function getArg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
   if (idx === -1) return fallback;
   return process.argv[idx + 1] ?? fallback;
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(name);
 }
 
 function resolveWorkspace(): string {
@@ -14,6 +19,12 @@ function resolveWorkspace(): string {
 async function main(): Promise<void> {
   const cmd = process.argv[2] ?? "status";
   const workspace = resolveWorkspace();
+  const enableProfiling = hasFlag("--profile");
+
+  if (enableProfiling) {
+    profiler.enable();
+    console.error("Profiling enabled");
+  }
 
   if (cmd === "build") {
     const manifest = await buildIndex(workspace, "full");
@@ -54,8 +65,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "diagnostics") {
+    const data = diagnostics.getDiagnostics();
+    process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
+    return;
+  }
+
+  if (enableProfiling) {
+    console.error("\n" + profiler.report());
+  }
+
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover> [--workspace <path>] [--mode full|changed] [--query <text>]\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|discover|diagnostics> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\n",
   );
   process.exitCode = 1;
 }

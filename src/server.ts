@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { buildIndex, discoverIndex, getStatus, queryChunks, queryFiles, querySymbols } from "./indexer";
+import { diagnostics } from "./diagnostics";
 
 function asText(data: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
   const structuredContent =
@@ -146,6 +147,21 @@ server.tool(
     });
 
     return asText({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
+  },
+);
+
+server.tool(
+  "diagnostics",
+  "Get performance diagnostics including cache stats, latency histograms, and memory usage",
+  {
+    reset: z.boolean().optional(),
+  },
+  async ({ reset }) => {
+    const data = diagnostics.getDiagnostics();
+    if (reset) {
+      diagnostics.reset();
+    }
+    return asText(data);
   },
 );
 

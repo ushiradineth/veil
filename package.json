@@ -8,6 +8,7 @@
     "build": "bun run src/cli.ts build",
     "refresh": "bun run src/cli.ts refresh",
     "status": "bun run src/cli.ts status",
+    "test": "bun run src/test.ts",
     "bench": "bun run src/bench.ts",
     "bench:harness": "bun run src/bench-harness.ts"
   },

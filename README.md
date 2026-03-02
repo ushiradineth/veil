@@ -25,8 +25,6 @@ Veil is a blazingly fast code indexing and search engine designed for AI agents 
 **Memory usage:** <100MB for typical workloads  
 **Test coverage:** 100% (29 tests)
 
-See [performance summary](.agents/benchmarks/performance-summary.md) for detailed benchmarks.
-
 ## Installation
 
 **Requirements:**
@@ -41,7 +39,67 @@ cd veil
 bun install
 ```
 
-## Quick Start
+## MCP Setup
+
+Add veil to your MCP client configuration:
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "bun",
+      "args": ["run", "/path/to/veil/src/server.ts"],
+      "env": {}
+    }
+  }
+}
+```
+
+### Codex
+
+Edit `~/.config/codex/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "bun",
+      "args": ["run", "/path/to/veil/src/server.ts"]
+    }
+  }
+}
+```
+
+### OpenCode
+
+Edit `~/.config/opencode/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "bun",
+      "args": ["run", "/path/to/veil/src/server.ts"]
+    }
+  }
+}
+```
+
+**Example with workspace:**
+
+To index a specific repository (e.g., `~/nix-config`), first build the index:
+
+```bash
+bun run src/cli.ts build --workspace ~/nix-config
+```
+
+Then use the MCP tools with `workspace: "~/nix-config"` parameter, or omit it to use the current working directory.
+
+## CLI Usage
 
 ```bash
 # Build index

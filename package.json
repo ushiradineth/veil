@@ -1,0 +1,22 @@
+{
+  "name": "scry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mcp": "bun run src/server.ts",
+    "build": "bun run src/cli.ts build",
+    "refresh": "bun run src/cli.ts refresh",
+    "status": "bun run src/cli.ts status",
+    "bench": "bun run src/bench.ts",
+    "bench:harness": "bun run src/bench-harness.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.0"
+  }
+}

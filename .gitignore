@@ -1,0 +1,24 @@
+# Node modules
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Agent artifacts
+.agents/benchmarks/
+.agents/plans/
+.agents/COMPLETION_SUMMARY.md
+
+# Index artifacts (workspace-specific)
+.agents/index/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

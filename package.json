@@ -12,7 +12,8 @@
     "bench": "bun run src/bench.ts",
     "bench:harness": "bun run src/bench-harness.ts",
     "bench:baseline": "bun run src/bench-harness.ts --save-baseline",
-    "bench:compare": "bun run src/bench-harness.ts --compare"
+    "bench:compare": "bun run src/bench-harness.ts --compare",
+    "bench:comparison": "bun run src/bench-comparison.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",

@@ -18,6 +18,80 @@ const MAX_FILE_SIZE = 512 * 1024;
 const CHUNK_SIZE_LINES = 120;
 const CHUNK_OVERLAP_LINES = 20;
 
+/**
+ * Min-heap based top-K algorithm for efficient scoring
+ * Maintains K highest-scoring items in O(n log k) time vs O(n²) for array insertion
+ */
+class TopKHeap<T> {
+  private heap: { item: T; score: number }[] = [];
+  private readonly k: number;
+
+  constructor(k: number) {
+    this.k = k;
+  }
+
+  private parent(i: number): number {
+    return Math.floor((i - 1) / 2);
+  }
+
+  private left(i: number): number {
+    return 2 * i + 1;
+  }
+
+  private right(i: number): number {
+    return 2 * i + 2;
+  }
+
+  private swap(i: number, j: number): void {
+    const temp = this.heap[i]!;
+    this.heap[i] = this.heap[j]!;
+    this.heap[j] = temp;
+  }
+
+  private heapifyUp(i: number): void {
+    while (i > 0) {
+      const p = this.parent(i);
+      if (this.heap[i]!.score >= this.heap[p]!.score) break;
+      this.swap(i, p);
+      i = p;
+    }
+  }
+
+  private heapifyDown(i: number): void {
+    while (true) {
+      let smallest = i;
+      const l = this.left(i);
+      const r = this.right(i);
+
+      if (l < this.heap.length && this.heap[l]!.score < this.heap[smallest]!.score) {
+        smallest = l;
+      }
+      if (r < this.heap.length && this.heap[r]!.score < this.heap[smallest]!.score) {
+        smallest = r;
+      }
+
+      if (smallest === i) break;
+      this.swap(i, smallest);
+      i = smallest;
+    }
+  }
+
+  insert(item: T, score: number): void {
+    if (this.heap.length < this.k) {
+      this.heap.push({ item, score });
+      this.heapifyUp(this.heap.length - 1);
+    } else if (score > this.heap[0]!.score) {
+      this.heap[0] = { item, score };
+      this.heapifyDown(0);
+    }
+  }
+
+  toSortedArray(): T[] {
+    const sorted = [...this.heap].sort((a, b) => b.score - a.score);
+    return sorted.map((entry) => entry.item);
+  }
+}
+
 type IndexCacheEntry = {
   filesMtimeMs: number | null;
   symbolsMtimeMs: number | null;
@@ -685,19 +759,7 @@ function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit:
   if (cached) return cached;
   if (!parsed.normalized) return [];
 
-  const top: { index: number; score: number }[] = [];
-  const insertTop = (candidate: { index: number; score: number }): void => {
-    let inserted = false;
-    for (let i = 0; i < top.length; i++) {
-      if (candidate.score > top[i]!.score) {
-        top.splice(i, 0, candidate);
-        inserted = true;
-        break;
-      }
-    }
-    if (!inserted) top.push(candidate);
-    if (top.length > limit) top.pop();
-  };
+  const heap = new TopKHeap<number>(limit);
 
   for (let i = 0; i < cache.files.length; i++) {
     const pathLower = cache.filesLower[i] ?? "";
@@ -708,10 +770,10 @@ function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit:
     const topDir = normalizeText(topLevel(pathLower));
     if (parsed.intent === "code" && CODE_TOP_LEVEL_HINTS.has(topDir)) score += 0.6;
     if (parsed.intent === "docs" && (pathLower.endsWith(".md") || pathLower.includes("/docs/"))) score += 1.5;
-    if (score > 0.5) insertTop({ index: i, score });
+    if (score > 0.5) heap.insert(i, score);
   }
 
-  const result = top.map((item) => cache.files[item.index]!);
+  const result = heap.toSortedArray().map((index) => cache.files[index]!);
   cache.queryFilesCache.set(key, result);
   return result;
 }
@@ -730,19 +792,7 @@ function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limi
     for (let i = 0; i < cache.symbols.length; i++) candidateIndexes.add(i);
   }
 
-  const top: { index: number; score: number }[] = [];
-  const insertTop = (candidate: { index: number; score: number }): void => {
-    let inserted = false;
-    for (let i = 0; i < top.length; i++) {
-      if (candidate.score > top[i]!.score) {
-        top.splice(i, 0, candidate);
-        inserted = true;
-        break;
-      }
-    }
-    if (!inserted) top.push(candidate);
-    if (top.length > limit) top.pop();
-  };
+  const heap = new TopKHeap<number>(limit);
 
   for (const i of candidateIndexes) {
     const symbol = cache.symbols[i];
@@ -756,10 +806,10 @@ function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limi
     }
     if (parsed.intent === "symbols") score += 1.5;
     if (parsed.intent === "docs") score -= 1;
-    if (score >= 1.5) insertTop({ index: i, score });
+    if (score >= 1.5) heap.insert(i, score);
   }
 
-  const result = top.map((item) => cache.symbols[item.index]!);
+  const result = heap.toSortedArray().map((index) => cache.symbols[index]!);
   cache.querySymbolsCache.set(key, result);
   return result;
 }
@@ -799,19 +849,7 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     }
   }
 
-  const top: { index: number; score: number }[] = [];
-  const insertTop = (candidate: { index: number; score: number }): void => {
-    let inserted = false;
-    for (let i = 0; i < top.length; i++) {
-      if (candidate.score > top[i]!.score) {
-        top.splice(i, 0, candidate);
-        inserted = true;
-        break;
-      }
-    }
-    if (!inserted) top.push(candidate);
-    if (top.length > limit) top.pop();
-  };
+  const heap = new TopKHeap<number>(limit);
 
   for (const i of candidateIndexes) {
     const chunk = cache.chunks[i];
@@ -834,10 +872,10 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     if (parsed.intent === "symbols" && pathLower.endsWith(".md")) score -= 1;
     if (parsed.intent === "code" && cache.chunksBasenameLower[i] === "readme.md") score -= 1;
 
-    if (score >= 2) insertTop({ index: i, score });
+    if (score >= 2) heap.insert(i, score);
   }
 
-  const result = top.map((item) => cache.chunks[item.index]!);
+  const result = heap.toSortedArray().map((index) => cache.chunks[index]!);
   cache.queryChunksCache.set(key, result);
   return result;
 }

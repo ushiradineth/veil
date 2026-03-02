@@ -1,8 +1,19 @@
 # veil
 
-High-performance MCP server and CLI for repository indexing and code search.
+> High-performance MCP server and CLI for repository indexing and code search
 
-Indexes code repositories and exposes fast retrieval tools over MCP stdio. Optimized for sub-millisecond warm queries and efficient memory usage.
+Veil is a blazingly fast code indexing and search engine designed for AI agents and developer tools. It indexes code repositories and exposes retrieval tools over the Model Context Protocol (MCP), enabling sub-millisecond queries with minimal memory overhead.
+
+## Features
+
+- **Ultra-fast queries** - Sub-millisecond warm query latency (0.03-0.07ms p95)
+- **Smart indexing** - Extracts files, symbols, and semantic code chunks
+- **Flexible search** - File paths, symbol names, and full-text code search
+- **Memory efficient** - <100MB for typical workloads with intelligent caching
+- **Incremental updates** - Fast refresh with git-aware change detection
+- **Battle-tested** - 100% test coverage with comprehensive benchmarks
+- **Observable** - Built-in diagnostics and performance profiling
+- **MCP native** - First-class Model Context Protocol support
 
 ## Performance
 
@@ -15,6 +26,20 @@ Indexes code repositories and exposes fast retrieval tools over MCP stdio. Optim
 **Test coverage:** 100% (29 tests)
 
 See [performance summary](.agents/benchmarks/performance-summary.md) for detailed benchmarks.
+
+## Installation
+
+**Requirements:**
+- Bun runtime (or Node.js 18+)
+- Git (optional, for git-aware indexing)
+
+**Clone and install:**
+
+```bash
+git clone https://github.com/ushiradineth/veil.git
+cd veil
+bun install
+```
 
 ## Quick Start
 
@@ -74,4 +99,35 @@ Index artifacts are written to `<workspace>/.agents/index/`:
 - Query result caching per workspace
 - Status cache with TTL
 
-See [AGENTS.md](AGENTS.md) for development guidelines.
+## Development
+
+**Run tests:**
+```bash
+bun run src/test.ts
+```
+
+**Run benchmarks:**
+```bash
+bun run src/bench-harness.ts --workspace /path/to/repo --warm 100
+```
+
+**Start MCP server:**
+```bash
+bun run src/server.ts
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests.
+
+## Acknowledgments
+
+Built with performance in mind, leveraging:
+- Heap-based top-K algorithms for efficient ranking
+- Single-pass parsing to minimize allocations
+- Parallel file processing for multi-core systems
+- Intelligent caching strategies for memory efficiency

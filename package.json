@@ -10,7 +10,9 @@
     "status": "bun run src/cli.ts status",
     "test": "bun run src/test.ts",
     "bench": "bun run src/bench.ts",
-    "bench:harness": "bun run src/bench-harness.ts"
+    "bench:harness": "bun run src/bench-harness.ts",
+    "bench:baseline": "bun run src/bench-harness.ts --save-baseline",
+    "bench:compare": "bun run src/bench-harness.ts --compare"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",

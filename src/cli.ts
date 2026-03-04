@@ -1,7 +1,9 @@
 import { buildIndex, discoverIndex, getStatus, lookupIndex, shouldRefreshDiscover } from "./indexer";
 import type { BuildMode } from "./types";
 import { profiler, diagnostics } from "./diagnostics";
+import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { webSearch } from "./web-search";
 
 function getArg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -17,6 +19,10 @@ function resolveWorkspace(): string {
   return getArg("--workspace") ?? process.cwd();
 }
 
+function writeOutput(data: unknown): void {
+  process.stdout.write(`${toToon(data)}\n`);
+}
+
 async function main(): Promise<void> {
   const cmd = process.argv[2] ?? "status";
   const workspace = resolveWorkspace();
@@ -29,20 +35,20 @@ async function main(): Promise<void> {
 
   if (cmd === "build") {
     const manifest = await buildIndex(workspace, "full");
-    process.stdout.write(`${JSON.stringify({ ok: true, mode: "full", manifest }, null, 2)}\n`);
+    writeOutput({ ok: true, mode: "full", manifest });
     return;
   }
 
   if (cmd === "refresh") {
     const mode = (getArg("--mode", "changed") as BuildMode) ?? "changed";
     const manifest = await buildIndex(workspace, mode);
-    process.stdout.write(`${JSON.stringify({ ok: true, mode, manifest }, null, 2)}\n`);
+    writeOutput({ ok: true, mode, manifest });
     return;
   }
 
   if (cmd === "status") {
     const status = await getStatus(workspace);
-    process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    writeOutput(status);
     return;
   }
 
@@ -56,13 +62,7 @@ async function main(): Promise<void> {
       status = await getStatus(workspace);
     }
     const discovered = await discoverIndex(workspace, query, { prefer_code: true, intent });
-    process.stdout.write(
-      `${JSON.stringify(
-        { status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks },
-        null,
-        2,
-      )}\n`,
-    );
+    writeOutput({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
     return;
   }
 
@@ -70,20 +70,35 @@ async function main(): Promise<void> {
     const query = getArg("--query", "") ?? "";
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
     const result = await lookupIndex(workspace, query, { intent, prefer_code: true });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
+    return;
+  }
+
+  if (cmd === "web-search") {
+    const query = getArg("--query", "") ?? "";
+    const limit = Number(getArg("--limit", "8") ?? "8");
+    const timeout_ms = Number(getArg("--timeout-ms", "5000") ?? "5000");
+    const debug = (getArg("--debug", "0") ?? "0") === "1";
+    const result = await webSearch(workspace, {
+      query,
+      limit: Number.isFinite(limit) ? limit : 8,
+      timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000,
+      debug,
+    });
+    writeOutput(result);
     return;
   }
 
   if (cmd === "diagnostics") {
     const data = diagnostics.getDiagnostics();
-    process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
+    writeOutput(data);
     return;
   }
 
   if (cmd === "git-status") {
     const timeout_ms = Number(getArg("--timeout-ms", "5000") ?? "5000");
     const result = gitStatus(workspace, { timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000 });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
     return;
   }
 
@@ -97,7 +112,7 @@ async function main(): Promise<void> {
       author: getArg("--author"),
       grep: getArg("--grep"),
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
     return;
   }
 
@@ -113,7 +128,7 @@ async function main(): Promise<void> {
       base: getArg("--base"),
       head: getArg("--head"),
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
     return;
   }
 
@@ -128,7 +143,7 @@ async function main(): Promise<void> {
       path: getArg("--path"),
       patch: (getArg("--patch", "1") ?? "1") !== "0",
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
     return;
   }
 
@@ -144,7 +159,7 @@ async function main(): Promise<void> {
       limit: Number.isFinite(limit) ? limit : 10,
       timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 12000,
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    writeOutput(result);
     return;
   }
 
@@ -153,7 +168,7 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\n",
   );
   process.exitCode = 1;
 }

@@ -4,6 +4,8 @@ import { z } from "zod";
 import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols, shouldRefreshDiscover } from "./indexer";
 import { diagnostics } from "./diagnostics";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { toToon } from "./format";
+import { webSearch } from "./web-search";
 
 function asText(data: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
   const structuredContent =
@@ -11,7 +13,7 @@ function asText(data: unknown): { content: { type: "text"; text: string }[]; str
       ? (data as Record<string, unknown>)
       : { value: data };
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: toToon(data) }],
     structuredContent,
   };
 }
@@ -177,6 +179,22 @@ server.tool(
     });
 
     return asText({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
+  },
+);
+
+server.tool(
+  "web_search",
+  "Fast web search across google, duckduckgo, wikipedia, github, reddit, and deepwiki",
+  {
+    workspace: z.string().optional(),
+    query: z.string(),
+    limit: z.number().int().positive().max(25).optional(),
+    timeout_ms: z.number().int().positive().max(15000).optional(),
+    debug: z.boolean().optional(),
+  },
+  async ({ workspace, query, limit, timeout_ms, debug }) => {
+    const ws = workspace ?? process.cwd();
+    return asText(await webSearch(ws, { query, limit, timeout_ms, debug }));
   },
 );
 

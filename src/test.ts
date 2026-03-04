@@ -15,6 +15,7 @@ import {
   shouldRefreshDiscover,
 } from "./indexer";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
+import { fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { webSearch } from "./web-search";
 
@@ -533,6 +534,100 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("provider-unavailable");
     expect(result.data).toBeNull();
+  });
+
+  test("Fetch URL prefers markdown and returns content", async () => {
+    const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const accept = String((init?.headers as Record<string, string> | undefined)?.accept ?? "").toLowerCase();
+      expect(accept.includes("text/markdown")).toBe(true);
+      return new Response("# Title\n\nBody", {
+        status: 200,
+        headers: {
+          "content-type": "text/markdown; charset=utf-8",
+          "x-markdown-tokens": "42",
+          "content-signal": "ai-train=yes, search=yes, ai-input=yes",
+          vary: "accept",
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/doc",
+      format: "markdown",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.data?.content.includes("# Title")).toBe(true);
+    expect(result.data?.markdown_tokens).toBe(42);
+    expect(result.data?.content_signal).toContain("ai-input=yes");
+    expect(result.data?.vary).toBe("accept");
+  });
+
+  test("Fetch URL converts html to markdown on markdown format", async () => {
+    const mockFetch = (async () => {
+      return new Response('<h1>Hello</h1><p>See <a href="https://example.com">docs</a></p>', {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/page",
+      format: "markdown",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.content.includes("# Hello")).toBe(true);
+    expect(result.data?.content.includes("[docs](https://example.com)")).toBe(true);
+  });
+
+  test("Fetch URL validates URL", async () => {
+    const result = await fetchUrl({ url: "notaurl" });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("invalid-url");
+  });
+
+  test("Fetch URL reports timeout", async () => {
+    const mockFetch = ((_: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (!signal) return;
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("AbortError"));
+          },
+          { once: true },
+        );
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/slow",
+      timeout_ms: 300,
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("timeout");
+  });
+
+  test("Fetch URL truncates oversized content", async () => {
+    const mockFetch = (async () => {
+      return new Response("x".repeat(1000), {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/large",
+      max_bytes: 120,
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.meta.truncated).toBe(true);
+    expect((result.data?.content.length ?? 0) < 1000).toBe(true);
   });
 });
 

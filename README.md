@@ -128,6 +128,9 @@ bun run src/cli.ts web-search --query "typescript language server"
 # Optional debug diagnostics for web search (provider trace, ranking details)
 bun run src/cli.ts web-search --query "typescript language server" --debug 1
 
+# Fetch URL content with markdown-first negotiation
+bun run src/cli.ts fetch-url --url "https://example.com" --format markdown
+
 # Git repository lookups
 bun run src/cli.ts git-status --workspace <path>
 bun run src/cli.ts git-log --workspace <path> --limit 20
@@ -167,6 +170,8 @@ The server exposes the following MCP tools:
 - **search** - Search indexed code chunks by keyword
 - **lookup** - Intent-aware contextual lookup with confidence and fallback metadata
 - **web_search** - Fast web search without API keys (google, duckduckgo, wikipedia, github, reddit, deepwiki), minimal results by default with optional debug diagnostics
+- **fetch_url** - Fetch URL content with markdown-first output negotiation and fallback conversion
+  - returns `markdown_tokens`, `content_signal`, and `vary` when present in response headers
 - **discover** - Combined status + files + symbols + search in one call
 - **git_status** - Inspect branch state and dirty workspace changes
 - **git_log** - Query commit history with limit and filters

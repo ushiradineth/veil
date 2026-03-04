@@ -1,6 +1,7 @@
 import { buildIndex, discoverIndex, getStatus, lookupIndex, shouldRefreshDiscover } from "./indexer";
 import type { BuildMode } from "./types";
 import { profiler, diagnostics } from "./diagnostics";
+import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { webSearch } from "./web-search";
@@ -89,6 +90,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "fetch-url") {
+    const url = getArg("--url", "") ?? "";
+    const formatRaw = getArg("--format", "markdown") ?? "markdown";
+    const format = formatRaw === "text" || formatRaw === "html" ? formatRaw : "markdown";
+    const timeout_ms = Number(getArg("--timeout-ms", "8000") ?? "8000");
+    const max_bytes = Number(getArg("--max-bytes", "200000") ?? "200000");
+    const result = await fetchUrl({
+      url,
+      format,
+      timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 8000,
+      max_bytes: Number.isFinite(max_bytes) ? max_bytes : 200000,
+    });
+    writeOutput(result);
+    return;
+  }
+
   if (cmd === "diagnostics") {
     const data = diagnostics.getDiagnostics();
     writeOutput(data);
@@ -168,7 +185,7 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|fetch-url|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n",
   );
   process.exitCode = 1;
 }

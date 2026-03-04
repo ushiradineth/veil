@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols, shouldRefreshDiscover } from "./indexer";
 import { diagnostics } from "./diagnostics";
+import { fetchUrl } from "./fetch-url";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { toToon } from "./format";
 import { webSearch } from "./web-search";
@@ -195,6 +196,20 @@ server.tool(
   async ({ workspace, query, limit, timeout_ms, debug }) => {
     const ws = workspace ?? process.cwd();
     return asText(await webSearch(ws, { query, limit, timeout_ms, debug }));
+  },
+);
+
+server.tool(
+  "fetch_url",
+  "Fetch URL content with markdown-first negotiation",
+  {
+    url: z.string(),
+    format: z.enum(["markdown", "text", "html"]).optional(),
+    timeout_ms: z.number().int().positive().max(20000).optional(),
+    max_bytes: z.number().int().positive().max(2000000).optional(),
+  },
+  async ({ url, format, timeout_ms, max_bytes }) => {
+    return asText(await fetchUrl({ url, format, timeout_ms, max_bytes }));
   },
 );
 

@@ -4,10 +4,29 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { buildIndex, discoverIndex, getStatus, queryChunks, queryFiles, querySymbols } from "./indexer";
+import { diagnostics } from "./diagnostics";
+import { fetchUrl } from "./fetch-url";
+import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols } from "./indexer";
+import { webSearch } from "./web-search";
 
 type Phase = "cold" | "warm";
-type ScenarioKind = "status" | "files" | "symbols" | "search" | "discover";
+type ScenarioKind =
+  | "status"
+  | "refresh"
+  | "files"
+  | "symbols"
+  | "search"
+  | "lookup"
+  | "discover"
+  | "web_search"
+  | "fetch_url"
+  | "diagnostics"
+  | "git_status"
+  | "git_log"
+  | "git_diff"
+  | "git_show"
+  | "gh_lookup";
 
 type Scenario = {
   id: string;
@@ -107,6 +126,14 @@ const SCENARIOS: Scenario[] = [
     expected_patterns: ["exists", "stale", "manifest"],
   },
   {
+    id: "refresh-changed",
+    kind: "refresh",
+    title: "Incremental index refresh",
+    prompt: "Refresh index in changed mode",
+    query: "changed",
+    expected_patterns: ["schema_version", "workspace", "file_count"],
+  },
+  {
     id: "files-homebrew",
     kind: "files",
     title: "File lookup by path intent",
@@ -131,12 +158,84 @@ const SCENARIOS: Scenario[] = [
     expected_patterns: ["pnpm", "install"],
   },
   {
+    id: "lookup-build-index",
+    kind: "lookup",
+    title: "Intent-aware lookup",
+    prompt: "Find where buildIndex is defined",
+    query: "where is buildIndex defined",
+    expected_patterns: ["buildindex", "indexer", "score"],
+  },
+  {
     id: "discover-combined",
     kind: "discover",
     title: "Combined discovery workflow",
     prompt: "Find files, symbols, and code for homebrew pnpm build",
     query: "homebrew pnpm build",
     expected_patterns: ["homebrew", "pnpm", "build"],
+  },
+  {
+    id: "web-search-typescript",
+    kind: "web_search",
+    title: "Web search query",
+    prompt: "Search the web for typescript language server",
+    query: "typescript language server",
+    expected_patterns: ["typescript", "language", "server"],
+  },
+  {
+    id: "fetch-url-example",
+    kind: "fetch_url",
+    title: "URL fetch markdown-first",
+    prompt: "Fetch and convert content from example.com",
+    query: "https://example.com",
+    expected_patterns: ["example", "domain"],
+  },
+  {
+    id: "diagnostics-read",
+    kind: "diagnostics",
+    title: "Diagnostics lookup",
+    prompt: "Read diagnostics and cache counters",
+    query: "diagnostics",
+    expected_patterns: ["latency", "cache"],
+  },
+  {
+    id: "git-status-check",
+    kind: "git_status",
+    title: "Git status lookup",
+    prompt: "Inspect repository git status",
+    query: "status",
+    expected_patterns: ["branch", "clean", "dirty"],
+  },
+  {
+    id: "git-log-check",
+    kind: "git_log",
+    title: "Git log lookup",
+    prompt: "Inspect recent commit log",
+    query: "log",
+    expected_patterns: ["commit", "author", "message"],
+  },
+  {
+    id: "git-diff-check",
+    kind: "git_diff",
+    title: "Git diff lookup",
+    prompt: "Inspect unstaged diff",
+    query: "diff",
+    expected_patterns: ["diff", "file"],
+  },
+  {
+    id: "git-show-head",
+    kind: "git_show",
+    title: "Git show lookup",
+    prompt: "Show HEAD commit details",
+    query: "head",
+    expected_patterns: ["commit", "author", "message"],
+  },
+  {
+    id: "gh-lookup-prs",
+    kind: "gh_lookup",
+    title: "GitHub lookup",
+    prompt: "Lookup GitHub pull requests",
+    query: "prs",
+    expected_patterns: ["pull", "request"],
   },
 ];
 
@@ -273,6 +372,10 @@ function createVeilAdapter(): Adapter {
           const status = await getStatus(ctx.workspace);
           return { status: "ok", text: JSON.stringify(status) };
         }
+        if (scenario.kind === "refresh") {
+          const manifest = await buildIndex(ctx.workspace, "changed");
+          return { status: "ok", text: JSON.stringify(manifest) };
+        }
         if (scenario.kind === "files") {
           const rows = await queryFiles(ctx.workspace, scenario.query, 20);
           return { status: "ok", text: JSON.stringify(rows) };
@@ -283,6 +386,42 @@ function createVeilAdapter(): Adapter {
         }
         if (scenario.kind === "search") {
           const rows = await queryChunks(ctx.workspace, scenario.query, 10, { prefer_code: true });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "lookup") {
+          const rows = await lookupIndex(ctx.workspace, scenario.query, { prefer_code: true, intent: "code" });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "web_search") {
+          const rows = await webSearch(ctx.workspace, { query: scenario.query, limit: 5, timeout_ms: 4_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "fetch_url") {
+          const rows = await fetchUrl({ url: scenario.query, format: "markdown", timeout_ms: 4_000, max_bytes: 8_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "diagnostics") {
+          const rows = diagnostics.getDiagnostics();
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "git_status") {
+          const rows = gitStatus(ctx.workspace, { timeout_ms: 5_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "git_log") {
+          const rows = gitLog(ctx.workspace, { limit: 10, timeout_ms: 8_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "git_diff") {
+          const rows = gitDiff(ctx.workspace, { staged: false, timeout_ms: 5_000, max_bytes: 100_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "git_show") {
+          const rows = gitShow(ctx.workspace, { rev: "HEAD", timeout_ms: 8_000, max_bytes: 100_000 });
+          return { status: "ok", text: JSON.stringify(rows) };
+        }
+        if (scenario.kind === "gh_lookup") {
+          const rows = ghLookup(ctx.workspace, { repo: "microsoft/vscode", kind: "prs", limit: 3, timeout_ms: 10_000 });
           return { status: "ok", text: JSON.stringify(rows) };
         }
         const rows = await discoverIndex(ctx.workspace, scenario.query, {
@@ -315,6 +454,10 @@ function createShellAdapter(): Adapter {
         return { status: "ok", text: `${first.text}\n${second.text}`.trim() };
       }
 
+      if (scenario.kind === "refresh") {
+        return { status: "unsupported", text: "", reason: "no index refresh equivalent in shell baseline" };
+      }
+
       if (scenario.kind === "files") {
         return runCommand("find", [".", "-type", "f", "-iname", `*${scenario.query}*`], ctx.workspace);
       }
@@ -331,6 +474,34 @@ function createShellAdapter(): Adapter {
 
       if (scenario.kind === "search") {
         return runCommand("rg", ["-n", scenario.query, ".", "--max-count", "10"], ctx.workspace, [0, 1]);
+      }
+
+      if (scenario.kind === "lookup") {
+        return runCommand("rg", ["-n", "buildIndex", ".", "--max-count", "20"], ctx.workspace, [0, 1]);
+      }
+
+      if (scenario.kind === "web_search" || scenario.kind === "fetch_url" || scenario.kind === "diagnostics") {
+        return { status: "unsupported", text: "", reason: "no equivalent tool in shell baseline" };
+      }
+
+      if (scenario.kind === "git_status") {
+        return runCommand("git", ["status", "--short", "--branch"], ctx.workspace);
+      }
+
+      if (scenario.kind === "git_log") {
+        return runCommand("git", ["log", "-n", "10", "--oneline"], ctx.workspace);
+      }
+
+      if (scenario.kind === "git_diff") {
+        return runCommand("git", ["diff"], ctx.workspace);
+      }
+
+      if (scenario.kind === "git_show") {
+        return runCommand("git", ["show", "--name-only", "HEAD"], ctx.workspace);
+      }
+
+      if (scenario.kind === "gh_lookup") {
+        return runCommand("gh", ["pr", "list", "--repo", "microsoft/vscode", "--limit", "3"], ctx.workspace, [0, 1]);
       }
 
       const tokens = queryTokens(scenario.query);
@@ -453,6 +624,9 @@ function createSerenaAdapter(config: ExternalCommandConfig | null): Adapter {
           const result = await client.callTool({ name: "get_current_config", arguments: {} });
           return { status: "ok", text: extractToolText(result) };
         }
+        if (scenario.kind === "refresh") {
+          return { status: "unsupported", text: "", reason: "no direct refresh equivalent in Serena adapter" };
+        }
         if (scenario.kind === "files") {
           const result = await client.callTool({
             name: "find_file",
@@ -473,6 +647,20 @@ function createSerenaAdapter(config: ExternalCommandConfig | null): Adapter {
             arguments: { substring_pattern: scenario.query, relative_path: ".", max_answer_chars: 20000 },
           });
           return { status: "ok", text: extractToolText(result) };
+        }
+
+        if (
+          scenario.kind === "lookup" ||
+          scenario.kind === "web_search" ||
+          scenario.kind === "fetch_url" ||
+          scenario.kind === "diagnostics" ||
+          scenario.kind === "git_status" ||
+          scenario.kind === "git_log" ||
+          scenario.kind === "git_diff" ||
+          scenario.kind === "git_show" ||
+          scenario.kind === "gh_lookup"
+        ) {
+          return { status: "unsupported", text: "", reason: `no Serena mapping for '${scenario.kind}'` };
         }
 
         const files = await client.callTool({

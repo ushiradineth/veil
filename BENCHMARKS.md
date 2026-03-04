@@ -25,13 +25,28 @@ If a competitor cannot execute a scenario, the report records `unsupported` with
 
 ## Scenarios
 
-Each run executes the same scenario set for each competitor:
+Each run executes the same scenario set for each competitor.
+
+Core index/search scenarios:
 
 1. `status-bootstrap` - repository status and readiness.
-2. `files-homebrew` - path-focused file lookup.
-3. `symbols-build` - symbol-oriented lookup by name intent.
-4. `search-pnpm-install` - content search in code.
-5. `discover-combined` - combined context retrieval workflow.
+2. `refresh-changed` - incremental index refresh path.
+3. `files-homebrew` - path-focused file lookup.
+4. `symbols-build` - symbol-oriented lookup by name intent.
+5. `search-pnpm-install` - content search in code.
+6. `lookup-build-index` - intent-aware contextual lookup.
+7. `discover-combined` - combined context retrieval workflow.
+
+Extended tool-call scenarios:
+
+8. `web-search-typescript` - web search tool call.
+9. `fetch-url-example` - URL fetch with markdown negotiation.
+10. `diagnostics-read` - diagnostics readout.
+11. `git-status-check` - git status lookup.
+12. `git-log-check` - git log lookup.
+13. `git-diff-check` - git diff lookup.
+14. `git-show-head` - git show lookup.
+15. `gh-lookup-prs` - GitHub lookup via `gh`.
 
 Each scenario has:
 
@@ -67,7 +82,7 @@ bun run src/cli.ts refresh --workspace /path/to/repo --mode changed
 ### 2) Run suite (Veil + shell + Serena)
 
 ```bash
-bun run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 50 --out benchmarks/results/latest
+bun run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10 --out benchmarks/results/latest
 ```
 
 ### 3) Run suite with custom Serena command mappings (optional)
@@ -76,7 +91,7 @@ bun run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 50 --out be
 bun run src/bench-suite.ts \
   --workspace /path/to/repo \
   --cold 1 \
-  --warm 50 \
+  --warm 10 \
   --serena-config benchmarks/serena.config.example.json \
   --out benchmarks/results/latest
 ```
@@ -134,7 +149,7 @@ When publishing externally, use this structure:
 
 Before publishing benchmark numbers:
 
-1. Run test suite: `bun run src/test.ts`.
+1. Run test suite: `bun test ./src/test.ts`.
 2. Generate new benchmark artifacts with the suite.
 3. Verify reported values match `results.json` exactly.
 4. Keep raw artifacts in `benchmarks/results/` for auditability.
@@ -149,27 +164,44 @@ Before publishing benchmark numbers:
 
 Run metadata:
 
-- Generated: `2026-03-03T08:32:52.578Z`
+- Generated: `2026-03-04T15:50:29.797Z`
 - Workspace: `/Users/shu/Code/veil`
-- Iterations: cold=1, warm=50
+- Iterations: cold=1, warm=10
 - Competitors: `veil`, `shell-tools`, `serena`
+- Artifacts:
+  - `benchmarks/results/latest/results.json`
+  - `benchmarks/results/latest/SUMMARY.md`
+- Previous snapshot archive used for delta comparison:
+  - `benchmarks/results/20260304-pre-all-tools/results.json`
 
-Warm-phase results from `benchmarks/results/latest/SUMMARY.md`:
+Warm-phase Veil tool-call latencies (all supported tool calls):
 
-| Competitor | Scenario | Warm p50 (ms) | Warm p95 (ms) | Success | Relevance | Status |
-|------------|----------|---------------|---------------|---------|-----------|--------|
-| Veil MCP index | Repository status bootstrap | 0.0023 | 0.0083 | 1.00 | 1.00 | ok |
-| Veil MCP index | File lookup by path intent | 0.1210 | 1.3223 | 1.00 | 0.00 | ok |
-| Veil MCP index | Symbol lookup by name intent | 0.0599 | 1.0873 | 1.00 | 0.33 | ok |
-| Veil MCP index | Code content lookup | 0.1374 | 1.0541 | 1.00 | 1.00 | ok |
-| Veil MCP index | Combined discovery workflow | 0.1143 | 0.9145 | 1.00 | 1.00 | ok |
-| Shell tool workflow (Claude/Codex baseline) | Repository status bootstrap | 50.7845 | 374.4796 | 1.00 | 1.00 | ok |
-| Shell tool workflow (Claude/Codex baseline) | File lookup by path intent | 25.3070 | 45.4689 | 1.00 | 0.00 | ok |
-| Shell tool workflow (Claude/Codex baseline) | Symbol lookup by name intent | 12.5818 | 23.6675 | 1.00 | 0.33 | ok |
-| Shell tool workflow (Claude/Codex baseline) | Code content lookup | 10.3855 | 23.2784 | 1.00 | 1.00 | ok |
-| Shell tool workflow (Claude/Codex baseline) | Combined discovery workflow | 81.5197 | 407.6985 | 1.00 | 1.00 | ok |
-| Serena | Repository status bootstrap | 217.5073 | 1161.0956 | 1.00 | 0.00 | ok |
-| Serena | File lookup by path intent | 109.2215 | 117.0030 | 1.00 | 0.00 | ok |
-| Serena | Symbol lookup by name intent | 112.8832 | 132.2788 | 1.00 | 0.33 | ok |
-| Serena | Code content lookup | 124.6817 | 149.8029 | 1.00 | 1.00 | ok |
-| Serena | Combined discovery workflow | 361.2022 | 433.0440 | 1.00 | 1.00 | ok |
+| Scenario | Warm p50 (ms) | Warm p95 (ms) | Status |
+|----------|---------------|---------------|--------|
+| Repository status bootstrap | 0.0018 | 0.0158 | ok |
+| Incremental index refresh | 72.6088 | 115.5082 | ok |
+| File lookup by path intent | 0.0353 | 0.0907 | ok |
+| Symbol lookup by name intent | 0.0345 | 0.0583 | ok |
+| Code content lookup | 0.0791 | 0.0967 | ok |
+| Intent-aware lookup | 0.1833 | 0.2395 | ok |
+| Combined discovery workflow | 0.1002 | 0.8553 | ok |
+| Web search query | 1285.7768 | 1617.4911 | ok |
+| URL fetch markdown-first | 55.6339 | 70.1281 | ok |
+| Diagnostics lookup | 0.0671 | 0.1171 | ok |
+| Git status lookup | 38.3418 | 42.3217 | ok |
+| Git log lookup | 16.7118 | 17.4411 | ok |
+| Git diff lookup | 17.1298 | 17.3150 | ok |
+| Git show lookup | 19.8787 | 22.1407 | ok |
+| GitHub lookup | 1644.7691 | 2334.9696 | ok |
+
+Delta vs previous snapshot (`benchmarks/results/20260304-pre-all-tools/results.json`) on overlapping scenarios:
+
+- Overlap set size: 15 rows (3 competitors x 5 legacy scenarios)
+- Veil overlap deltas:
+  - `status-bootstrap`: p50 `-0.0012ms`, p95 `+0.0065ms`
+  - `files-homebrew`: p50 `-0.0198ms`, p95 `-0.2450ms`
+  - `symbols-build`: p50 `-0.0298ms`, p95 `-0.1628ms`
+  - `search-pnpm-install`: p50 `-0.0157ms`, p95 `-0.0611ms`
+  - `discover-combined`: p50 `-0.0028ms`, p95 `+0.6932ms`
+- Shell baseline now reports unsupported rows for non-equivalent tool calls (`refresh`, `web_search`, `fetch_url`, `diagnostics`)
+- Serena now reports unsupported rows for scenarios without direct mapping (`refresh`, `lookup`, `web_search`, `fetch_url`, `diagnostics`, git/gh lookups)

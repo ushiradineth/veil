@@ -26,7 +26,7 @@ Veil includes a reproducible benchmark suite for public comparisons across:
 See [BENCHMARKS.md](BENCHMARKS.md) for methodology, fairness rules, and commands to generate fresh benchmark artifacts.
 
 **Memory usage:** <100MB for typical workloads  
-**Test coverage:** Run `bun run src/test.ts` for current suite status
+**Test coverage:** Run `bun test ./src/test.ts` for current suite status
 
 ## Installation
 
@@ -120,11 +120,20 @@ bun run src/cli.ts discover --workspace <path> --query "homebrew pnpm"
 # Intent-aware lookup with explainability
 bun run src/cli.ts lookup --workspace <path> --query "where is buildIndex defined"
 
+# Git repository lookups
+bun run src/cli.ts git-status --workspace <path>
+bun run src/cli.ts git-log --workspace <path> --limit 20
+bun run src/cli.ts git-diff --workspace <path> --staged 0 --path src/indexer.ts
+bun run src/cli.ts git-show --workspace <path> --rev HEAD
+
+# Optional GitHub lookup via gh CLI
+bun run src/cli.ts gh-lookup --workspace <path> --repo owner/name --kind prs --limit 10
+
 # Run diagnostics
 bun run src/cli.ts diagnostics
 
 # Run tests
-bun run src/test.ts
+bun test ./src/test.ts
 
 # Benchmark (internal performance)
 bun run src/bench-harness.ts --workspace <path> --warm 50
@@ -150,6 +159,11 @@ The server exposes the following MCP tools:
 - **search** - Search indexed code chunks by keyword
 - **lookup** - Intent-aware contextual lookup with confidence and fallback metadata
 - **discover** - Combined status + files + symbols + search in one call
+- **git_status** - Inspect branch state and dirty workspace changes
+- **git_log** - Query commit history with limit and filters
+- **git_diff** - Inspect uncommitted or revision-range diff output
+- **git_show** - Show commit details and optional patch output
+- **gh_lookup** - Optional GitHub issues/PRs/checks lookup via `gh`
 - **diagnostics** - Get performance diagnostics and cache stats
 
 ## Index Storage
@@ -177,7 +191,7 @@ Index artifacts are written to `<workspace>/.agents/index/`:
 
 **Run tests:**
 ```bash
-bun run src/test.ts
+bun test ./src/test.ts
 ```
 
 **Run benchmarks:**

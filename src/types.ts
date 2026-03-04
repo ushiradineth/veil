@@ -73,3 +73,97 @@ export type IndexStatus = {
   manifest: Manifest | null;
   current_git_head: string | null;
 };
+
+export type GitToolName = "git_status" | "git_diff" | "git_log" | "git_show" | "gh_lookup";
+
+export type GitToolErrorCode =
+  | "not-a-repo"
+  | "git-unavailable"
+  | "gh-unavailable"
+  | "gh-unauthenticated"
+  | "invalid-revision"
+  | "invalid-path"
+  | "unsafe-arg"
+  | "timeout"
+  | "output-too-large"
+  | "command-failed";
+
+export type GitToolError = {
+  code: GitToolErrorCode;
+  message: string;
+};
+
+export type GitToolMeta = {
+  ok: boolean;
+  workspace: string;
+  tool: GitToolName;
+  git_available: boolean;
+  duration_ms: number;
+  truncated: boolean;
+  warnings: string[];
+};
+
+export type GitToolResponse<T> = {
+  meta: GitToolMeta;
+  data: T | null;
+  error: GitToolError | null;
+};
+
+export type GitStatusData = {
+  branch: string;
+  head: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+  changed: {
+    staged: number;
+    unstaged: number;
+    untracked: number;
+  };
+  paths: {
+    staged: string[];
+    unstaged: string[];
+    untracked: string[];
+  };
+};
+
+export type GitLogEntry = {
+  commit: string;
+  author: string;
+  date: string;
+  subject: string;
+  parents: string[];
+};
+
+export type GitLogData = {
+  limit: number;
+  entries: GitLogEntry[];
+};
+
+export type GitDiffData = {
+  mode: "working" | "range";
+  staged: boolean;
+  name_only: boolean;
+  base: string | null;
+  head: string | null;
+  path: string | null;
+  text: string;
+};
+
+export type GitShowData = {
+  rev: string;
+  path: string | null;
+  patch: boolean;
+  text: string;
+};
+
+export type GhLookupKind = "issues" | "prs" | "checks";
+
+export type GhLookupData = {
+  repo: string;
+  kind: GhLookupKind;
+  query: string;
+  limit: number;
+  text: string;
+};

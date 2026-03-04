@@ -1201,6 +1201,14 @@ function scoreChunk(chunk: ChunkRecord, parsed: ParsedQuery): { score: number; r
   return { score, reasons };
 }
 
+export const __internal = {
+  TopKHeap,
+  listFilesFallback,
+  scoreFile,
+  scoreSymbol,
+  scoreChunk,
+};
+
 function ensureLookupReasons(reasons: LookupReason[], label: string, detail: string): LookupReason[] {
   if (reasons.length > 0) return reasons;
   return [{ label, detail }];

@@ -219,3 +219,36 @@ export type WebSearchResponse = {
   data: WebSearchData | null;
   error: WebSearchError | null;
 };
+
+export type FetchUrlFormat = "markdown" | "text" | "html";
+
+export type FetchUrlErrorCode = "invalid-url" | "timeout" | "fetch-failed" | "internal-error";
+
+export type FetchUrlError = {
+  code: FetchUrlErrorCode;
+  message: string;
+};
+
+export type FetchUrlMeta = {
+  ok: boolean;
+  duration_ms: number;
+  truncated: boolean;
+};
+
+export type FetchUrlData = {
+  url: string;
+  final_url: string;
+  status: number;
+  content_type: string;
+  format: FetchUrlFormat;
+  markdown_tokens: number | null;
+  content_signal: string | null;
+  vary: string | null;
+  content: string;
+};
+
+export type FetchUrlResponse = {
+  meta: FetchUrlMeta;
+  data: FetchUrlData | null;
+  error: FetchUrlError | null;
+};

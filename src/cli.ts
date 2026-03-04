@@ -1,4 +1,4 @@
-import { buildIndex, discoverIndex, getStatus } from "./indexer";
+import { buildIndex, discoverIndex, getStatus, lookupIndex } from "./indexer";
 import type { BuildMode } from "./types";
 import { profiler, diagnostics } from "./diagnostics";
 
@@ -65,6 +65,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "lookup") {
+    const query = getArg("--query", "") ?? "";
+    const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
+    const result = await lookupIndex(workspace, query, { intent, prefer_code: true });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
   if (cmd === "diagnostics") {
     const data = diagnostics.getDiagnostics();
     process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
@@ -76,7 +84,7 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover|diagnostics> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|diagnostics> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\n",
   );
   process.exitCode = 1;
 }

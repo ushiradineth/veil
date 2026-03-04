@@ -13,8 +13,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   buildIndex,
+  lookupIndex,
   getStatus,
   queryFiles,
   querySymbols,
@@ -22,6 +24,7 @@ import {
   discoverIndex,
 } from "./indexer";
 import type { BuildMode, FileRecord, SymbolRecord, ChunkRecord } from "./types";
+import { diagnostics } from "./diagnostics";
 
 // Test configuration
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -73,6 +76,14 @@ function assertContains<T>(array: T[], item: T, message: string): void {
   if (!array.includes(item)) {
     throw new Error(`${message}\n  Array does not contain: ${JSON.stringify(item)}`);
   }
+}
+
+function git(repo: string, args: string[]): string {
+  const out = spawnSync("git", ["-C", repo, ...args], { encoding: "utf-8" });
+  if (out.status !== 0) {
+    throw new Error(`Git command failed: git -C ${repo} ${args.join(" ")}\n${out.stderr}`);
+  }
+  return out.stdout.trim();
 }
 
 async function test(name: string, fn: () => Promise<void>): Promise<void> {
@@ -206,6 +217,22 @@ async function runTests(): Promise<void> {
     assert(hasResults, "Should return at least some results");
   });
 
+  await test("Lookup returns explainable contextual results", async () => {
+    const result = await lookupIndex(SMALL_REPO, "where is greet defined");
+    assertEqual(result.intent, "code", "Lookup should default to code intent for code-style prompts");
+    assert(result.symbols.length > 0 || result.chunks.length > 0, "Lookup should return symbol or chunk hits");
+
+    const firstSymbol = result.symbols[0];
+    if (firstSymbol) {
+      assert(firstSymbol.score > 0, "Lookup symbol score should be positive");
+      assert(firstSymbol.reasons.length > 0, "Lookup symbol should include ranking reasons");
+      assert(["high", "medium", "low"].includes(firstSymbol.confidence), "Lookup symbol should include confidence");
+    }
+
+    assert(result.fallback !== undefined, "Lookup should include fallback metadata");
+    assert(typeof result.fallback.used === "boolean", "Lookup fallback.used should be a boolean");
+  });
+
   // Phase 3: Cache behavior
   console.log(`\n${BOLD}Phase 3: Cache Behavior${RESET}`);
 
@@ -240,6 +267,51 @@ async function runTests(): Promise<void> {
       fullManifest.file_count,
       "Changed mode should have same file count"
     );
+  });
+
+  await test("Changed mode includes staged, unstaged, and untracked files", async () => {
+    const repo = join(TEMP_TEST_DIR, "dirty-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "a.ts"), "export const alpha = () => 'base-alpha'\n");
+    await writeFile(join(repo, "b.ts"), "export const beta = () => 'base-beta'\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+
+    await buildIndex(repo, "full");
+
+    await writeFile(join(repo, "a.ts"), "export const alpha = () => 'unstaged-dirty-alpha'\n");
+    await writeFile(join(repo, "b.ts"), "export const beta = () => 'staged-dirty-beta'\n");
+    await writeFile(join(repo, "c.ts"), "export const gamma = () => 'untracked-dirty-gamma'\n");
+    git(repo, ["add", "b.ts"]);
+
+    const status = await getStatus(repo);
+    assert(status.reasons.includes("workspace-dirty"), "Status should report dirty workspace staleness");
+
+    await buildIndex(repo, "changed");
+
+    const unstaged = await queryChunks(repo, "unstaged-dirty-alpha", 5);
+    const staged = await queryChunks(repo, "staged-dirty-beta", 5);
+    const untracked = await queryFiles(repo, "c.ts", 5);
+
+    assert(unstaged.length > 0, "Changed mode should include unstaged file changes");
+    assert(staged.length > 0, "Changed mode should include staged file changes");
+    assert(untracked.some((item) => item.path === "c.ts"), "Changed mode should include untracked files");
+  });
+
+  await test("Diagnostics counters increase for build and queries", async () => {
+    diagnostics.reset();
+    await buildIndex(SMALL_REPO, "full");
+    await queryFiles(SMALL_REPO, "hello", 5);
+    await querySymbols(SMALL_REPO, "greet", 5);
+    await queryChunks(SMALL_REPO, "Hello", 5);
+    await lookupIndex(SMALL_REPO, "where is add defined");
+
+    const snap = diagnostics.getDiagnostics();
+    assertGreaterThan(snap.operations.index_builds, 0, "Diagnostics should count index builds");
+    assertGreaterThan(snap.operations.total_queries, 0, "Diagnostics should count queries");
+    assertGreaterThan(snap.latency.max_ms, 0, "Diagnostics query latency histogram should be populated");
+    assertGreaterThan(snap.latency.build_max_ms, 0, "Diagnostics build latency should be populated");
   });
 
   // Phase 4: Edge cases

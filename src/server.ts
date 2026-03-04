@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { buildIndex, discoverIndex, getStatus, queryChunks, queryFiles, querySymbols } from "./indexer";
+import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols } from "./indexer";
 import { diagnostics } from "./diagnostics";
 
 function asText(data: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
@@ -99,6 +99,35 @@ server.tool(
       intent,
     });
     return asText({ items });
+  },
+);
+
+server.tool(
+  "lookup",
+  "Intent-aware contextual lookup with explainable ranking and fallback metadata",
+  {
+    workspace: z.string().optional(),
+    query: z.string(),
+    files_limit: z.number().int().positive().max(200).optional(),
+    symbols_limit: z.number().int().positive().max(200).optional(),
+    search_limit: z.number().int().positive().max(100).optional(),
+    prefer_code: z.boolean().optional(),
+    path_prefix: z.string().optional(),
+    language: z.string().optional(),
+    intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+  },
+  async ({ workspace, query, files_limit, symbols_limit, search_limit, prefer_code, path_prefix, language, intent }) => {
+    const ws = workspace ?? process.cwd();
+    const result = await lookupIndex(ws, query, {
+      files_limit,
+      symbols_limit,
+      search_limit,
+      prefer_code,
+      path_prefix,
+      language,
+      intent,
+    });
+    return asText(result);
   },
 );
 

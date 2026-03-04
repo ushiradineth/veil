@@ -1,0 +1,434 @@
+{
+  "generated_at": "2026-03-04T09:07:51.654Z",
+  "environment": {
+    "hostname": "unknown",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v24.3.0",
+    "bun": "1.3.3",
+    "cpu_model": "Apple M2 Pro",
+    "cpu_cores": 10
+  },
+  "config": {
+    "workspace": "/Users/shu/Code/veil",
+    "cold_iterations": 1,
+    "warm_iterations": 50,
+    "output_dir": "/Users/shu/Code/veil/benchmarks/results/latest",
+    "competitors": [
+      "veil",
+      "shell-tools",
+      "serena"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "status-bootstrap",
+      "kind": "status",
+      "title": "Repository status bootstrap",
+      "prompt": "Get repository index and freshness status",
+      "query": "status",
+      "expected_patterns": [
+        "exists",
+        "stale",
+        "manifest"
+      ]
+    },
+    {
+      "id": "files-homebrew",
+      "kind": "files",
+      "title": "File lookup by path intent",
+      "prompt": "Find files related to homebrew",
+      "query": "homebrew",
+      "expected_patterns": [
+        "homebrew",
+        "brew",
+        "nix"
+      ]
+    },
+    {
+      "id": "symbols-build",
+      "kind": "symbols",
+      "title": "Symbol lookup by name intent",
+      "prompt": "Find symbols related to build",
+      "query": "build",
+      "expected_patterns": [
+        "build",
+        "install",
+        "package"
+      ]
+    },
+    {
+      "id": "search-pnpm-install",
+      "kind": "search",
+      "title": "Code content lookup",
+      "prompt": "Locate code snippets that contain pnpm install",
+      "query": "pnpm install",
+      "expected_patterns": [
+        "pnpm",
+        "install"
+      ]
+    },
+    {
+      "id": "discover-combined",
+      "kind": "discover",
+      "title": "Combined discovery workflow",
+      "prompt": "Find files, symbols, and code for homebrew pnpm build",
+      "query": "homebrew pnpm build",
+      "expected_patterns": [
+        "homebrew",
+        "pnpm",
+        "build"
+      ]
+    }
+  ],
+  "competitors": [
+    {
+      "id": "veil",
+      "label": "Veil MCP index",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 23.684,
+            "p95_ms": 23.684,
+            "p99_ms": 23.684,
+            "mean_ms": 23.684,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 0.003,
+            "p95_ms": 0.0093,
+            "p99_ms": 0.0096,
+            "mean_ms": 0.0037,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 0.7142,
+            "p95_ms": 0.7142,
+            "p99_ms": 0.7142,
+            "mean_ms": 0.7142,
+            "success_rate": 1,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 0.0551,
+            "p95_ms": 0.3357,
+            "p99_ms": 1.8912,
+            "mean_ms": 0.1469,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 0.3833,
+            "p95_ms": 0.3833,
+            "p99_ms": 0.3833,
+            "mean_ms": 0.3833,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 0.0643,
+            "p95_ms": 0.2211,
+            "p99_ms": 0.237,
+            "mean_ms": 0.0752,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 0.5237,
+            "p95_ms": 0.5237,
+            "p99_ms": 0.5237,
+            "mean_ms": 0.5237,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 0.0948,
+            "p95_ms": 0.1578,
+            "p99_ms": 0.1935,
+            "mean_ms": 0.1021,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 1.2011,
+            "p95_ms": 1.2011,
+            "p99_ms": 1.2011,
+            "mean_ms": 1.2011,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 0.103,
+            "p95_ms": 0.1621,
+            "p99_ms": 0.2728,
+            "mean_ms": 0.1135,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "shell-tools",
+      "label": "Shell tool workflow (Claude/Codex baseline)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 96.9792,
+            "p95_ms": 96.9792,
+            "p99_ms": 96.9792,
+            "mean_ms": 96.9792,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 28.798,
+            "p95_ms": 46.5411,
+            "p99_ms": 59.3569,
+            "mean_ms": 31.6956,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 17.8091,
+            "p95_ms": 17.8091,
+            "p99_ms": 17.8091,
+            "mean_ms": 17.8091,
+            "success_rate": 1,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 18.7887,
+            "p95_ms": 20.416,
+            "p99_ms": 28.7625,
+            "mean_ms": 19.1776,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 20.3407,
+            "p95_ms": 20.3407,
+            "p99_ms": 20.3407,
+            "mean_ms": 20.3407,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 8.1025,
+            "p95_ms": 9.204,
+            "p99_ms": 9.3872,
+            "mean_ms": 8.0057,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 7.8519,
+            "p95_ms": 7.8519,
+            "p99_ms": 7.8519,
+            "mean_ms": 7.8519,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 6.8291,
+            "p95_ms": 8.028,
+            "p99_ms": 9.4677,
+            "mean_ms": 6.8945,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 43.7901,
+            "p95_ms": 43.7901,
+            "p99_ms": 43.7901,
+            "mean_ms": 43.7901,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 44.4124,
+            "p95_ms": 51.2049,
+            "p99_ms": 72.4017,
+            "mean_ms": 45.5088,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "serena",
+      "label": "Serena",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 102.2394,
+            "p95_ms": 102.2394,
+            "p99_ms": 102.2394,
+            "mean_ms": 102.2394,
+            "success_rate": 1,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 161.4635,
+            "p95_ms": 179.6677,
+            "p99_ms": 218.8961,
+            "mean_ms": 164.939,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 109.6962,
+            "p95_ms": 109.6962,
+            "p99_ms": 109.6962,
+            "mean_ms": 109.6962,
+            "success_rate": 1,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 108.1072,
+            "p95_ms": 109.8469,
+            "p99_ms": 139.1794,
+            "mean_ms": 104.5124,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 361.7612,
+            "p95_ms": 361.7612,
+            "p99_ms": 361.7612,
+            "mean_ms": 361.7612,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 109.0558,
+            "p95_ms": 112.856,
+            "p99_ms": 137.5487,
+            "mean_ms": 107.6272,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 128.8762,
+            "p95_ms": 128.8762,
+            "p99_ms": 128.8762,
+            "mean_ms": 128.8762,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 121.5505,
+            "p95_ms": 123.9229,
+            "p99_ms": 125.1398,
+            "mean_ms": 119.1869,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 1,
+            "p50_ms": 341.5476,
+            "p95_ms": 341.5476,
+            "p99_ms": 341.5476,
+            "mean_ms": 341.5476,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "warm": {
+            "count": 50,
+            "p50_ms": 342.7359,
+            "p95_ms": 358.4811,
+            "p99_ms": 367.111,
+            "mean_ms": 336.3356,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        }
+      }
+    }
+  ]
+}

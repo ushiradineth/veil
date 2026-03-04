@@ -35,6 +35,37 @@ export type ChunkRecord = {
   content: string;
 };
 
+export type QueryIntent = "auto" | "code" | "docs" | "symbols";
+export type ResolvedQueryIntent = Exclude<QueryIntent, "auto">;
+
+export type LookupConfidence = "high" | "medium" | "low";
+
+export type LookupReason = {
+  label: string;
+  detail: string;
+};
+
+export type LookupResult<T> = {
+  item: T;
+  score: number;
+  confidence: LookupConfidence;
+  reasons: LookupReason[];
+};
+
+export type LookupFallback = {
+  used: boolean;
+  stage: "none" | "symbols" | "chunks" | "files" | "all";
+  detail: string;
+};
+
+export type LookupResponse = {
+  intent: ResolvedQueryIntent;
+  files: LookupResult<FileRecord>[];
+  symbols: LookupResult<SymbolRecord>[];
+  chunks: LookupResult<ChunkRecord>[];
+  fallback: LookupFallback;
+};
+
 export type IndexStatus = {
   exists: boolean;
   stale: boolean;

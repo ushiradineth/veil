@@ -17,14 +17,13 @@ Veil is a blazingly fast code indexing and search engine designed for AI agents 
 
 ## Performance
 
-**Veil vs Traditional Tools:**
-- **8,548x faster** on average than find/grep/ripgrep
-- **Status check**: 1,039x faster (0.16ms vs 163ms)
-- **Symbol search**: 28,418x faster (0.05ms vs 1,465ms)
-- **Code search**: 1,113x faster (0.07ms vs 77ms)
-- **Discovery**: 12,160x faster (0.12ms vs 1,453ms)
+Veil includes a reproducible benchmark suite for public comparisons across:
 
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed comparison with traditional tools.
+- Veil MCP index tools
+- Shell tool workflows commonly used by non-indexed agent loops
+- Serena via `uvx` (from `https://github.com/oraios/serena`) plus optional custom adapter configs
+
+See [BENCHMARKS.md](BENCHMARKS.md) for methodology, fairness rules, and commands to generate fresh benchmark artifacts.
 
 **Memory usage:** <100MB for typical workloads  
 **Test coverage:** 100% (29 tests)
@@ -118,6 +117,9 @@ bun run src/cli.ts refresh --workspace <path> --mode changed
 # Search and discover
 bun run src/cli.ts discover --workspace <path> --query "homebrew pnpm"
 
+# Intent-aware lookup with explainability
+bun run src/cli.ts lookup --workspace <path> --query "where is buildIndex defined"
+
 # Run diagnostics
 bun run src/cli.ts diagnostics
 
@@ -129,6 +131,12 @@ bun run src/bench-harness.ts --workspace <path> --warm 50
 
 # Benchmark (vs traditional tools)
 bun run src/bench-comparison.ts --workspace <path>
+
+# Benchmark suite (public, multi-competitor)
+bun run src/bench-suite.ts --workspace <path> --cold 1 --warm 50 --out benchmarks/results/latest
+
+# Benchmark suite with custom Serena command overrides (optional)
+bun run src/bench-suite.ts --workspace <path> --serena-config benchmarks/serena.config.example.json --out benchmarks/results/latest
 ```
 
 ## MCP Tools
@@ -140,6 +148,7 @@ The server exposes the following MCP tools:
 - **files** - Find files by substring path query
 - **symbols** - Find symbols by name
 - **search** - Search indexed code chunks by keyword
+- **lookup** - Intent-aware contextual lookup with confidence and fallback metadata
 - **discover** - Combined status + files + symbols + search in one call
 - **diagnostics** - Get performance diagnostics and cache stats
 

@@ -167,3 +167,55 @@ export type GhLookupData = {
   limit: number;
   text: string;
 };
+
+export type WebSearchProvider = "google" | "duckduckgo" | "wikipedia" | "github" | "reddit" | "deepwiki";
+
+export type WebSearchProviderTrace = {
+  provider: WebSearchProvider;
+  ok: boolean;
+  duration_ms: number;
+  result_count: number;
+  warning: string | null;
+};
+
+export type WebSearchResult = {
+  title: string;
+  url: string;
+};
+
+export type WebSearchDebugResult = {
+  title: string;
+  url: string;
+  snippet: string;
+  score: number;
+  reasons: LookupReason[];
+};
+
+export type WebSearchData = {
+  results: WebSearchResult[];
+  debug?: {
+    query: string;
+    provider: WebSearchProvider;
+    warnings: string[];
+    provider_trace: WebSearchProviderTrace[];
+    detailed_results: WebSearchDebugResult[];
+  };
+};
+
+export type WebSearchErrorCode = "invalid-query" | "provider-unavailable" | "timeout" | "internal-error";
+
+export type WebSearchError = {
+  code: WebSearchErrorCode;
+  message: string;
+};
+
+export type WebSearchMeta = {
+  ok: boolean;
+  duration_ms: number;
+};
+
+export type WebSearchResponse = {
+  meta: WebSearchMeta;
+  data: WebSearchData | null;
+  error: WebSearchError | null;
+};

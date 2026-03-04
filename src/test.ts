@@ -16,6 +16,7 @@ import {
 } from "./indexer";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
 const SMALL_REPO = join(TEST_FIXTURES_DIR, "small");
@@ -175,6 +176,363 @@ describe("Phase 2: Query accuracy", () => {
         expect(group[i]!.score >= group[i + 1]!.score).toBe(true);
       }
     }
+  });
+
+  test("Web search parses Google provider results", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google.com/search")) {
+        return new Response(
+          '<a href="/url?q=https%3A%2F%2Fexample.com%2Fa&amp;sa=U"><h3>Example A</h3></a>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      return new Response("{}", { status: 503 });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, { query: "example query", fetch_impl: mockFetch, limit: 3, timeout_ms: 600 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results[0]!.title).toBe("Example A");
+    expect(result.data!.debug).toBeUndefined();
+  });
+
+  test("Web search uses Google fallback path when SERP is unparseable", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google.com/search")) {
+        return new Response("<html>blocked</html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return new Response('<a class="result__a" href="https://example.com/fallback">Fallback Result</a>', {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return new Response("{}", { status: 503 });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "fallback query",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 600,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.data?.debug?.provider_trace.some((trace) => trace.provider === "google" && trace.ok)).toBe(true);
+  });
+
+  test("Web search parses GitHub provider results", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google.com/search")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("api.duckduckgo.com")) {
+        return new Response(JSON.stringify({ RelatedTopics: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(
+          JSON.stringify({ items: [{ full_name: "owner/repo", html_url: "https://github.com/owner/repo", description: "Repo" }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ data: { children: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, { query: "owner repo", fetch_impl: mockFetch, limit: 3, timeout_ms: 800 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results.some((row) => row.url === "https://github.com/owner/repo")).toBe(true);
+  });
+
+  test("Web search parses Reddit provider results", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("reddit.com/search.json")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              children: [
+                {
+                  data: {
+                    title: "Reddit Thread",
+                    permalink: "/r/typescript/comments/abc123/thread/",
+                    selftext: "discussion",
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("google.com/search")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("api.duckduckgo.com")) {
+        return new Response(JSON.stringify({ RelatedTopics: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("{}", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, { query: "typescript reddit", fetch_impl: mockFetch, limit: 3, timeout_ms: 800 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results.some((row) => row.url.includes("reddit.com/r/typescript"))).toBe(true);
+  });
+
+  test("Web search parses DeepWiki provider results", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("html.duckduckgo.com/html/") && url.includes("site%3Adeepwiki.com")) {
+        return new Response(
+          '<a class="result__a" href="https://deepwiki.com/kubernetes/ingress-nginx">Ingress Docs</a>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("google.com/search")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("api.duckduckgo.com")) {
+        return new Response(JSON.stringify({ RelatedTopics: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("reddit.com/search.json")) {
+        return new Response(JSON.stringify({ data: { children: [] } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("{}", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "kubernetes ingress",
+      fetch_impl: mockFetch,
+      limit: 5,
+      timeout_ms: 800,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results.some((row) => row.url.startsWith("https://deepwiki.com/"))).toBe(true);
+    expect(result.data?.debug?.provider_trace.some((trace) => trace.provider === "deepwiki" && trace.ok)).toBe(true);
+  });
+
+  test("Web search keeps parallel provider merge without early cancel", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google.com/search")) {
+        await Bun.sleep(80);
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return new Response(
+          '<a class="result__a" href="https://example.com/duck">Duck Result</a>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("reddit.com/search.json")) {
+        await Bun.sleep(20);
+        return new Response(
+          JSON.stringify({
+            data: {
+              children: [{ data: { title: "Reddit Result", permalink: "/r/dev/comments/1/reddit/", selftext: "hint" } }],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, { query: "parallel merge", fetch_impl: mockFetch, limit: 5, timeout_ms: 500 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results.some((row) => row.url.includes("example.com/duck"))).toBe(true);
+    expect(result.data!.results.some((row) => row.url.includes("reddit.com/r/dev"))).toBe(true);
+  });
+
+  test("Web search decodes DuckDuckGo redirect URLs", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return new Response(
+          '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgateway-api.sigs.k8s.io%2Fguide">Gateway API</a>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("google.com/search")) {
+        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("reddit.com/search.json")) {
+        return new Response(JSON.stringify({ data: { children: [] } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ RelatedTopics: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, { query: "gateway api", fetch_impl: mockFetch, limit: 3, timeout_ms: 500 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data!.results.some((row) => row.url === "https://gateway-api.sigs.k8s.io/guide")).toBe(true);
+  });
+
+  test("Web search merges, dedupes, and keeps descending score", async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("google.com/search")) {
+        return new Response(
+          [
+            '<a href="/url?q=https%3A%2F%2Fexample.com%2Falpha&amp;sa=U"><h3>Alpha</h3></a>',
+            '<a href="/url?q=https%3A%2F%2Fexample.com%2Fshared&amp;sa=U"><h3>Shared Google</h3></a>',
+          ].join(""),
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("api.duckduckgo.com")) {
+        return new Response(
+          JSON.stringify({
+            RelatedTopics: [
+              { Text: "Shared Topic - Dup", FirstURL: "https://example.com/shared" },
+              { Text: "Beta Topic - Link", FirstURL: "https://example.com/beta" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("wikipedia.org")) {
+        return new Response(JSON.stringify(["q", ["Gamma"], ["Wiki desc"], ["https://example.com/gamma"]]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("api.github.com/search/repositories")) {
+        return new Response(
+          JSON.stringify({ items: [{ full_name: "owner/delta", html_url: "https://example.com/delta", description: "Delta" }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            children: [
+              { data: { title: "Epsilon", permalink: "/r/dev/comments/1/test/", selftext: "epsilon" } },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "merged query",
+      fetch_impl: mockFetch,
+      limit: 10,
+      timeout_ms: 1000,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+
+    const urls = result.data!.results.map((row) => row.url);
+    expect(urls.filter((url) => url.includes("example.com/shared")).length).toBe(1);
+    const detailed = result.data?.debug?.detailed_results ?? [];
+    for (let i = 0; i + 1 < detailed.length; i += 1) {
+      expect(detailed[i]!.score >= detailed[i + 1]!.score).toBe(true);
+    }
+  });
+
+  test("Web search returns timeout when providers exceed budget", async () => {
+    const mockFetch = ((_: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (!signal) return;
+        if (signal.aborted) {
+          reject(new Error("AbortError"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("AbortError"));
+          },
+          { once: true },
+        );
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "slow query",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 300,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("timeout");
+    expect(result.data).toBeNull();
+  });
+
+  test("Web search rejects empty query", async () => {
+    const result = await webSearch(MEDIUM_REPO, { query: "" });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("invalid-query");
+  });
+
+  test("Web search returns provider-unavailable when all providers fail", async () => {
+    const mockFetch = (async () => new Response("upstream unavailable", { status: 503 })) as unknown as typeof fetch;
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "all fail",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 500,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("provider-unavailable");
+    expect(result.data).toBeNull();
   });
 });
 

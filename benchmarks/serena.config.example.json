@@ -1,0 +1,10 @@
+{
+  "name": "serena",
+  "commands": {
+    "status": ["serena", "status", "--workspace", "{workspace}"],
+    "files": ["serena", "search-files", "--query", "{query}", "--workspace", "{workspace}"],
+    "symbols": ["serena", "search-symbols", "--query", "{query}", "--workspace", "{workspace}"],
+    "search": ["serena", "search-code", "--query", "{query}", "--workspace", "{workspace}"],
+    "discover": ["serena", "discover", "--query", "{query}", "--workspace", "{workspace}"]
+  }
+}

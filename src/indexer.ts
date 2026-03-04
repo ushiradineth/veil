@@ -8,9 +8,15 @@ import type {
   ChunkRecord,
   FileRecord,
   IndexStatus,
+  LookupConfidence,
+  LookupReason,
+  LookupResponse,
   Manifest,
+  QueryIntent,
+  ResolvedQueryIntent,
   SymbolRecord,
 } from "./types";
+import { diagnostics } from "./diagnostics";
 
 const SCHEMA_VERSION = "1";
 const DEFAULT_STALE_HOURS = 24;
@@ -114,9 +120,6 @@ type IndexCacheEntry = {
   querySymbolsCache: Map<string, SymbolRecord[]>;
   queryChunksCache: Map<string, ChunkRecord[]>;
 };
-
-export type QueryIntent = "auto" | "code" | "docs" | "symbols";
-type ResolvedQueryIntent = Exclude<QueryIntent, "auto">;
 
 type ParsedQuery = {
   normalized: string;
@@ -231,13 +234,45 @@ function runGit(workspace: string, args: string[]): string | null {
   return result.stdout.trim();
 }
 
+function nowMs(): number {
+  if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
+    return Number(Bun.nanoseconds()) / 1_000_000;
+  }
+  return Date.now();
+}
+
 function listTrackedFiles(workspace: string): string[] | null {
   const out = runGit(workspace, ["ls-files"]);
-  if (!out) return null;
+  if (out === null) return null;
   return out
     .split("\n")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function listDirtyFiles(workspace: string, baseHead: string | null): Set<string> {
+  const out = new Set<string>();
+  const addLines = (raw: string | null) => {
+    if (!raw) return;
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed) out.add(trimmed);
+    }
+  };
+
+  if (baseHead) {
+    addLines(runGit(workspace, ["diff", "--name-only", `${baseHead}..HEAD`]));
+  }
+  addLines(runGit(workspace, ["diff", "--name-only"]));
+  addLines(runGit(workspace, ["diff", "--cached", "--name-only"]));
+  addLines(runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
+  return out;
+}
+
+function hasDirtyWorkspace(workspace: string): boolean {
+  const raw = runGit(workspace, ["status", "--porcelain"]);
+  if (raw === null) return false;
+  return raw.length > 0;
 }
 
 async function listFilesFallback(workspace: string): Promise<string[]> {
@@ -597,6 +632,7 @@ async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
     cached.symbolsMtimeMs === symbolsMtime &&
     cached.chunksMtimeMs === chunksMtime
   ) {
+    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return cached;
   }
 
@@ -611,7 +647,9 @@ async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
     symbols: symbolsMtime,
     chunks: chunksMtime,
   });
+  if (cached) diagnostics.recordCacheInvalidation();
   INDEX_CACHE.set(workspace, entry);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return entry;
 }
 
@@ -651,6 +689,7 @@ async function writeHumanDocs(workspace: string, files: FileRecord[]): Promise<v
 export async function getStatus(workspace: string): Promise<IndexStatus> {
   const cached = STATUS_CACHE.get(workspace);
   if (cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
+    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return cached.value;
   }
 
@@ -664,7 +703,10 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
       manifest: null,
       current_git_head: currentHead,
     };
+    if (hasDirtyWorkspace(workspace)) status.reasons.push("workspace-dirty");
+    status.stale = status.reasons.length > 0;
     STATUS_CACHE.set(workspace, { value: status, ts: Date.now() });
+    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return status;
   }
 
@@ -674,6 +716,7 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
 
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");
   if (manifest.git_head !== currentHead) reasons.push("git-head-mismatch");
+  if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
 
   const generatedAt = Date.parse(manifest.generated_at);
   const ageMs = Date.now() - generatedAt;
@@ -688,6 +731,7 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
     current_git_head: currentHead,
   };
   STATUS_CACHE.set(workspace, { value: status, ts: Date.now() });
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return status;
 }
 
@@ -768,6 +812,7 @@ async function computeForPaths(workspace: string, paths: string[]): Promise<{
 }
 
 export async function buildIndex(workspace: string, mode: BuildMode = "full"): Promise<Manifest> {
+  const buildStart = nowMs();
   const indexDir = getIndexDir(workspace);
   await mkdir(indexDir, { recursive: true });
 
@@ -791,8 +836,7 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
       symbols = computed.symbols;
       chunks = computed.chunks;
     } else {
-      const changedRaw = runGit(workspace, ["diff", "--name-only", `${prevStatus.manifest.git_head}..HEAD`]) ?? "";
-      const changedSet = new Set(changedRaw.split("\n").map((v) => v.trim()).filter(Boolean));
+      const changedSet = listDirtyFiles(workspace, prevStatus.manifest.git_head);
       const trackedSet = new Set(tracked);
       for (const prevFile of await readExistingIndex<FileRecord>(workspace, "files.ndjson")) {
         if (!trackedSet.has(prevFile.path)) changedSet.add(prevFile.path);
@@ -806,8 +850,8 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
       const keptSymbols = prevSymbols.filter((s) => !changedSet.has(s.path));
       const keptChunks = prevChunks.filter((c) => !changedSet.has(c.path));
 
-      const changedTracked = tracked.filter((p) => changedSet.has(p));
-      const recomputed = await computeForPaths(workspace, changedTracked);
+      const changedPaths = [...changedSet];
+      const recomputed = await computeForPaths(workspace, changedPaths);
 
       files = [...keptFiles, ...recomputed.files];
       symbols = [...keptSymbols, ...recomputed.symbols];
@@ -851,13 +895,21 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
 
   await writeFile(getIndexPath(workspace, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
   STATUS_CACHE.delete(workspace);
+  diagnostics.recordIndexBuild();
+  diagnostics.recordBuildLatency(nowMs() - buildStart);
+  diagnostics.recordCacheInvalidation();
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return manifest;
 }
 
 function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): FileRecord[] {
   const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
   const cached = cache.queryFilesCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    diagnostics.recordCacheHit();
+    return cached;
+  }
+  diagnostics.recordCacheMiss();
   if (!parsed.normalized) return [];
 
   const heap = new TopKHeap<number>(limit);
@@ -882,7 +934,11 @@ function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit:
 function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): SymbolRecord[] {
   const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
   const cached = cache.querySymbolsCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    diagnostics.recordCacheHit();
+    return cached;
+  }
+  diagnostics.recordCacheMiss();
   if (!parsed.normalized) return [];
 
   const candidateIndexes = new Set<number>();
@@ -925,7 +981,11 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     options.language ?? "",
   ].join("\u0000");
   const cached = cache.queryChunksCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    diagnostics.recordCacheHit();
+    return cached;
+  }
+  diagnostics.recordCacheMiss();
   if (!parsed.normalized) return [];
 
   const languageFilter = options.language ? normalizeText(options.language) : "";
@@ -972,6 +1032,7 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     if (parsed.intent === "docs") score += cache.chunksDocsBias[i] ?? 0;
     if (parsed.intent === "symbols" && pathLower.endsWith(".md")) score -= 1;
     if (parsed.intent === "code" && cache.chunksBasenameLower[i] === "readme.md") score -= 1;
+    if (parsed.intent === "code" && pathLower.endsWith(".md")) score -= 3;
 
     if (score >= 2) heap.insert(i, score);
   }
@@ -982,15 +1043,23 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
 }
 
 export async function queryFiles(workspace: string, q: string, limit = 20): Promise<FileRecord[]> {
+  const start = nowMs();
   const cache = await loadCachedIndex(workspace);
   const parsed = parseQuery(q);
-  return queryFilesFromCache(cache, parsed, limit);
+  const out = queryFilesFromCache(cache, parsed, limit);
+  diagnostics.recordQuery(nowMs() - start);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  return out;
 }
 
 export async function querySymbols(workspace: string, q: string, limit = 20): Promise<SymbolRecord[]> {
+  const start = nowMs();
   const cache = await loadCachedIndex(workspace);
   const parsed = parseQuery(q);
-  return querySymbolsFromCache(cache, parsed, limit);
+  const out = querySymbolsFromCache(cache, parsed, limit);
+  diagnostics.recordQuery(nowMs() - start);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  return out;
 }
 
 export async function queryChunks(
@@ -999,9 +1068,13 @@ export async function queryChunks(
   limit = 10,
   options: QueryChunksOptions = {},
 ): Promise<ChunkRecord[]> {
+  const start = nowMs();
   const cache = await loadCachedIndex(workspace);
   const parsed = parseQuery(q, options.intent);
-  return queryChunksFromCache(cache, parsed, limit, options);
+  const out = queryChunksFromCache(cache, parsed, limit, options);
+  diagnostics.recordQuery(nowMs() - start);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  return out;
 }
 
 export async function discoverIndex(
@@ -1009,6 +1082,7 @@ export async function discoverIndex(
   query: string,
   options: DiscoverOptions = {},
 ): Promise<{ intent: ResolvedQueryIntent; files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+  const start = nowMs();
   const cache = await loadCachedIndex(workspace);
   const parsed = parseQuery(query, options.intent);
   const filesLimit = options.files_limit ?? 20;
@@ -1030,5 +1104,155 @@ export async function discoverIndex(
     intent: parsed.intent,
   });
 
+  diagnostics.recordQuery(nowMs() - start);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return { intent: parsed.intent, files, symbols, chunks };
+}
+
+function toConfidence(score: number): LookupConfidence {
+  if (score >= 8) return "high";
+  if (score >= 4) return "medium";
+  return "low";
+}
+
+function scoreFile(path: string, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
+  const pathLower = normalizeText(path);
+  let score = pathLower.includes(parsed.normalized) ? 8 : 2;
+  const reasons: LookupReason[] = [];
+  if (pathLower.includes(parsed.normalized)) {
+    reasons.push({ label: "exact-path-match", detail: "Path contains the full normalized query" });
+  }
+  for (const token of parsed.tokens) {
+    if (pathLower.includes(token)) {
+      score += 1.5;
+      reasons.push({ label: "token-path-match", detail: `Path contains token '${token}'` });
+    }
+  }
+  return { score, reasons };
+}
+
+function scoreSymbol(symbol: SymbolRecord, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
+  const nameLower = normalizeText(symbol.name);
+  const pathLower = normalizeText(symbol.path);
+  let score = nameLower.includes(parsed.normalized) ? 9 : 3;
+  const reasons: LookupReason[] = [];
+  if (nameLower.includes(parsed.normalized)) {
+    reasons.push({ label: "exact-symbol-match", detail: "Symbol name contains the full query" });
+  }
+  for (const token of parsed.tokens) {
+    if (nameLower.includes(token)) {
+      score += 2;
+      reasons.push({ label: "token-symbol-match", detail: `Symbol name contains token '${token}'` });
+    }
+    if (pathLower.includes(token)) {
+      score += 0.8;
+      reasons.push({ label: "token-path-context", detail: `Symbol path contains token '${token}'` });
+    }
+  }
+  return { score, reasons };
+}
+
+function scoreChunk(chunk: ChunkRecord, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
+  const hay = normalizeText(`${chunk.path}\n${chunk.content}`);
+  const pathLower = normalizeText(chunk.path);
+  let score = hay.includes(parsed.normalized) ? 7 : 2;
+  const reasons: LookupReason[] = [];
+  if (hay.includes(parsed.normalized)) {
+    reasons.push({ label: "exact-content-match", detail: "Chunk content contains the full query" });
+  }
+  for (const token of parsed.tokens) {
+    if (hay.includes(token)) {
+      score += 1.3;
+      reasons.push({ label: "token-content-match", detail: `Chunk content contains token '${token}'` });
+    }
+    if (pathLower.includes(token)) {
+      score += 1;
+      reasons.push({ label: "token-path-match", detail: `Chunk path contains token '${token}'` });
+    }
+  }
+  return { score, reasons };
+}
+
+export async function lookupIndex(
+  workspace: string,
+  query: string,
+  options: DiscoverOptions = {},
+): Promise<LookupResponse> {
+  const start = nowMs();
+  const cache = await loadCachedIndex(workspace);
+  const parsed = parseQuery(query, options.intent);
+
+  const filesLimit = options.files_limit ?? 8;
+  const symbolsLimit = options.symbols_limit ?? (parsed.intent === "symbols" ? 20 : 12);
+  const searchLimit = options.search_limit ?? (parsed.intent === "docs" ? 10 : 8);
+  const preferCode = options.prefer_code ?? parsed.intent !== "docs";
+
+  let files = queryFilesFromCache(cache, parsed, filesLimit);
+  let symbols = querySymbolsFromCache(cache, parsed, symbolsLimit);
+  let chunks = queryChunksFromCache(cache, parsed, searchLimit, {
+    prefer_code: preferCode,
+    path_prefix: options.path_prefix,
+    language: options.language,
+    intent: parsed.intent,
+  });
+
+  let fallbackStage: LookupResponse["fallback"]["stage"] = "none";
+  let fallbackDetail = "Primary lookup strategy returned complete result groups";
+
+  if (symbols.length === 0 && parsed.intent !== "docs") {
+    const symbolsParsed = parseQuery(query, "symbols");
+    symbols = querySymbolsFromCache(cache, symbolsParsed, symbolsLimit);
+    if (symbols.length > 0) {
+      fallbackStage = "symbols";
+      fallbackDetail = "Primary strategy had no symbol hits, retried with symbol-focused routing";
+    }
+  }
+
+  if (chunks.length === 0 && parsed.intent !== "docs") {
+    const chunkParsed = parseQuery(query, "code");
+    chunks = queryChunksFromCache(cache, chunkParsed, searchLimit, {
+      prefer_code: true,
+      path_prefix: options.path_prefix,
+      language: options.language,
+      intent: "code",
+    });
+    if (chunks.length > 0) {
+      fallbackStage = fallbackStage === "none" ? "chunks" : "all";
+      fallbackDetail = "Primary strategy had no chunk hits, retried with code-focused routing";
+    }
+  }
+
+  if (files.length === 0) {
+    const filesParsed = parseQuery(query, "code");
+    files = queryFilesFromCache(cache, filesParsed, filesLimit);
+    if (files.length > 0) {
+      fallbackStage = fallbackStage === "none" ? "files" : "all";
+      fallbackDetail = "Primary strategy had no file hits, retried with broad path routing";
+    }
+  }
+
+  const response: LookupResponse = {
+    intent: parsed.intent,
+    files: files.map((item) => {
+      const scored = scoreFile(item.path, parsed);
+      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
+    }),
+    symbols: symbols.map((item) => {
+      const scored = scoreSymbol(item, parsed);
+      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
+    }),
+    chunks: chunks.map((item) => {
+      const scored = scoreChunk(item, parsed);
+      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
+    }),
+    fallback: {
+      used: fallbackStage !== "none",
+      stage: fallbackStage,
+      detail: fallbackDetail,
+    },
+  };
+
+  diagnostics.recordQuery(nowMs() - start);
+  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  return response;
 }

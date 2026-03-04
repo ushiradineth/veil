@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols } from "./indexer";
+import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols, shouldRefreshDiscover } from "./indexer";
 import { diagnostics } from "./diagnostics";
 
 function asText(data: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
@@ -160,7 +160,7 @@ server.tool(
   }) => {
     const ws = workspace ?? process.cwd();
     let status = await getStatus(ws);
-    if (status.stale && (refresh_if_stale ?? true)) {
+    if (shouldRefreshDiscover(status) && (refresh_if_stale ?? true)) {
       await buildIndex(ws, "changed");
       status = await getStatus(ws);
     }

@@ -735,6 +735,11 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
   return status;
 }
 
+export function shouldRefreshDiscover(status: IndexStatus): boolean {
+  if (!status.stale) return false;
+  return status.reasons.some((reason) => reason !== "workspace-dirty");
+}
+
 /**
  * Process a single file and return its records
  */
@@ -1173,6 +1178,25 @@ function scoreChunk(chunk: ChunkRecord, parsed: ParsedQuery): { score: number; r
   return { score, reasons };
 }
 
+function ensureLookupReasons(reasons: LookupReason[], label: string, detail: string): LookupReason[] {
+  if (reasons.length > 0) return reasons;
+  return [{ label, detail }];
+}
+
+function rankLookupResults<T>(
+  items: T[],
+  scorer: (item: T) => { score: number; reasons: LookupReason[] },
+  fallbackReason: { label: string; detail: string },
+): { item: T; score: number; confidence: LookupConfidence; reasons: LookupReason[] }[] {
+  return items
+    .map((item) => {
+      const scored = scorer(item);
+      const reasons = ensureLookupReasons(scored.reasons, fallbackReason.label, fallbackReason.detail);
+      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
 export async function lookupIndex(
   workspace: string,
   query: string,
@@ -1187,6 +1211,10 @@ export async function lookupIndex(
   const searchLimit = options.search_limit ?? (parsed.intent === "docs" ? 10 : 8);
   const preferCode = options.prefer_code ?? parsed.intent !== "docs";
 
+  let filesParsed = parsed;
+  let symbolsParsed = parsed;
+  let chunksParsed = parsed;
+
   let files = queryFilesFromCache(cache, parsed, filesLimit);
   let symbols = querySymbolsFromCache(cache, parsed, symbolsLimit);
   let chunks = queryChunksFromCache(cache, parsed, searchLimit, {
@@ -1200,7 +1228,7 @@ export async function lookupIndex(
   let fallbackDetail = "Primary lookup strategy returned complete result groups";
 
   if (symbols.length === 0 && parsed.intent !== "docs") {
-    const symbolsParsed = parseQuery(query, "symbols");
+    symbolsParsed = parseQuery(query, "symbols");
     symbols = querySymbolsFromCache(cache, symbolsParsed, symbolsLimit);
     if (symbols.length > 0) {
       fallbackStage = "symbols";
@@ -1209,8 +1237,8 @@ export async function lookupIndex(
   }
 
   if (chunks.length === 0 && parsed.intent !== "docs") {
-    const chunkParsed = parseQuery(query, "code");
-    chunks = queryChunksFromCache(cache, chunkParsed, searchLimit, {
+    chunksParsed = parseQuery(query, "code");
+    chunks = queryChunksFromCache(cache, chunksParsed, searchLimit, {
       prefer_code: true,
       path_prefix: options.path_prefix,
       language: options.language,
@@ -1223,7 +1251,7 @@ export async function lookupIndex(
   }
 
   if (files.length === 0) {
-    const filesParsed = parseQuery(query, "code");
+    filesParsed = parseQuery(query, "code");
     files = queryFilesFromCache(cache, filesParsed, filesLimit);
     if (files.length > 0) {
       fallbackStage = fallbackStage === "none" ? "files" : "all";
@@ -1233,18 +1261,21 @@ export async function lookupIndex(
 
   const response: LookupResponse = {
     intent: parsed.intent,
-    files: files.map((item) => {
-      const scored = scoreFile(item.path, parsed);
-      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
-    }),
-    symbols: symbols.map((item) => {
-      const scored = scoreSymbol(item, parsed);
-      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
-    }),
-    chunks: chunks.map((item) => {
-      const scored = scoreChunk(item, parsed);
-      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons: scored.reasons };
-    }),
+    files: rankLookupResults(
+      files,
+      (item) => scoreFile(item.path, filesParsed),
+      { label: "fallback-file-match", detail: "File returned by fallback retrieval path" },
+    ),
+    symbols: rankLookupResults(
+      symbols,
+      (item) => scoreSymbol(item, symbolsParsed),
+      { label: "fallback-symbol-match", detail: "Symbol returned by fallback retrieval path" },
+    ),
+    chunks: rankLookupResults(
+      chunks,
+      (item) => scoreChunk(item, chunksParsed),
+      { label: "fallback-chunk-match", detail: "Chunk returned by fallback retrieval path" },
+    ),
     fallback: {
       used: fallbackStage !== "none",
       stage: fallbackStage,

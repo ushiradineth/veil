@@ -11,7 +11,7 @@ Veil is a blazingly fast code indexing and search engine designed for AI agents 
 - **Flexible search** - File paths, symbol names, and full-text code search
 - **Memory efficient** - <100MB for typical workloads with intelligent caching
 - **Incremental updates** - Fast refresh with git-aware change detection
-- **Battle-tested** - 100% test coverage with comprehensive benchmarks
+- **Battle-tested** - Comprehensive correctness and performance test coverage
 - **Observable** - Built-in diagnostics and performance profiling
 - **MCP native** - First-class Model Context Protocol support
 
@@ -26,7 +26,7 @@ Veil includes a reproducible benchmark suite for public comparisons across:
 See [BENCHMARKS.md](BENCHMARKS.md) for methodology, fairness rules, and commands to generate fresh benchmark artifacts.
 
 **Memory usage:** <100MB for typical workloads  
-**Test coverage:** 100% (29 tests)
+**Test coverage:** Run `bun run src/test.ts` for current suite status
 
 ## Installation
 

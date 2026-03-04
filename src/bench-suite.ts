@@ -248,8 +248,13 @@ function replaceTemplate(raw: string, values: Record<string, string>): string {
 async function loadExternalCommandConfig(filePath?: string): Promise<ExternalCommandConfig | null> {
   if (!filePath) return null;
   const absolute = resolve(filePath);
-  const content = await readFile(absolute, "utf-8");
-  return JSON.parse(content) as ExternalCommandConfig;
+  try {
+    const content = await readFile(absolute, "utf-8");
+    return JSON.parse(content) as ExternalCommandConfig;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load Serena config '${absolute}': ${reason}`);
+  }
 }
 
 function createVeilAdapter(): Adapter {

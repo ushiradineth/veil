@@ -307,7 +307,11 @@ function parseNdjson<T>(content: string): T[] {
       if (i > start) {
         const line = content.slice(start, i).trim();
         if (line.length > 0) {
-          result.push(JSON.parse(line) as T);
+          try {
+            result.push(JSON.parse(line) as T);
+          } catch {
+            // Ignore malformed lines and keep reading the rest.
+          }
         }
       }
       start = i + 1;
@@ -611,8 +615,12 @@ function makeChunks(path: string, content: string): ChunkRecord[] {
 async function readExistingIndex<T>(workspace: string, name: string): Promise<T[]> {
   const p = getIndexPath(workspace, name);
   if (!existsSync(p)) return [];
-  const raw = await readFile(p, "utf-8");
-  return parseNdjson<T>(raw);
+  try {
+    const raw = await readFile(p, "utf-8");
+    return parseNdjson<T>(raw);
+  } catch {
+    return [];
+  }
 }
 
 async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
@@ -710,8 +718,23 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
     return status;
   }
 
-  const raw = await readFile(manifestPath, "utf-8");
-  const manifest = JSON.parse(raw) as Manifest;
+  let manifest: Manifest;
+  try {
+    const raw = await readFile(manifestPath, "utf-8");
+    manifest = JSON.parse(raw) as Manifest;
+  } catch {
+    const malformedStatus: IndexStatus = {
+      exists: true,
+      stale: true,
+      reasons: ["manifest-invalid-json"],
+      manifest: null,
+      current_git_head: currentHead,
+    };
+    if (hasDirtyWorkspace(workspace)) malformedStatus.reasons.push("workspace-dirty");
+    STATUS_CACHE.set(workspace, { value: malformedStatus, ts: Date.now() });
+    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+    return malformedStatus;
+  }
   const reasons: string[] = [];
 
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");

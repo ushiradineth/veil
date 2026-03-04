@@ -15,7 +15,7 @@ import {
   shouldRefreshDiscover,
 } from "./indexer";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
-import { fetchUrl } from "./fetch-url";
+import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { webSearch } from "./web-search";
 
@@ -629,6 +629,114 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.meta.truncated).toBe(true);
     expect((result.data?.content.length ?? 0) < 1000).toBe(true);
   });
+
+  test("Fetch URL returns fetch-failed payload for non-OK response", async () => {
+    const mockFetch = (async () => {
+      return new Response("nope", {
+        status: 503,
+        headers: { "content-type": "text/plain" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/unavailable",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("fetch-failed");
+    expect(result.error?.message).toBe("HTTP 503");
+    expect(result.data?.status).toBe(503);
+    expect(result.data?.final_url).toBe("https://example.com/unavailable");
+  });
+
+  test("Fetch URL converts markdown to text when text format is requested", async () => {
+    const mockFetch = (async () => {
+      return new Response("# Header\n\nParagraph", {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/markdown",
+      format: "text",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.format).toBe("text");
+    expect(result.data?.content).toContain("# Header");
+    expect(result.data?.content).toContain("Paragraph");
+  });
+
+  test("Fetch URL sends html accept header for html format", async () => {
+    const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const accept = String((init?.headers as Record<string, string> | undefined)?.accept ?? "").toLowerCase();
+      expect(accept.includes("application/xhtml+xml")).toBe(true);
+      return new Response("<main><h1>Raw</h1></main>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/raw",
+      format: "html",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.content).toContain("<h1>Raw</h1>");
+  });
+
+  test("Fetch URL reports internal-error for non-timeout failures", async () => {
+    const mockFetch = (async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/fail",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("internal-error");
+    expect(result.error?.message).toContain("network down");
+  });
+
+  test("Fetch URL internals cover helper branches", () => {
+    expect(__internalFetchUrl.parseUrl("ftp://example.com")).toBeNull();
+    expect(__internalFetchUrl.decodeHtml("&amp;&lt;&gt;&quot;&#39;&nbsp;")).toBe('&<>"\' ');
+    expect(__internalFetchUrl.stripTags("<p>hi</p><br>")).toBe(" hi  ");
+    expect(__internalFetchUrl.collapseWhitespace("a\r\n\n\n\tb")).toBe("a\n\n b");
+    expect(__internalFetchUrl.chooseAccept("html")).toContain("application/xhtml+xml");
+    expect(__internalFetchUrl.chooseAccept("text")).toContain("text/plain");
+    expect(__internalFetchUrl.parseMarkdownTokens("-1")).toBeNull();
+    expect(__internalFetchUrl.parseMarkdownTokens("NaN")).toBeNull();
+    expect(__internalFetchUrl.parseMarkdownTokens("9.8")).toBe(9);
+    expect(__internalFetchUrl.isHtml("application/xhtml+xml")).toBe(true);
+    expect(__internalFetchUrl.isMarkdown("text/x-markdown")).toBe(true);
+    const clipped = __internalFetchUrl.truncateTo("abcdef", 4);
+    expect(clipped.truncated).toBe(true);
+    expect(Buffer.byteLength(clipped.value, "utf-8")).toBeLessThanOrEqual(4);
+  });
+
+  test("Fetch URL markdown fallback handles converter errors", () => {
+    const originalTranslate = __internalFetchUrl.NHM.translate;
+    __internalFetchUrl.NHM.translate = () => {
+      throw new Error("translate fail");
+    };
+    try {
+      const converted = __internalFetchUrl.htmlToMarkdown("<p>Hello&nbsp;&amp;bye</p>");
+      expect(converted).toBe("Hello &bye");
+    } finally {
+      __internalFetchUrl.NHM.translate = originalTranslate;
+    }
+  });
+
+  test("Fetch URL nowMs falls back when nanoseconds is missing", () => {
+    const value = __internalFetchUrl.nowMs(undefined);
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThan(0);
+  });
+
 });
 
 describe("Phase 3: Cache behavior", () => {

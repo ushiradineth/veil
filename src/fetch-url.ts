@@ -1,9 +1,9 @@
 import type { FetchUrlFormat, FetchUrlResponse } from "./types";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 
-function nowMs(): number {
-  if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
-    return Number(Bun.nanoseconds()) / 1_000_000;
+function nowMs(bunLike: { nanoseconds?: () => number } | undefined = typeof Bun === "undefined" ? undefined : Bun): number {
+  if (bunLike && typeof bunLike.nanoseconds === "function") {
+    return Number(bunLike.nanoseconds()) / 1_000_000;
   }
   return Date.now();
 }
@@ -220,3 +220,20 @@ export async function fetchUrl(
     clearTimeout(timer);
   }
 }
+
+export const __internalFetchUrl = {
+  nowMs,
+  decodeHtml,
+  stripTags,
+  collapseWhitespace,
+  htmlToMarkdown,
+  htmlToText,
+  chooseAccept,
+  contentTypeOf,
+  parseMarkdownTokens,
+  isHtml,
+  isMarkdown,
+  truncateTo,
+  parseUrl,
+  NHM,
+};

@@ -22,6 +22,7 @@ import {
   querySymbols,
   queryChunks,
   discoverIndex,
+  shouldRefreshDiscover,
 } from "./indexer";
 import type { BuildMode, FileRecord, SymbolRecord, ChunkRecord } from "./types";
 import { diagnostics } from "./diagnostics";
@@ -231,6 +232,15 @@ async function runTests(): Promise<void> {
 
     assert(result.fallback !== undefined, "Lookup should include fallback metadata");
     assert(typeof result.fallback.used === "boolean", "Lookup fallback.used should be a boolean");
+
+    for (const group of [result.files, result.symbols, result.chunks]) {
+      for (let i = 0; i + 1 < group.length; i += 1) {
+        assert(group[i]!.score >= group[i + 1]!.score, "Lookup results should be sorted by score descending");
+      }
+      for (const row of group) {
+        assert(row.reasons.length > 0, "Lookup rows should always include at least one reason");
+      }
+    }
   });
 
   // Phase 3: Cache behavior
@@ -243,6 +253,30 @@ async function runTests(): Promise<void> {
     assert(status.manifest!.file_count > 0, "Should have file count");
     assert(status.manifest!.symbol_count > 0, "Should have symbol count");
     assert(status.manifest!.chunk_count > 0, "Should have chunk count");
+  });
+
+  await test("Discover refresh guard skips dirty-only staleness", async () => {
+    assertEqual(
+      shouldRefreshDiscover({ exists: true, stale: true, reasons: ["workspace-dirty"], manifest: null, current_git_head: null }),
+      false,
+      "Dirty-only stale state should not force discover refresh",
+    );
+    assertEqual(
+      shouldRefreshDiscover({ exists: true, stale: true, reasons: ["ttl-expired"], manifest: null, current_git_head: null }),
+      true,
+      "TTL stale state should force discover refresh",
+    );
+    assertEqual(
+      shouldRefreshDiscover({
+        exists: true,
+        stale: true,
+        reasons: ["workspace-dirty", "git-head-mismatch"],
+        manifest: null,
+        current_git_head: null,
+      }),
+      true,
+      "Dirty plus structural stale reasons should still refresh",
+    );
   });
 
   await test("Warm queries are faster than cold queries", async () => {

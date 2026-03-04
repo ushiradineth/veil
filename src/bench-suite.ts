@@ -197,7 +197,7 @@ function relevanceScore(text: string, expectedPatterns: string[]): number {
   return hits / expectedPatterns.length;
 }
 
-function runCommand(command: string, args: string[], cwd: string): ScenarioRun {
+function runCommand(command: string, args: string[], cwd: string, allowedExitCodes: number[] = [0]): ScenarioRun {
   const out = spawnSync(command, args, {
     cwd,
     encoding: "utf-8",
@@ -211,7 +211,7 @@ function runCommand(command: string, args: string[], cwd: string): ScenarioRun {
     return { status: "error", text: `${stdout}\n${stderr}`.trim(), reason: out.error.message };
   }
 
-  if (out.status !== 0 && out.status !== 1) {
+  if (!allowedExitCodes.includes(out.status ?? -1)) {
     return {
       status: "error",
       text: `${stdout}\n${stderr}`.trim(),
@@ -223,6 +223,18 @@ function runCommand(command: string, args: string[], cwd: string): ScenarioRun {
     status: "ok",
     text: `${stdout}\n${stderr}`.trim(),
   };
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function queryTokens(query: string): string[] {
+  const tokens = query
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return tokens.length > 0 ? tokens : [query];
 }
 
 function replaceTemplate(raw: string, values: Record<string, string>): string {
@@ -303,24 +315,42 @@ function createShellAdapter(): Adapter {
       }
 
       if (scenario.kind === "symbols") {
-        return runCommand("rg", ["-n", "(function|class|def|const|type|interface).*build", "."], ctx.workspace);
+        const escaped = escapeRegex(scenario.query);
+        return runCommand(
+          "rg",
+          ["-n", `(function|class|def|const|type|interface).*${escaped}`, ".", "--max-count", "20"],
+          ctx.workspace,
+          [0, 1],
+        );
       }
 
       if (scenario.kind === "search") {
-        return runCommand("rg", ["-n", scenario.query, ".", "--max-count", "10"], ctx.workspace);
+        return runCommand("rg", ["-n", scenario.query, ".", "--max-count", "10"], ctx.workspace, [0, 1]);
       }
 
-      const files = runCommand("find", [".", "-type", "f", "-iname", "*homebrew*", "-o", "-iname", "*pnpm*"], ctx.workspace);
-      const symbolsA = runCommand("rg", ["-n", "(function|class|def|const|type|interface).*homebrew", ".", "--max-count", "20"], ctx.workspace);
-      const symbolsB = runCommand("rg", ["-n", "(function|class|def|const|type|interface).*pnpm", ".", "--max-count", "20"], ctx.workspace);
-      const code = runCommand("rg", ["-n", "homebrew|pnpm|build", ".", "--max-count", "20"], ctx.workspace);
-      if (files.status !== "ok") return files;
-      if (symbolsA.status !== "ok") return symbolsA;
-      if (symbolsB.status !== "ok") return symbolsB;
+      const tokens = queryTokens(scenario.query);
+      const findResults: ScenarioRun[] = [];
+      const symbolResults: ScenarioRun[] = [];
+      for (const token of tokens) {
+        const files = runCommand("find", [".", "-type", "f", "-iname", `*${token}*`], ctx.workspace);
+        if (files.status !== "ok") return files;
+        findResults.push(files);
+
+        const symbols = runCommand(
+          "rg",
+          ["-n", `(function|class|def|const|type|interface).*${escapeRegex(token)}`, ".", "--max-count", "20"],
+          ctx.workspace,
+          [0, 1],
+        );
+        if (symbols.status !== "ok") return symbols;
+        symbolResults.push(symbols);
+      }
+
+      const code = runCommand("rg", ["-n", tokens.map(escapeRegex).join("|"), ".", "--max-count", "20"], ctx.workspace, [0, 1]);
       if (code.status !== "ok") return code;
       return {
         status: "ok",
-        text: `${files.text}\n${symbolsA.text}\n${symbolsB.text}\n${code.text}`.trim(),
+        text: [...findResults.map((item) => item.text), ...symbolResults.map((item) => item.text), code.text].join("\n").trim(),
       };
     },
   };

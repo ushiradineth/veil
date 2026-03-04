@@ -1,4 +1,4 @@
-import { buildIndex, discoverIndex, getStatus, lookupIndex } from "./indexer";
+import { buildIndex, discoverIndex, getStatus, lookupIndex, shouldRefreshDiscover } from "./indexer";
 import type { BuildMode } from "./types";
 import { profiler, diagnostics } from "./diagnostics";
 
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
     const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
     let status = await getStatus(workspace);
-    if (status.stale && refreshIfStale) {
+    if (shouldRefreshDiscover(status) && refreshIfStale) {
       await buildIndex(workspace, "changed");
       status = await getStatus(workspace);
     }

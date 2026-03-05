@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [v0.1.4] - 2026-03-05
+
+- fix(release): harden notes generation and semver guards
+- docs(readme): streamline integration guide and skill naming
+
+
 ## [v0.1.3] - 2026-03-05
 
 - fix(release): add npm provenance repository metadata

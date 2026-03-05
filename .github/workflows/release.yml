@@ -87,10 +87,20 @@ jobs:
 
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
           const current = String(pkg.version || '0.1.0');
-          const m = current.match(/^(\d+)\.(\d+)\.(\d+)$/);
-          if (!m) throw new Error(`Unsupported package version: ${current}`);
+          const currentMatch = current.match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!currentMatch) throw new Error(`Unsupported package version: ${current}`);
 
-          let [major, minor, patch] = m.slice(1).map((v) => Number(v));
+          const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0', { encoding: 'utf8' }).trim();
+          if (!/^v\d+\.\d+\.\d+$/.test(latestTag)) {
+            throw new Error(`Latest tag must be semver (vX.Y.Z), got: ${latestTag}`);
+          }
+
+          const latestVersion = latestTag.slice(1);
+          if (current !== latestVersion) {
+            throw new Error(`package.json version ${current} must match latest tag ${latestTag} before release`);
+          }
+
+          let [major, minor, patch] = latestVersion.split('.').map((v) => Number(v));
           if (bump === 'major') {
             major += 1;
             minor = 0;
@@ -110,8 +120,7 @@ jobs:
           pkg.version = nextVersion;
           fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
-          const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null || true', { encoding: 'utf8' }).trim();
-          const range = latestTag ? `${latestTag}..HEAD` : 'HEAD';
+          const range = latestTag === 'v0.0.0' ? 'HEAD' : `${latestTag}..HEAD`;
           const log = execSync(`git log ${range} --pretty=format:%s`, { encoding: 'utf8' })
             .split('\n')
             .map((line) => line.trim())
@@ -152,6 +161,16 @@ jobs:
           TAG: ${{ steps.prep.outputs.tag }}
           VERSION: ${{ steps.prep.outputs.version }}
         run: |
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
+            echo "Tag ${TAG} already exists on origin"
+            exit 1
+          fi
+
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists locally"
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json CHANGELOG.md
@@ -166,14 +185,51 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
+      - name: Prepare release notes
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.prep.outputs.tag }}
+        run: |
+          generated_notes=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body || true)
+          fallback_notes=$(node <<'NODE'
+          const fs = require('fs');
+          const tag = process.env.TAG;
+          const changelogPath = 'CHANGELOG.md';
+
+          let fallback = `## Changelog\n\n- Release ${tag}`;
+          if (tag && fs.existsSync(changelogPath)) {
+            const content = fs.readFileSync(changelogPath, 'utf8');
+            const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const sectionRegex = new RegExp(`^## \\[${escapedTag}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|$)`, 'm');
+            const match = content.match(sectionRegex);
+            if (match && match[1] && match[1].trim().length > 0) {
+              fallback = `## Changelog\n\n${match[1].trim()}`;
+            }
+          }
+
+          process.stdout.write(fallback);
+          NODE
+          )
+
+          notes="${generated_notes}"
+          if [ -z "$(printf '%s' "${notes}" | tr -d '[:space:]')" ]; then
+            notes="${fallback_notes}"
+          fi
+
+          if [ -z "$(printf '%s' "${notes}" | tr -d '[:space:]')" ]; then
+            notes="## Changelog\n\n- Release ${TAG}"
+          fi
+
+          printf '%s\n' "${notes}" > release-notes.md
+
       - name: Create GitHub release
         if: inputs.dry_run == false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prep.outputs.tag }}
         run: |
-          notes=$(awk -v tag="$TAG" 'BEGIN{found=0} $0 ~ "^## \\\\["tag"\\\\]" {found=1; next} /^## \[/ && found==1 {exit} found==1 {print}' CHANGELOG.md)
-          gh release create "$TAG" --title "$TAG" --notes "$notes"
+          gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md --verify-tag
 
       - name: Dry run summary
         if: inputs.dry_run == true

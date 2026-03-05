@@ -143,6 +143,15 @@ npx -y skills add https://github.com/ushiradineth/veil/tree/main/docs --skill ve
 - `gh_lookup`: GitHub issues, PRs, and checks via `gh`
 - `diagnostics`: cache and latency diagnostics
 
+## Release workflow
+
+- Workflow: `.github/workflows/release.yml` (`workflow_dispatch`)
+- Inputs: `version_bump` (`patch|minor|major`) and `dry_run` (`true|false`)
+- Guardrails: release runs only from default branch and requires `package.json` version to match latest semver tag (`vX.Y.Z`) before bump
+- Outputs: updates `package.json` and `CHANGELOG.md`, tags `v<version>`, publishes npm package, and creates GitHub release
+- Release notes: generated via GitHub release notes config in `.github/release.yml` with changelog fallback so release pages are never empty
+- Required secret: `NPM_TOKEN` for npm publish (`GITHUB_TOKEN` is provided by Actions)
+
 ## Links
 
 - Benchmark methodology and latest artifacts: `BENCHMARKS.md`

@@ -1,0 +1,34 @@
+changelog:
+  categories:
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+        - feat
+    - title: Fixes
+      labels:
+        - bug
+        - bugfix
+        - fix
+    - title: Performance
+      labels:
+        - perf
+        - performance
+    - title: Refactors and Maintenance
+      labels:
+        - refactor
+        - chore
+        - docs
+        - test
+        - ci
+  exclude:
+    labels:
+      - skip-changelog
+      - skip-release-notes
+  change-template: "- $TITLE by @$AUTHOR in #$NUMBER"
+  template: |
+    ## What's Changed
+
+    $CHANGES
+
+    **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...$TAG

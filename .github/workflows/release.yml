@@ -213,7 +213,8 @@ jobs:
           )
 
           notes="${generated_notes}"
-          if [ -z "$(printf '%s' "${notes}" | tr -d '[:space:]')" ]; then
+          generated_bullets=$(printf '%s' "${notes}" | grep -E '^[[:space:]]*[-*] ' || true)
+          if [ -z "${generated_bullets}" ]; then
             notes="${fallback_notes}"
           fi
 

@@ -11,7 +11,7 @@ Add Veil to your MCP client config:
   "mcpServers": {
     "veil": {
       "command": "npx",
-      "args": ["-y", "@ushiradineth/veil", "server"]
+      "args": ["-y", "@ushiradineth/veil@latest", "server"]
     }
   }
 }
@@ -28,7 +28,7 @@ Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json
   "mcpServers": {
     "veil": {
       "command": "npx",
-      "args": ["-y", "@ushiradineth/veil", "server"],
+      "args": ["-y", "@ushiradineth/veil@latest", "server"],
       "env": {}
     }
   }
@@ -42,7 +42,7 @@ Codex (`~/.config/codex/mcp.json`) and OpenCode (`~/.config/opencode/mcp.json`):
   "mcpServers": {
     "veil": {
       "command": "npx",
-      "args": ["-y", "@ushiradineth/veil", "server"]
+      "args": ["-y", "@ushiradineth/veil@latest", "server"]
     }
   }
 }
@@ -79,7 +79,7 @@ Local clone launcher:
 Package path:
 
 ```bash
-npx -y @ushiradineth/veil cli status
+npx -y @ushiradineth/veil@latest cli status
 ```
 
 Local clone path:
@@ -91,9 +91,11 @@ node bin/veil.mjs cli status
 Build and query a workspace:
 
 ```bash
-npx -y @ushiradineth/veil cli refresh --workspace ~/nix-config --mode full
-npx -y @ushiradineth/veil cli discover --workspace ~/nix-config --query "where is buildIndex defined"
+npx -y @ushiradineth/veil@latest cli refresh --workspace ~/nix-config --mode full
+npx -y @ushiradineth/veil@latest cli discover --workspace ~/nix-config --query "where is buildIndex defined"
 ```
+
+If you run these commands from inside a local `veil` clone, keep `@latest` in the package spec so npm does not resolve to the local workspace package.
 
 ## Agent skill install (`veil`)
 

@@ -1,55 +1,48 @@
 ---
-name: veil-research-workflow
-description: Guide agents through high-signal repository and web research workflows using Veil MCP tools.
+name: veil
+description: Route agent tasks to Veil MCP tools with a practical local-first then web workflow.
 ---
 
-# Veil Research Workflow
+# Veil Skill
 
-Use this prompt when you want high MCP tool adoption and low misuse.
+Use this skill when an agent should prefer Veil tools over shell-first discovery.
 
-## Goal
+## Routing order
 
-- Maximize correct usage of Veil MCP tools.
-- Minimize shell-first fallbacks.
-- Keep outputs concise and TOON-friendly.
+1. Local code or architecture questions:
+   - Start with `discover`.
+   - If results are mixed, run `lookup`.
+   - Use `files`, `symbols`, or `search` for narrow follow-up.
 
-## Decision Tree
+2. Web research and docs lookup:
+   - Start with `web_search`.
+   - Open selected links with `fetch_url` using `format=markdown`.
 
-1. If the task is about local repository code or architecture:
-   - Call `discover` first.
-   - If results are broad or mixed, call `lookup`.
-   - Use `files`, `symbols`, or `search` only for focused follow-ups.
-
-2. If the task needs external web facts:
-   - Call `web_search` first.
-   - Select best URLs from returned results.
-   - Call `fetch_url` on selected URLs with `format=markdown`.
-
-3. If the task needs repository history or working tree context:
+3. Repository history or dirty tree context:
    - Use `git_status`, `git_log`, `git_diff`, `git_show`.
 
-4. If the task needs GitHub metadata:
+4. GitHub metadata:
    - Use `gh_lookup`.
 
-5. If the task is about tool health/perf:
+5. Tool health and performance:
    - Use `diagnostics`.
 
-## Hard Rules
+## Rules
 
-- Do not use shell `find`/`grep` for normal repo discovery when Veil tools cover the need.
-- Do not fetch URL content via generic web fetch when `fetch_url` exists.
-- Do not skip `discover` for broad local questions.
-- Prefer one narrow follow-up tool call over many speculative shell calls.
+- Do not use shell `find` or `grep` for normal repo discovery when Veil tools fit.
+- Do not use generic web fetch for page extraction when `fetch_url` exists.
+- Do not skip `discover` for broad local queries.
+- Prefer one precise follow-up call over many speculative calls.
 
-## Recommended Query Patterns
+## Query tips
 
-- `discover`: use natural language query from user request.
-- `lookup`: use intent-rich phrase like `where is <symbol> defined`.
-- `web_search`: short factual query, then refine.
-- `fetch_url`: `format=markdown`, bounded timeout, bounded bytes.
+- `discover`: user phrasing is usually enough.
+- `lookup`: use specific intent phrasing, for example `where is <symbol> defined`.
+- `web_search`: start short, then refine.
+- `fetch_url`: set `format=markdown` and keep timeout and size bounded.
 
-## Output Contract
+## Output expectations
 
-- Provide concise synthesis.
+- Keep responses concise.
 - Include source URLs for web-derived claims.
-- Surface unsupported or partial results clearly.
+- Clearly mark unsupported or partial results.

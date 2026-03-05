@@ -44,7 +44,9 @@ bun install
 
 ## MCP Setup
 
-Add veil to your MCP client configuration:
+No-clone setup (recommended): run Veil directly from npm package.
+
+Add Veil to your MCP client configuration:
 
 ### Claude Desktop
 
@@ -54,8 +56,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "veil": {
-      "command": "bun",
-      "args": ["run", "/path/to/veil/src/server.ts"],
+      "command": "npx",
+      "args": ["-y", "@ushiradineth/veil", "server"],
       "env": {}
     }
   }
@@ -70,8 +72,8 @@ Edit `~/.config/codex/mcp.json`:
 {
   "mcpServers": {
     "veil": {
-      "command": "bun",
-      "args": ["run", "/path/to/veil/src/server.ts"]
+      "command": "npx",
+      "args": ["-y", "@ushiradineth/veil", "server"]
     }
   }
 }
@@ -80,6 +82,32 @@ Edit `~/.config/codex/mcp.json`:
 ### OpenCode
 
 Edit `~/.config/opencode/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "npx",
+      "args": ["-y", "@ushiradineth/veil", "server"]
+    }
+  }
+}
+```
+
+Alternative package launch with Bun:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "bunx",
+      "args": ["@ushiradineth/veil", "server"]
+    }
+  }
+}
+```
+
+Local clone setup (contributors):
 
 ```json
 {
@@ -102,9 +130,36 @@ bun run src/cli.ts build --workspace ~/nix-config
 
 Then use the MCP tools with `workspace: "~/nix-config"` parameter, or omit it to use the current working directory.
 
+## Agent Adoption
+
+To improve real-world tool usage (selection and correctness), use:
+
+- `AGENTS.md` for default routing policy and anti-pattern constraints
+- `docs/SKILL.md` as a reusable skill prompt for research and investigation tasks
+
+Install the skill using the `skills` CLI from `vercel-labs/skills`:
+
+```bash
+# install from local repo path
+npx skills add ./docs --skill veil-research-workflow
+
+# install from GitHub
+npx skills add https://github.com/ushiradineth/veil/tree/main/docs --skill veil-research-workflow
+
+# optional: target specific agents yourself
+npx skills add https://github.com/ushiradineth/veil/tree/main/docs --skill veil-research-workflow -a opencode
+```
+
 ## CLI Usage
 
 All CLI and MCP text outputs are emitted in TOON format (not JSON text).
+
+Package-style CLI (no clone after install):
+
+```bash
+npx -y @ushiradineth/veil cli status
+npx -y @ushiradineth/veil cli discover --query "homebrew pnpm"
+```
 
 ```bash
 # Build index
@@ -158,6 +213,22 @@ bun run src/bench-suite.ts --workspace <path> --cold 1 --warm 50 --out benchmark
 # Benchmark suite with custom Serena command overrides (optional)
 bun run src/bench-suite.ts --workspace <path> --serena-config benchmarks/serena.config.example.json --out benchmarks/results/latest
 ```
+
+## Release Pipeline
+
+Manual release workflow: `.github/workflows/release.yml`.
+
+- Trigger via GitHub Actions `Release` workflow (`workflow_dispatch`)
+- Supports `patch|minor|major` bump
+- Supports `dry_run=true` for full validation without push/publish
+- Auto-updates `package.json` and `CHANGELOG.md`
+- Tags release as `v<version>`, publishes npm package, and creates GitHub release
+
+Required GitHub secrets:
+
+- `NPM_TOKEN`: npm automation token with publish access to `@ushiradineth/veil`
+
+No additional GitHub environment variables are required by default.
 
 ## MCP Tools
 

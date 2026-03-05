@@ -1,0 +1,91 @@
+# Veil Agent Guide
+
+## Commands
+
+- Install deps: `nix run nixpkgs#bun -- install`
+- Run tests: `nix run nixpkgs#bun -- test ./src/test.ts`
+- Run coverage: `nix run nixpkgs#bun -- test --coverage ./src/test.ts`
+- Start MCP server: `nix run nixpkgs#bun -- run src/server.ts`
+- CLI status: `nix run nixpkgs#bun -- run src/cli.ts status`
+- Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --cold 1 --warm 10 --out benchmarks/results/latest`
+- Build npm package bundle: `node scripts/build-package.mjs`
+- Dry-run npm package tarball: `npm pack --dry-run`
+
+## Testing
+
+- Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.
+- For performance or benchmark changes, run at least one fresh suite and update `benchmarks/results/latest/*`.
+- Keep benchmark tables in `BENCHMARKS.md` aligned with `benchmarks/results/latest/results.json`.
+
+## Project Structure
+
+- `src/server.ts`: MCP tool registration and request handling.
+- `src/cli.ts`: CLI mirror of MCP capabilities.
+- `src/indexer.ts`: indexing and local code retrieval core.
+- `src/web-search.ts`: no-key multi-provider web search.
+- `src/fetch-url.ts`: markdown-first URL content retrieval.
+- `src/git.ts`: git and optional GitHub (`gh`) lookups.
+- `src/test.ts`: full Bun test suite.
+- `benchmarks/results/`: benchmark artifacts.
+
+## Code Style
+
+- TypeScript with explicit response contracts in `src/types.ts`.
+- Keep outputs token-lean and deterministic.
+- MCP/CLI text output must stay TOON-formatted.
+- Avoid ad hoc shell parsing when a typed utility exists.
+
+## MCP Tool Routing Policy
+
+Use this routing policy by default so agents actually use Veil tools correctly.
+
+- Local codebase intent -> `discover` first, then `lookup`, then `files|symbols|search` if needed.
+- Web facts/news/docs discovery -> `web_search`.
+- Page content extraction from URL -> `fetch_url` (`format=markdown`).
+- Repo state/history/patches -> `git_status`, `git_log`, `git_diff`, `git_show`.
+- GitHub issues/PR/checks -> `gh_lookup`.
+- Operational telemetry -> `diagnostics`.
+
+Routing anti-patterns:
+
+- Do not start with shell `find`/`grep` for normal code lookup.
+- Do not use generic web fetch for content extraction when `fetch_url` is available.
+- Do not skip `discover` for broad codebase questions.
+
+## Skill Trigger (Operational)
+
+When a prompt includes words like `research`, `investigate`, `find where`, `summarize from web`, or `compare docs`, apply:
+
+1. `discover` for local context
+2. `web_search` for external candidates
+3. `fetch_url` for top URLs
+4. Return concise synthesis with source URLs
+
+Use `docs/SKILL.md` as the canonical reusable skill prompt.
+
+## Git Workflow
+
+- Keep diffs tightly scoped to requested work.
+- Run tests before commit.
+- Use conventional commits with sign-off: `git commit -s -m "feat(scope): message"`.
+- Never use force-push on protected branches.
+
+## Boundaries
+
+### Always
+
+- Prefer Veil MCP/CLI tools over shell equivalents for supported intents.
+- Keep benchmark and docs claims backed by fresh artifacts.
+- Preserve TOON output formatting for agent-facing responses.
+
+### Ask First
+
+- Destructive operations.
+- New runtime dependencies that affect production behavior.
+- Benchmark methodology changes that affect published comparability.
+
+### Never
+
+- Commit secrets or credentials.
+- Bypass git hooks with `--no-verify`.
+- Publish benchmark claims not present in `results.json`.

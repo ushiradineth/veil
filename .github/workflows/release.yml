@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Version bump type"
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Run checks without push/publish"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate branch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+            echo "Release must run from $DEFAULT_BRANCH, got $REF_NAME"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test ./src/test.ts
+
+      - name: Build publish artifacts
+        run: bun run build:package
+
+      - name: Verify package tarball
+        run: npm pack --dry-run
+
+      - name: Bump version and prepare changelog
+        id: prep
+        env:
+          VERSION_BUMP: ${{ inputs.version_bump }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { execSync } = require('child_process');
+
+          const pkgPath = 'package.json';
+          const changelogPath = 'CHANGELOG.md';
+          const bump = process.env.VERSION_BUMP || 'patch';
+
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const current = String(pkg.version || '0.1.0');
+          const m = current.match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!m) throw new Error(`Unsupported package version: ${current}`);
+
+          let [major, minor, patch] = m.slice(1).map((v) => Number(v));
+          if (bump === 'major') {
+            major += 1;
+            minor = 0;
+            patch = 0;
+          } else if (bump === 'minor') {
+            minor += 1;
+            patch = 0;
+          } else if (bump === 'patch') {
+            patch += 1;
+          } else {
+            throw new Error(`Unsupported bump type: ${bump}`);
+          }
+
+          const nextVersion = `${major}.${minor}.${patch}`;
+          const nextTag = `v${nextVersion}`;
+
+          pkg.version = nextVersion;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null || true', { encoding: 'utf8' }).trim();
+          const range = latestTag ? `${latestTag}..HEAD` : 'HEAD';
+          const log = execSync(`git log ${range} --pretty=format:%s`, { encoding: 'utf8' })
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .filter((line) => !line.startsWith('chore(release):'));
+
+          const date = new Date().toISOString().slice(0, 10);
+          const lines = [];
+          lines.push(`## [${nextTag}] - ${date}`);
+          lines.push('');
+          if (log.length === 0) {
+            lines.push('- chore: release housekeeping');
+          } else {
+            for (const entry of log) lines.push(`- ${entry}`);
+          }
+          lines.push('');
+
+          const existing = fs.existsSync(changelogPath)
+            ? fs.readFileSync(changelogPath, 'utf8')
+            : '# Changelog\n\nAll notable changes to this project are documented in this file.\n\n## [Unreleased]\n\n';
+
+          const marker = '## [Unreleased]';
+          if (!existing.includes(marker)) {
+            throw new Error('CHANGELOG.md must contain an Unreleased section');
+          }
+
+          const injection = `${marker}\n\n${lines.join('\n')}`;
+          const updated = existing.replace(marker, injection);
+          fs.writeFileSync(changelogPath, updated);
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${nextVersion}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${nextTag}\n`);
+          NODE
+
+      - name: Commit and tag
+        if: inputs.dry_run == false
+        env:
+          TAG: ${{ steps.prep.outputs.tag }}
+          VERSION: ${{ steps.prep.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json CHANGELOG.md
+          git commit -m "chore(release): bump version to ${VERSION}"
+          git tag "${TAG}"
+          git push origin HEAD
+          git push origin "${TAG}"
+
+      - name: Publish to npm
+        if: inputs.dry_run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Create GitHub release
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.prep.outputs.tag }}
+        run: |
+          notes=$(awk -v tag="$TAG" 'BEGIN{found=0} $0 ~ "^## \\\\["tag"\\\\]" {found=1; next} /^## \[/ && found==1 {exit} found==1 {print}' CHANGELOG.md)
+          gh release create "$TAG" --title "$TAG" --notes "$notes"
+
+      - name: Dry run summary
+        if: inputs.dry_run == true
+        run: |
+          echo "Dry run completed."
+          echo "Would release ${{ steps.prep.outputs.tag }}"

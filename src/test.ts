@@ -17,6 +17,7 @@ import {
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { __internalBin } from "./bin";
 import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -1406,6 +1407,21 @@ describe("Indexer internals", () => {
 });
 
 describe("Profiler utilities", () => {
+  test("Bin route maps server and cli commands", () => {
+    expect(__internalBin.route(["bun", "src/bin.ts", "server"])).toEqual({ type: "server" });
+    expect(__internalBin.route(["bun", "src/bin.ts", "cli", "status"])).toEqual({
+      type: "cli",
+      argv: ["bun", "src/bin.ts", "status"],
+    });
+    expect(__internalBin.route(["bun", "src/bin.ts"])).toEqual({ type: "usage" });
+  });
+
+  test("Bin usage text includes entrypoint commands", () => {
+    const text = __internalBin.usage();
+    expect(text.includes("veil server")).toBe(true);
+    expect(text.includes("veil cli")).toBe(true);
+  });
+
   test("Profiler reports no data when empty", () => {
     profiler.reset();
     expect(profiler.report()).toBe("No profiling data available");

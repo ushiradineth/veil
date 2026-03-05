@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [v0.1.2] - 2026-03-05
+
+- chore: release housekeeping
+
+
 ## [v0.1.1] - 2026-03-05
 
 - feat(release): ship npm bin and automated release workflow

@@ -3,6 +3,14 @@
   "version": "0.1.2",
   "private": false,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ushiradineth/veil"
+  },
+  "homepage": "https://github.com/ushiradineth/veil",
+  "bugs": {
+    "url": "https://github.com/ushiradineth/veil/issues"
+  },
   "bin": {
     "veil": "bin/veil.mjs"
   },

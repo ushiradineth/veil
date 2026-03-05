@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [v0.1.5] - 2026-03-05
+
+- fix(release): fallback when generated notes are empty
+
+
 ## [v0.1.4] - 2026-03-05
 
 - fix(release): harden notes generation and semver guards

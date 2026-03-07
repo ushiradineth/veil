@@ -1,6 +1,6 @@
 # Benchmarks
 
-Simple benchmark guide for this repo.
+Auto-generated from the newest benchmark run.
 
 ## Quick Run
 
@@ -13,19 +13,19 @@ nix run nixpkgs#bun -- run src/cli.ts refresh --workspace /path/to/repo --mode c
 Run benchmark suite:
 
 ```bash
-nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10 --out benchmarks/results/latest
+nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10
 ```
 
-## Output Files
+## Latest Run
 
-- `benchmarks/results/latest/results.json`
-- `benchmarks/results/latest/SUMMARY.md`
-
-Use `results.json` as source of truth for any published numbers.
+- Run directory: `benchmarks/results/20260307-122121Z`
+- Result JSON: `benchmarks/results/20260307-122121Z/results.json`
+- Summary markdown: `benchmarks/results/20260307-122121Z/SUMMARY.md`
+- Generated: `2026-03-07T12:23:31.087Z`
+- Workspace: `/Users/shu/Code/veil`
+- Iterations: `cold=1`, `warm=1`
 
 ## Scenario Coverage
-
-The suite executes all current Veil MCP tools.
 
 | MCP Tool | Scenario ID |
 | --- | --- |
@@ -43,37 +43,30 @@ The suite executes all current Veil MCP tools.
 | `git_log` | `git-log-check` |
 | `git_diff` | `git-diff-check` |
 | `git_show` | `git-show-head` |
-| `gh_lookup` | `gh-lookup-prs` |
+| `gh_lookup` | `gh-repo-context` |
 
-## Latest Quick Snapshot
+## Warm Latency Comparison (p50 / p95 ms)
 
-Source: `benchmarks/results/latest/results.json`
-
-- Generated: `2026-03-04T15:50:29.797Z`
-- Workspace: `/Users/shu/Code/veil`
-- Iterations: `cold=1`, `warm=10`
-
-Veil warm latency highlights:
-
-| Scenario | Warm p50 (ms) | Warm p95 (ms) |
-| --- | ---: | ---: |
-| status-bootstrap | 0.0018 | 0.0158 |
-| refresh-changed | 72.6088 | 115.5082 |
-| files-homebrew | 0.0353 | 0.0907 |
-| symbols-build | 0.0345 | 0.0583 |
-| search-pnpm-install | 0.0791 | 0.0967 |
-| lookup-build-index | 0.1833 | 0.2395 |
-| discover-combined | 0.1002 | 0.8553 |
-| web-search-typescript | 1285.7768 | 1617.4911 |
-| fetch-url-example | 55.6339 | 70.1281 |
-| diagnostics-read | 0.0671 | 0.1171 |
-| git-status-check | 38.3418 | 42.3217 |
-| git-log-check | 16.7118 | 17.4411 |
-| git-diff-check | 17.1298 | 17.3150 |
-| git-show-head | 19.8787 | 22.1407 |
-| gh-lookup-prs | 1644.7691 | 2334.9696 |
+| Scenario | codex (veil) | codex (serena) | codex (none) | claude (veil) | claude (serena) | claude (none) | opencode (veil) | opencode (serena) | opencode (none) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| status-bootstrap | error | error | error | error | error | error | unsupported | unsupported | unsupported |
+| refresh-changed | error | error | error | error | error | error | unsupported | unsupported | unsupported |
+| files-homebrew | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| symbols-build | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| search-pnpm-install | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| lookup-build-index | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| discover-combined | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| web-search-typescript | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| fetch-url-example | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| diagnostics-read | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| git-status-check | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| git-log-check | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| git-diff-check | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| git-show-head | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| gh-repo-context | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
 
 Notes:
 
 - Web and GitHub scenarios are network dependent and usually much slower than local index queries.
-- Some competitor rows are intentionally `unsupported` when there is no equivalent tool mapping.
+- Cells with `unsupported` or `error` indicate that competitor/mode could not execute that scenario.
+

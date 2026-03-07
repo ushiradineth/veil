@@ -30,7 +30,7 @@ Add Veil to your MCP client config:
 Install the Veil skill (optional, improves agent tool routing):
 
 ```bash
-npx -y skills add https://github.com/ushiradineth/veil/tree/main/docs --skill veil --list
+npx -y skills add https://github.com/ushiradineth/veil/tree/main/docs --skill veil
 ```
 
 ## MCP Tools

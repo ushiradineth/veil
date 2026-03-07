@@ -12,11 +12,6 @@ on:
           - patch
           - minor
           - major
-      dry_run:
-        description: "Run checks without push/publish"
-        type: boolean
-        required: true
-        default: true
 
 permissions:
   contents: read
@@ -42,12 +37,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.1.0"
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
           registry-url: https://registry.npmjs.org
 
       - name: Validate branch
@@ -69,30 +64,45 @@ jobs:
       - name: Build publish artifacts
         run: bun run build:package
 
+      - name: Smoke test Node bundle
+        run: |
+          output=$(node dist/bin.js 2>&1 || true)
+          if ! echo "${output}" | grep -q "Usage:"; then
+            echo "Smoke test failed: bundle did not produce usage output"
+            echo "Got: ${output}"
+            exit 1
+          fi
+
       - name: Verify package tarball
         run: npm pack --dry-run
+
+      - name: Validate tag availability
+        id: validate-tag
+        run: |
+          latestTag=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+          if ! /^v\d+\.\d+\.\d+$/.test("$latestTag"); then
+            echo "Latest tag must be semver (vX.Y.Z), got: $latestTag"
+            exit 1
+          fi
+          echo "latest_tag=$latestTag" >> $GITHUB_OUTPUT
 
       - name: Bump version
         id: prep
         env:
           VERSION_BUMP: ${{ inputs.version_bump }}
+          LATEST_TAG: ${{ steps.validate-tag.outputs.latest_tag }}
         run: |
           node <<'NODE'
           const fs = require('fs');
-          const { execSync } = require('child_process');
 
           const pkgPath = 'package.json';
           const bump = process.env.VERSION_BUMP || 'patch';
+          const latestTag = process.env.LATEST_TAG || 'v0.0.0';
 
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
           const current = String(pkg.version || '0.1.0');
           if (!/^\d+\.\d+\.\d+$/.test(current)) {
             throw new Error(`Unsupported package version: ${current}`);
-          }
-
-          const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0', { encoding: 'utf8' }).trim();
-          if (!/^v\d+\.\d+\.\d+$/.test(latestTag)) {
-            throw new Error(`Latest tag must be semver (vX.Y.Z), got: ${latestTag}`);
           }
 
           const latestVersion = latestTag.slice(1);
@@ -116,8 +126,13 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${nextTag}\n`);
           NODE
 
-      - name: Commit and tag
-        if: inputs.dry_run == false
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          git checkout -- package.json || true
+          git clean -fd || true
+
+      - name: Commit and tag locally
         env:
           TAG: ${{ steps.prep.outputs.tag }}
           VERSION: ${{ steps.prep.outputs.version }}
@@ -137,17 +152,26 @@ jobs:
           git add package.json
           git commit -m "chore(release): bump version to ${VERSION}"
           git tag "${TAG}"
-          git push origin HEAD
-          git push origin "${TAG}"
 
       - name: Publish to npm
-        if: inputs.dry_run == false
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
+      - name: Cleanup on publish failure
+        if: failure()
+        run: |
+          git reset --hard HEAD~1 || true
+          git tag -d ${{ steps.prep.outputs.tag }} || true
+
+      - name: Push commit and tag
+        env:
+          TAG: ${{ steps.prep.outputs.tag }}
+        run: |
+          git push origin HEAD
+          git push origin "${TAG}"
+
       - name: Prepare release notes
-        if: inputs.dry_run == false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prep.outputs.tag }}
@@ -172,15 +196,8 @@ jobs:
           printf '%s\n\n%s\n' "${notes}" "${npm_link}" > release-notes.md
 
       - name: Create GitHub release
-        if: inputs.dry_run == false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prep.outputs.tag }}
         run: |
           gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md --verify-tag
-
-      - name: Dry run summary
-        if: inputs.dry_run == true
-        run: |
-          echo "Dry run completed."
-          echo "Would release ${{ steps.prep.outputs.tag }}"

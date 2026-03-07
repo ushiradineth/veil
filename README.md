@@ -12,6 +12,8 @@ In practice, Veil acts as a local retrieval layer for coding agents: discover wh
 
 ## Get Started
 
+Requires Node.js 20 or later.
+
 Add Veil to your MCP client config:
 
 ```json
@@ -50,7 +52,7 @@ Available Veil MCP tools:
 | - | `git_log` | Commit history lookup |
 | - | `git_diff` | Uncommitted or range diff lookup |
 | - | `git_show` | Commit details and optional patch |
-| - | `gh_lookup` | GitHub issues, PRs, and checks via `gh` |
+| - | `gh_lookup` | GitHub issues, PRs, checks, and repo context bootstrap via `gh` |
 | - | `diagnostics` | Cache and latency diagnostics |
 
 ## MCP Client Configuration

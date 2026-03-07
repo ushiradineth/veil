@@ -55,6 +55,32 @@ Available Veil MCP tools:
 | - | `gh_lookup` | GitHub issues, PRs, checks, and repo context bootstrap via `gh` |
 | - | `diagnostics` | Cache and latency diagnostics |
 
+## CLI Examples
+
+```bash
+# status and refresh
+veil cli status --workspace .
+veil cli refresh --workspace . --mode changed
+
+# local index retrieval
+veil cli discover --workspace . --query "find build logic"
+veil cli lookup --workspace . --query "where is parseNdjson defined"
+
+# web and fetch
+veil cli web-search --query "typescript language server" --limit 5
+veil cli fetch-url --url https://example.com --format markdown
+
+# git and github context
+veil cli git-status --workspace .
+veil cli git-log --workspace . --limit 10
+veil cli git-diff --workspace .
+veil cli git-show --workspace . --rev HEAD
+veil cli gh-lookup --repo owner/repo --kind issues --query "is:open"
+
+# diagnostics
+veil cli diagnostics
+```
+
 ## MCP Client Configuration
 
 <details>

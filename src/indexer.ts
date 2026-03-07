@@ -17,6 +17,7 @@ import type {
   SymbolRecord,
 } from "./types";
 import { diagnostics } from "./diagnostics";
+import { relativeStateRoot, resolveIndexDir } from "./state-root";
 
 const SCHEMA_VERSION = "1";
 const DEFAULT_STALE_HOURS = 24;
@@ -133,6 +134,7 @@ type QueryChunksOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  state_root?: string;
 };
 
 type DiscoverOptions = {
@@ -143,11 +145,14 @@ type DiscoverOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  state_root?: string;
 };
 
 const INDEX_CACHE = new Map<string, IndexCacheEntry>();
 const STATUS_CACHE = new Map<string, { value: IndexStatus; ts: number }>();
 const STATUS_CACHE_TTL_MS = 1500;
+const MAX_INDEX_CACHE_SIZE = 32;
+const MAX_STATUS_CACHE_SIZE = 64;
 const STOP_TOKENS = new Set([
   "the",
   "and",
@@ -194,12 +199,32 @@ const CODE_TOP_LEVEL_HINTS = new Set(["src", "lib", "app", "server", "cmd", "pkg
 const MAX_QUERY_PARSE_CACHE = 256;
 const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
 
-function getIndexDir(workspace: string): string {
-  return join(workspace, ".agents", "index");
+function cacheKey(workspace: string, stateRoot?: string): string {
+  return `${workspace}::${resolveIndexDir(workspace, stateRoot)}`;
 }
 
-function getIndexPath(workspace: string, file: string): string {
-  return join(getIndexDir(workspace), file);
+function setIndexCache(key: string, entry: IndexCacheEntry): void {
+  INDEX_CACHE.set(key, entry);
+  if (INDEX_CACHE.size > MAX_INDEX_CACHE_SIZE) {
+    const first = INDEX_CACHE.keys().next().value;
+    if (first) INDEX_CACHE.delete(first);
+  }
+}
+
+function setStatusCache(key: string, value: IndexStatus): void {
+  STATUS_CACHE.set(key, { value, ts: Date.now() });
+  if (STATUS_CACHE.size > MAX_STATUS_CACHE_SIZE) {
+    const first = STATUS_CACHE.keys().next().value;
+    if (first) STATUS_CACHE.delete(first);
+  }
+}
+
+function getIndexDir(workspace: string, stateRoot?: string): string {
+  return resolveIndexDir(workspace, stateRoot);
+}
+
+function getIndexPath(workspace: string, file: string, stateRoot?: string): string {
+  return join(getIndexDir(workspace, stateRoot), file);
 }
 
 function hashText(content: string): string {
@@ -275,13 +300,14 @@ function hasDirtyWorkspace(workspace: string): boolean {
   return raw.length > 0;
 }
 
-async function listFilesFallback(workspace: string): Promise<string[]> {
+async function listFilesFallback(workspace: string, stateRoot?: string): Promise<string[]> {
   const out: string[] = [];
+  const stateRootRel = relativeStateRoot(workspace, stateRoot);
   async function walk(abs: string): Promise<void> {
     const items = await readdir(abs, { withFileTypes: true });
     for (const item of items) {
       if (item.name === ".git" || item.name === "node_modules") continue;
-      if (item.name === ".agents") continue;
+      if (stateRootRel && item.name === stateRootRel.split("/")[0]) continue;
       const nextAbs = join(abs, item.name);
       if (item.isDirectory()) {
         await walk(nextAbs);
@@ -612,8 +638,8 @@ function makeChunks(path: string, content: string): ChunkRecord[] {
   return chunks;
 }
 
-async function readExistingIndex<T>(workspace: string, name: string): Promise<T[]> {
-  const p = getIndexPath(workspace, name);
+async function readExistingIndex<T>(workspace: string, name: string, stateRoot?: string): Promise<T[]> {
+  const p = getIndexPath(workspace, name, stateRoot);
   if (!existsSync(p)) return [];
   try {
     const raw = await readFile(p, "utf-8");
@@ -623,17 +649,18 @@ async function readExistingIndex<T>(workspace: string, name: string): Promise<T[
   }
 }
 
-async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
-  const filesPath = getIndexPath(workspace, "files.ndjson");
-  const symbolsPath = getIndexPath(workspace, "symbols.ndjson");
-  const chunksPath = getIndexPath(workspace, "chunks.ndjson");
+async function loadCachedIndex(workspace: string, stateRoot?: string): Promise<IndexCacheEntry> {
+  const filesPath = getIndexPath(workspace, "files.ndjson", stateRoot);
+  const symbolsPath = getIndexPath(workspace, "symbols.ndjson", stateRoot);
+  const chunksPath = getIndexPath(workspace, "chunks.ndjson", stateRoot);
   const [filesMtime, symbolsMtime, chunksMtime] = await Promise.all([
     mtimeMs(filesPath),
     mtimeMs(symbolsPath),
     mtimeMs(chunksPath),
   ]);
 
-  const cached = INDEX_CACHE.get(workspace);
+  const key = cacheKey(workspace, stateRoot);
+  const cached = INDEX_CACHE.get(key);
   if (
     cached &&
     cached.filesMtimeMs === filesMtime &&
@@ -645,9 +672,9 @@ async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
   }
 
   const [files, symbols, chunks] = await Promise.all([
-    readExistingIndex<FileRecord>(workspace, "files.ndjson"),
-    readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson"),
-    readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson"),
+    readExistingIndex<FileRecord>(workspace, "files.ndjson", stateRoot),
+    readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson", stateRoot),
+    readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson", stateRoot),
   ]);
 
   const entry = buildCacheEntry(files, symbols, chunks, {
@@ -656,12 +683,12 @@ async function loadCachedIndex(workspace: string): Promise<IndexCacheEntry> {
     chunks: chunksMtime,
   });
   if (cached) diagnostics.recordCacheInvalidation();
-  INDEX_CACHE.set(workspace, entry);
+  setIndexCache(key, entry);
   diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return entry;
 }
 
-async function writeHumanDocs(workspace: string, files: FileRecord[]): Promise<void> {
+async function writeHumanDocs(workspace: string, files: FileRecord[], stateRoot?: string): Promise<void> {
   const byTop = new Map<string, number>();
   for (const file of files) {
     byTop.set(file.top_level, (byTop.get(file.top_level) ?? 0) + 1);
@@ -672,7 +699,7 @@ async function writeHumanDocs(workspace: string, files: FileRecord[]): Promise<v
     dirsLines.push(`- ${dir}: ${count}`);
   }
   dirsLines.push("");
-  await writeFile(getIndexPath(workspace, "dirs.md"), dirsLines.join("\n"), "utf-8");
+  await writeFile(getIndexPath(workspace, "dirs.md", stateRoot), dirsLines.join("\n"), "utf-8");
 
   const entryCandidates = new Set([
     "README.md",
@@ -691,17 +718,18 @@ async function writeHumanDocs(workspace: string, files: FileRecord[]): Promise<v
   const entryLines = ["# Entrypoints", "", "High-signal files for navigation:", ""];
   for (const path of entries) entryLines.push(`- ${path}`);
   entryLines.push("");
-  await writeFile(getIndexPath(workspace, "entrypoints.md"), entryLines.join("\n"), "utf-8");
+  await writeFile(getIndexPath(workspace, "entrypoints.md", stateRoot), entryLines.join("\n"), "utf-8");
 }
 
-export async function getStatus(workspace: string): Promise<IndexStatus> {
-  const cached = STATUS_CACHE.get(workspace);
+export async function getStatus(workspace: string, options: { state_root?: string } = {}): Promise<IndexStatus> {
+  const key = cacheKey(workspace, options.state_root);
+  const cached = STATUS_CACHE.get(key);
   if (cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
     diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return cached.value;
   }
 
-  const manifestPath = getIndexPath(workspace, "manifest.json");
+  const manifestPath = getIndexPath(workspace, "manifest.json", options.state_root);
   const currentHead = runGit(workspace, ["rev-parse", "HEAD"]);
   if (!existsSync(manifestPath)) {
     const status: IndexStatus = {
@@ -713,7 +741,7 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
     };
     if (hasDirtyWorkspace(workspace)) status.reasons.push("workspace-dirty");
     status.stale = status.reasons.length > 0;
-    STATUS_CACHE.set(workspace, { value: status, ts: Date.now() });
+    setStatusCache(key, status);
     diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return status;
   }
@@ -731,7 +759,7 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
       current_git_head: currentHead,
     };
     if (hasDirtyWorkspace(workspace)) malformedStatus.reasons.push("workspace-dirty");
-    STATUS_CACHE.set(workspace, { value: malformedStatus, ts: Date.now() });
+    setStatusCache(key, malformedStatus);
     diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
     return malformedStatus;
   }
@@ -753,7 +781,7 @@ export async function getStatus(workspace: string): Promise<IndexStatus> {
     manifest,
     current_git_head: currentHead,
   };
-  STATUS_CACHE.set(workspace, { value: status, ts: Date.now() });
+  setStatusCache(key, status);
   diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return status;
 }
@@ -766,12 +794,13 @@ export function shouldRefreshDiscover(status: IndexStatus): boolean {
 /**
  * Process a single file and return its records
  */
-async function processFile(workspace: string, rel: string): Promise<{
+async function processFile(workspace: string, rel: string, stateRoot?: string): Promise<{
   file: FileRecord | null;
   symbols: SymbolRecord[];
   chunks: ChunkRecord[];
 }> {
-  if (rel.startsWith(".agents/index/")) return { file: null, symbols: [], chunks: [] };
+  const stateRootRel = relativeStateRoot(workspace, stateRoot);
+  if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`))) return { file: null, symbols: [], chunks: [] };
   if (rel.startsWith(".git/")) return { file: null, symbols: [], chunks: [] };
   
   const abs = join(workspace, rel);
@@ -813,7 +842,7 @@ async function processFile(workspace: string, rel: string): Promise<{
  * Parallel file processing with batching
  * Processes files in batches of BATCH_SIZE for 3-5x speedup on multi-core systems
  */
-async function computeForPaths(workspace: string, paths: string[]): Promise<{
+async function computeForPaths(workspace: string, paths: string[], stateRoot?: string): Promise<{
   files: FileRecord[];
   symbols: SymbolRecord[];
   chunks: ChunkRecord[];
@@ -825,7 +854,7 @@ async function computeForPaths(workspace: string, paths: string[]): Promise<{
   // Process files in batches
   for (let i = 0; i < paths.length; i += BATCH_SIZE) {
     const batch = paths.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map((rel) => processFile(workspace, rel)));
+    const results = await Promise.all(batch.map((rel) => processFile(workspace, rel, stateRoot)));
     
     for (const result of results) {
       if (result.file) {
@@ -839,12 +868,12 @@ async function computeForPaths(workspace: string, paths: string[]): Promise<{
   return { files, symbols, chunks };
 }
 
-export async function buildIndex(workspace: string, mode: BuildMode = "full"): Promise<Manifest> {
+export async function buildIndex(workspace: string, mode: BuildMode = "full", options: { state_root?: string } = {}): Promise<Manifest> {
   const buildStart = nowMs();
-  const indexDir = getIndexDir(workspace);
+  const indexDir = getIndexDir(workspace, options.state_root);
   await mkdir(indexDir, { recursive: true });
 
-  const tracked = listTrackedFiles(workspace) ?? (await listFilesFallback(workspace));
+  const tracked = listTrackedFiles(workspace) ?? (await listFilesFallback(workspace, options.state_root));
   const gitHead = runGit(workspace, ["rev-parse", "HEAD"]);
 
   let files: FileRecord[] = [];
@@ -852,14 +881,14 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
   let chunks: ChunkRecord[] = [];
 
   if (mode === "full") {
-    const computed = await computeForPaths(workspace, tracked);
+    const computed = await computeForPaths(workspace, tracked, options.state_root);
     files = computed.files;
     symbols = computed.symbols;
     chunks = computed.chunks;
   } else {
-    const prevStatus = await getStatus(workspace);
+    const prevStatus = await getStatus(workspace, options);
     if (!prevStatus.exists || !prevStatus.manifest?.git_head) {
-      const computed = await computeForPaths(workspace, tracked);
+      const computed = await computeForPaths(workspace, tracked, options.state_root);
       files = computed.files;
       symbols = computed.symbols;
       chunks = computed.chunks;
@@ -870,16 +899,16 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
         if (!trackedSet.has(prevFile.path)) changedSet.add(prevFile.path);
       }
 
-      const prevFiles = await readExistingIndex<FileRecord>(workspace, "files.ndjson");
-      const prevSymbols = await readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson");
-      const prevChunks = await readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson");
+      const prevFiles = await readExistingIndex<FileRecord>(workspace, "files.ndjson", options.state_root);
+      const prevSymbols = await readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson", options.state_root);
+      const prevChunks = await readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson", options.state_root);
 
       const keptFiles = prevFiles.filter((f) => !changedSet.has(f.path));
       const keptSymbols = prevSymbols.filter((s) => !changedSet.has(s.path));
       const keptChunks = prevChunks.filter((c) => !changedSet.has(c.path));
 
       const changedPaths = [...changedSet];
-      const recomputed = await computeForPaths(workspace, changedPaths);
+      const recomputed = await computeForPaths(workspace, changedPaths, options.state_root);
 
       files = [...keptFiles, ...recomputed.files];
       symbols = [...keptSymbols, ...recomputed.symbols];
@@ -891,18 +920,18 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
   symbols.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path)));
   chunks.sort((a, b) => a.id.localeCompare(b.id));
 
-  await writeFile(getIndexPath(workspace, "files.ndjson"), toNdjson(files), "utf-8");
-  await writeFile(getIndexPath(workspace, "symbols.ndjson"), toNdjson(symbols), "utf-8");
-  await writeFile(getIndexPath(workspace, "chunks.ndjson"), toNdjson(chunks), "utf-8");
-  await writeHumanDocs(workspace, files);
+  await writeFile(getIndexPath(workspace, "files.ndjson", options.state_root), toNdjson(files), "utf-8");
+  await writeFile(getIndexPath(workspace, "symbols.ndjson", options.state_root), toNdjson(symbols), "utf-8");
+  await writeFile(getIndexPath(workspace, "chunks.ndjson", options.state_root), toNdjson(chunks), "utf-8");
+  await writeHumanDocs(workspace, files, options.state_root);
 
   const [filesMtime, symbolsMtime, chunksMtime] = await Promise.all([
-    mtimeMs(getIndexPath(workspace, "files.ndjson")),
-    mtimeMs(getIndexPath(workspace, "symbols.ndjson")),
-    mtimeMs(getIndexPath(workspace, "chunks.ndjson")),
+    mtimeMs(getIndexPath(workspace, "files.ndjson", options.state_root)),
+    mtimeMs(getIndexPath(workspace, "symbols.ndjson", options.state_root)),
+    mtimeMs(getIndexPath(workspace, "chunks.ndjson", options.state_root)),
   ]);
-  INDEX_CACHE.set(
-    workspace,
+  setIndexCache(
+    cacheKey(workspace, options.state_root),
     buildCacheEntry(files, symbols, chunks, {
       files: filesMtime,
       symbols: symbolsMtime,
@@ -921,8 +950,8 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full"): P
     chunk_count: chunks.length,
   };
 
-  await writeFile(getIndexPath(workspace, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
-  STATUS_CACHE.delete(workspace);
+  await writeFile(getIndexPath(workspace, "manifest.json", options.state_root), `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
   diagnostics.recordIndexBuild();
   diagnostics.recordBuildLatency(nowMs() - buildStart);
   diagnostics.recordCacheInvalidation();
@@ -1070,9 +1099,9 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
   return result;
 }
 
-export async function queryFiles(workspace: string, q: string, limit = 20): Promise<FileRecord[]> {
+export async function queryFiles(workspace: string, q: string, limit = 20, options: { state_root?: string } = {}): Promise<FileRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace);
+  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(q);
   const out = queryFilesFromCache(cache, parsed, limit);
   diagnostics.recordQuery(nowMs() - start);
@@ -1080,9 +1109,9 @@ export async function queryFiles(workspace: string, q: string, limit = 20): Prom
   return out;
 }
 
-export async function querySymbols(workspace: string, q: string, limit = 20): Promise<SymbolRecord[]> {
+export async function querySymbols(workspace: string, q: string, limit = 20, options: { state_root?: string } = {}): Promise<SymbolRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace);
+  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(q);
   const out = querySymbolsFromCache(cache, parsed, limit);
   diagnostics.recordQuery(nowMs() - start);
@@ -1097,7 +1126,7 @@ export async function queryChunks(
   options: QueryChunksOptions = {},
 ): Promise<ChunkRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace);
+  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(q, options.intent);
   const out = queryChunksFromCache(cache, parsed, limit, options);
   diagnostics.recordQuery(nowMs() - start);
@@ -1111,7 +1140,7 @@ export async function discoverIndex(
   options: DiscoverOptions = {},
 ): Promise<{ intent: ResolvedQueryIntent; files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace);
+  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(query, options.intent);
   const filesLimit = options.files_limit ?? 20;
   const symbolsLimit = options.symbols_limit ?? (parsed.intent === "symbols" ? 40 : 20);
@@ -1234,7 +1263,7 @@ export async function lookupIndex(
   options: DiscoverOptions = {},
 ): Promise<LookupResponse> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace);
+  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(query, options.intent);
 
   const filesLimit = options.files_limit ?? 8;

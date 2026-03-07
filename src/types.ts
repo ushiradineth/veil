@@ -158,7 +158,7 @@ export type GitShowData = {
   text: string;
 };
 
-export type GhLookupKind = "issues" | "prs" | "checks";
+export type GhLookupKind = "repo_context" | "issues" | "prs" | "checks";
 
 export type GhLookupData = {
   repo: string;
@@ -166,6 +166,10 @@ export type GhLookupData = {
   query: string;
   limit: number;
   text: string;
+  repo_url?: string;
+  cloned_workspace?: string;
+  state_root?: string;
+  status_exists?: boolean;
 };
 
 export type WebSearchProvider = "google" | "duckduckgo" | "wikipedia" | "github" | "reddit" | "deepwiki";

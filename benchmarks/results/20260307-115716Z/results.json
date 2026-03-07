@@ -1,0 +1,3233 @@
+{
+  "generated_at": "2026-03-07T12:17:49.915Z",
+  "environment": {
+    "hostname": "unknown",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v24.3.0",
+    "bun": "1.3.3",
+    "cpu_model": "Apple M2 Pro",
+    "cpu_cores": 10
+  },
+  "config": {
+    "workspace": "/Users/shu/Code/veil",
+    "cold_iterations": 1,
+    "warm_iterations": 1,
+    "output_dir": "/Users/shu/Code/veil/benchmarks/results/20260307-115716Z",
+    "competitors": [
+      "codex-veil",
+      "codex-serena",
+      "codex-none",
+      "claude-veil",
+      "claude-serena",
+      "claude-none",
+      "opencode-veil",
+      "opencode-serena",
+      "opencode-none"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "status-bootstrap",
+      "kind": "status",
+      "title": "Repository status bootstrap",
+      "prompt": "Get repository index and freshness status",
+      "query": "status",
+      "expected_patterns": [
+        "exists",
+        "stale",
+        "manifest"
+      ]
+    },
+    {
+      "id": "refresh-changed",
+      "kind": "refresh",
+      "title": "Incremental index refresh",
+      "prompt": "Refresh index in changed mode",
+      "query": "changed",
+      "expected_patterns": [
+        "schema_version",
+        "workspace",
+        "file_count"
+      ]
+    },
+    {
+      "id": "files-homebrew",
+      "kind": "files",
+      "title": "File lookup by path intent",
+      "prompt": "Find files related to homebrew",
+      "query": "homebrew",
+      "expected_patterns": [
+        "homebrew",
+        "brew",
+        "nix"
+      ]
+    },
+    {
+      "id": "symbols-build",
+      "kind": "symbols",
+      "title": "Symbol lookup by name intent",
+      "prompt": "Find symbols related to build",
+      "query": "build",
+      "expected_patterns": [
+        "build",
+        "install",
+        "package"
+      ]
+    },
+    {
+      "id": "search-pnpm-install",
+      "kind": "search",
+      "title": "Code content lookup",
+      "prompt": "Locate code snippets that contain pnpm install",
+      "query": "pnpm install",
+      "expected_patterns": [
+        "pnpm",
+        "install"
+      ]
+    },
+    {
+      "id": "lookup-build-index",
+      "kind": "lookup",
+      "title": "Intent-aware lookup",
+      "prompt": "Find where buildIndex is defined",
+      "query": "where is buildIndex defined",
+      "expected_patterns": [
+        "buildindex",
+        "indexer",
+        "score"
+      ]
+    },
+    {
+      "id": "discover-combined",
+      "kind": "discover",
+      "title": "Combined discovery workflow",
+      "prompt": "Find files, symbols, and code for homebrew pnpm build",
+      "query": "homebrew pnpm build",
+      "expected_patterns": [
+        "homebrew",
+        "pnpm",
+        "build"
+      ]
+    },
+    {
+      "id": "web-search-typescript",
+      "kind": "web_search",
+      "title": "Web search query",
+      "prompt": "Search the web for typescript language server",
+      "query": "typescript language server",
+      "expected_patterns": [
+        "typescript",
+        "language",
+        "server"
+      ]
+    },
+    {
+      "id": "fetch-url-example",
+      "kind": "fetch_url",
+      "title": "URL fetch markdown-first",
+      "prompt": "Fetch and convert content from example.com",
+      "query": "https://example.com",
+      "expected_patterns": [
+        "example",
+        "domain"
+      ]
+    },
+    {
+      "id": "diagnostics-read",
+      "kind": "diagnostics",
+      "title": "Diagnostics lookup",
+      "prompt": "Read diagnostics and cache counters",
+      "query": "diagnostics",
+      "expected_patterns": [
+        "latency",
+        "cache"
+      ]
+    },
+    {
+      "id": "git-status-check",
+      "kind": "git_status",
+      "title": "Git status lookup",
+      "prompt": "Inspect repository git status",
+      "query": "status",
+      "expected_patterns": [
+        "branch",
+        "clean",
+        "dirty"
+      ]
+    },
+    {
+      "id": "git-log-check",
+      "kind": "git_log",
+      "title": "Git log lookup",
+      "prompt": "Inspect recent commit log",
+      "query": "log",
+      "expected_patterns": [
+        "commit",
+        "author",
+        "message"
+      ]
+    },
+    {
+      "id": "git-diff-check",
+      "kind": "git_diff",
+      "title": "Git diff lookup",
+      "prompt": "Inspect unstaged diff",
+      "query": "diff",
+      "expected_patterns": [
+        "diff",
+        "file"
+      ]
+    },
+    {
+      "id": "git-show-head",
+      "kind": "git_show",
+      "title": "Git show lookup",
+      "prompt": "Show HEAD commit details",
+      "query": "head",
+      "expected_patterns": [
+        "commit",
+        "author",
+        "message"
+      ]
+    },
+    {
+      "id": "gh-repo-context",
+      "kind": "gh_lookup",
+      "title": "GitHub repo context bootstrap",
+      "prompt": "Clone and index a referenced GitHub repository for context",
+      "query": "microsoft/vscode",
+      "expected_patterns": [
+        "indexed",
+        "workspace",
+        "repo"
+      ]
+    }
+  ],
+  "competitors": [
+    {
+      "id": "codex-veil",
+      "label": "codex (veil)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 11606.0064,
+            "p95_ms": 11606.0064,
+            "p99_ms": 11606.0064,
+            "mean_ms": 11606.0064,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "refresh-changed": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "codex-serena",
+      "label": "codex (serena)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 12075.7425,
+            "p95_ms": 12075.7425,
+            "p99_ms": 12075.7425,
+            "mean_ms": 12075.7425,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "refresh-changed": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 12051.729,
+            "p95_ms": 12051.729,
+            "p99_ms": 12051.729,
+            "mean_ms": 12051.729,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 13199.8489,
+            "p95_ms": 13199.8489,
+            "p99_ms": 13199.8489,
+            "mean_ms": 13199.8489,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "codex-none",
+      "label": "codex (none)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 13784.6598,
+            "p95_ms": 13784.6598,
+            "p99_ms": 13784.6598,
+            "mean_ms": 13784.6598,
+            "success_rate": 1,
+            "relevance_rate": 1
+          }
+        },
+        "refresh-changed": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 13675.3533,
+            "p95_ms": 13675.3533,
+            "p99_ms": 13675.3533,
+            "mean_ms": 13675.3533,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 7975.8804,
+            "p95_ms": 7975.8804,
+            "p99_ms": 7975.8804,
+            "mean_ms": 7975.8804,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "codex timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "claude-veil",
+      "label": "claude (veil)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "refresh-changed": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "claude-serena",
+      "label": "claude (serena)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "refresh-changed": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "claude-none",
+      "label": "claude (none)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "refresh-changed": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "error",
+          "reason": "exit status 1",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "opencode-veil",
+      "label": "opencode (veil)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 8719.6784,
+            "p95_ms": 8719.6784,
+            "p99_ms": 8719.6784,
+            "mean_ms": 8719.6784,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          }
+        },
+        "refresh-changed": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 13620.7446,
+            "p95_ms": 13620.7446,
+            "p99_ms": 13620.7446,
+            "mean_ms": 13620.7446,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "opencode-serena",
+      "label": "opencode (serena)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 10484.413,
+            "p95_ms": 10484.413,
+            "p99_ms": 10484.413,
+            "mean_ms": 10484.413,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "refresh-changed": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 9639.469,
+            "p95_ms": 9639.469,
+            "p99_ms": 9639.469,
+            "mean_ms": 9639.469,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "unsupported",
+          "reason": "suite runtime budget exceeded",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "opencode-none",
+      "label": "opencode (none)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 9969.6182,
+            "p95_ms": 9969.6182,
+            "p99_ms": 9969.6182,
+            "mean_ms": 9969.6182,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "refresh-changed": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 8010.8839,
+            "p95_ms": 8010.8839,
+            "p99_ms": 8010.8839,
+            "mean_ms": 8010.8839,
+            "success_rate": 1,
+            "relevance_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "web-search-typescript": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "fetch-url-example": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "diagnostics-read": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-log-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-diff-check": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "git-show-head": {
+          "status": "unsupported",
+          "reason": "opencode timeout",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        },
+        "gh-repo-context": {
+          "status": "unsupported",
+          "reason": "suite runtime budget exceeded",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          }
+        }
+      }
+    }
+  ]
+}

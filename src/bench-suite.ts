@@ -1,9 +1,8 @@
 import { cpus } from "node:os";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
@@ -84,6 +83,9 @@ type CompetitorReport = {
   scenarios: Record<string, ScenarioSummary>;
 };
 
+type AgentId = "codex" | "claude" | "opencode";
+type McpMode = "veil" | "serena" | "none";
+
 type SuiteReport = {
   generated_at: string;
   environment: {
@@ -104,11 +106,6 @@ type SuiteReport = {
   };
   scenarios: Scenario[];
   competitors: CompetitorReport[];
-};
-
-type ExternalCommandConfig = {
-  name: string;
-  commands: Partial<Record<ScenarioKind, string[]>>;
 };
 
 const nowMs =
@@ -230,12 +227,12 @@ const SCENARIOS: Scenario[] = [
     expected_patterns: ["commit", "author", "message"],
   },
   {
-    id: "gh-lookup-prs",
+    id: "gh-repo-context",
     kind: "gh_lookup",
-    title: "GitHub lookup",
-    prompt: "Lookup GitHub pull requests",
-    query: "prs",
-    expected_patterns: ["pull", "request"],
+    title: "GitHub repo context bootstrap",
+    prompt: "Clone and index a referenced GitHub repository for context",
+    query: "microsoft/vscode",
+    expected_patterns: ["indexed", "workspace", "repo"],
   },
 ];
 
@@ -296,12 +293,18 @@ function relevanceScore(text: string, expectedPatterns: string[]): number {
   return hits / expectedPatterns.length;
 }
 
-function runCommand(command: string, args: string[], cwd: string, allowedExitCodes: number[] = [0]): ScenarioRun {
+function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  allowedExitCodes: number[] = [0],
+  timeoutMs = 30_000,
+): ScenarioRun {
   const out = spawnSync(command, args, {
     cwd,
     encoding: "utf-8",
     stdio: "pipe",
-    timeout: 30_000,
+    timeout: timeoutMs,
   });
   const stdout = (out.stdout ?? "").trim();
   const stderr = (out.stderr ?? "").trim();
@@ -311,10 +314,11 @@ function runCommand(command: string, args: string[], cwd: string, allowedExitCod
   }
 
   if (!allowedExitCodes.includes(out.status ?? -1)) {
+    const detail = stderr.length > 0 ? `: ${stderr.slice(0, 200)}` : "";
     return {
       status: "error",
       text: `${stdout}\n${stderr}`.trim(),
-      reason: `exit status ${String(out.status)}`,
+      reason: `exit status ${String(out.status)}${detail}`,
     };
   }
 
@@ -336,24 +340,12 @@ function queryTokens(query: string): string[] {
   return tokens.length > 0 ? tokens : [query];
 }
 
-function replaceTemplate(raw: string, values: Record<string, string>): string {
-  let out = raw;
-  for (const [key, value] of Object.entries(values)) {
-    out = out.split(`{${key}}`).join(value);
-  }
-  return out;
-}
-
-async function loadExternalCommandConfig(filePath?: string): Promise<ExternalCommandConfig | null> {
-  if (!filePath) return null;
-  const absolute = resolve(filePath);
-  try {
-    const content = await readFile(absolute, "utf-8");
-    return JSON.parse(content) as ExternalCommandConfig;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to load Serena config '${absolute}': ${reason}`);
-  }
+function makePrompt(scenario: Scenario, mode: McpMode): string {
+  const modeInstruction =
+    mode === "none"
+      ? "MCP mode is none. Do not use any MCP tools."
+      : `MCP mode is ${mode}. Use only ${mode} MCP tools when relevant.`;
+  return `${modeInstruction}\nTask: ${scenario.prompt}\nQuery: ${scenario.query}\nReturn concise plain text output.`;
 }
 
 function createVeilAdapter(): Adapter {
@@ -421,7 +413,7 @@ function createVeilAdapter(): Adapter {
           return { status: "ok", text: JSON.stringify(rows) };
         }
         if (scenario.kind === "gh_lookup") {
-          const rows = ghLookup(ctx.workspace, { repo: "microsoft/vscode", kind: "prs", limit: 3, timeout_ms: 10_000 });
+          const rows = await ghLookup(ctx.workspace, { repo: scenario.query, kind: "repo_context", limit: 3, timeout_ms: 10_000 });
           return { status: "ok", text: JSON.stringify(rows) };
         }
         const rows = await discoverIndex(ctx.workspace, scenario.query, {
@@ -441,17 +433,19 @@ function createVeilAdapter(): Adapter {
 function createShellAdapter(): Adapter {
   return {
     id: "shell-tools",
-    label: "Shell tool workflow (Claude/Codex baseline)",
+    label: "Shell tool workflow",
     prepare: async () => {
       return;
     },
     run: async (ctx, scenario) => {
       if (scenario.kind === "status") {
-        const first = runCommand("git", ["status", "--short"], ctx.workspace);
-        const second = runCommand("find", [".", "-type", "f"], ctx.workspace);
+        const first = runCommand("ls", ["-la"], ctx.workspace);
+        const second = runCommand("git", ["status", "--short"], ctx.workspace);
+        const third = runCommand("find", [".", "-type", "f"], ctx.workspace);
         if (first.status !== "ok") return first;
         if (second.status !== "ok") return second;
-        return { status: "ok", text: `${first.text}\n${second.text}`.trim() };
+        if (third.status !== "ok") return third;
+        return { status: "ok", text: `${first.text}\n${second.text}\n${third.text}`.trim() };
       }
 
       if (scenario.kind === "refresh") {
@@ -480,7 +474,20 @@ function createShellAdapter(): Adapter {
         return runCommand("rg", ["-n", "buildIndex", ".", "--max-count", "20"], ctx.workspace, [0, 1]);
       }
 
-      if (scenario.kind === "web_search" || scenario.kind === "fetch_url" || scenario.kind === "diagnostics") {
+      if (scenario.kind === "web_search") {
+        return runCommand(
+          "curl",
+          ["-sL", `https://duckduckgo.com/html/?q=${encodeURIComponent(scenario.query)}`],
+          ctx.workspace,
+          [0],
+        );
+      }
+
+      if (scenario.kind === "fetch_url") {
+        return runCommand("curl", ["-sL", scenario.query], ctx.workspace, [0]);
+      }
+
+      if (scenario.kind === "diagnostics") {
         return { status: "unsupported", text: "", reason: "no equivalent tool in shell baseline" };
       }
 
@@ -501,7 +508,15 @@ function createShellAdapter(): Adapter {
       }
 
       if (scenario.kind === "gh_lookup") {
-        return runCommand("gh", ["pr", "list", "--repo", "microsoft/vscode", "--limit", "3"], ctx.workspace, [0, 1]);
+        const repoRef = scenario.query;
+        const repoName = repoRef.split("/").pop() ?? "repo";
+        const target = `/tmp/${repoName}`;
+        const clone = runCommand("git", ["clone", "--depth", "1", `https://github.com/${repoRef}.git`, target], ctx.workspace, [0, 128]);
+        if (clone.status !== "ok") {
+          const fetch = runCommand("git", ["-C", target, "fetch", "--depth", "1", "origin"], ctx.workspace, [0]);
+          if (fetch.status !== "ok") return fetch;
+        }
+        return runCommand("rg", ["-n", "function|class|interface", target, "--max-count", "20"], ctx.workspace, [0, 1]);
       }
 
       const tokens = queryTokens(scenario.query);
@@ -532,169 +547,73 @@ function createShellAdapter(): Adapter {
   };
 }
 
-function extractToolText(result: unknown): string {
-  if (!result || typeof result !== "object") return "";
-  const record = result as { content?: Array<{ type?: string; text?: string }> };
-  const chunks = record.content ?? [];
-  const texts = chunks
-    .filter((chunk) => chunk.type === "text" && typeof chunk.text === "string")
-    .map((chunk) => chunk.text ?? "");
-  return texts.join("\n");
+function timeoutForScenario(scenario: Scenario): number {
+  if (scenario.kind === "gh_lookup") return 45_000;
+  if (scenario.kind === "web_search" || scenario.kind === "fetch_url") return 30_000;
+  return 15_000;
 }
 
-function createSerenaAdapter(config: ExternalCommandConfig | null): Adapter {
-  let client: Client | null = null;
-  let transport: StdioClientTransport | null = null;
+function createAgentAdapter(agent: AgentId, mode: McpMode): Adapter {
+  const id = `${agent}-${mode}`;
+  const label = `${agent} (${mode})`;
   let blockedReason: string | null = null;
 
-  const fromConfig = (kind: ScenarioKind, workspace: string, query: string): ScenarioRun | null => {
-    if (!config) return null;
-    const commandSpec = config.commands[kind];
-    if (!commandSpec || commandSpec.length === 0) {
-      return {
-        status: "unsupported",
-        text: "",
-        reason: `missing command for scenario kind '${kind}'`,
-      };
-    }
-    const rendered = commandSpec.map((entry) => replaceTemplate(entry, { workspace, query }));
-    const [command, ...args] = rendered;
-    if (!command) {
-      return {
-        status: "unsupported",
-        text: "",
-        reason: "empty command",
-      };
-    }
-    return runCommand(command, args, workspace);
-  };
-
   return {
-    id: "serena",
-    label: "Serena",
+    id,
+    label,
     prepare: async (ctx) => {
-      if (config) return;
-
-      try {
-        const probe = runCommand("uvx", ["--help"], ctx.workspace);
-        if (probe.status !== "ok") {
-          blockedReason = "uvx not available";
-          return;
-        }
-
-        client = new Client({ name: "veil-bench", version: "0.1.0" }, { capabilities: {} });
-        transport = new StdioClientTransport({
-          command: "uvx",
-          args: ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"],
-          cwd: ctx.workspace,
-          stderr: "pipe",
-        });
-        await client.connect(transport);
-        await client.callTool({ name: "activate_project", arguments: { project: ctx.workspace } });
-      } catch (error) {
-        blockedReason = `serena mcp unavailable: ${String(error)}`;
+      const probeCmd = agent;
+      const probe = runCommand(probeCmd, ["--help"], ctx.workspace, [0, 1]);
+      if (probe.status !== "ok") {
+        blockedReason = `${agent} CLI unavailable`;
       }
     },
     run: async (ctx, scenario) => {
-      if (config) {
-        const mapped = fromConfig(scenario.kind, ctx.workspace, scenario.query);
-        if (!mapped) {
-          return { status: "unsupported", text: "", reason: "no serena command config provided" };
-        }
-        return mapped;
-      }
-
       if (blockedReason) {
-        return {
-          status: "unsupported",
-          text: "",
-          reason: blockedReason,
-        };
+        return { status: "unsupported", text: "", reason: blockedReason };
       }
-      if (!client) {
-        return {
-          status: "unsupported",
-          text: "",
-          reason: "serena client not initialized",
-        };
+      const prompt = makePrompt(scenario, mode);
+      const timeoutMs = timeoutForScenario(scenario);
+
+      if (agent === "codex") {
+        const base = ["--dangerously-bypass-approvals-and-sandbox"];
+        const args = scenario.kind === "web_search" ? [...base, "--search", "exec", prompt] : [...base, "exec", prompt];
+        const run = runCommand("codex", args, ctx.workspace, [0], timeoutMs);
+        if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
+          return { status: "unsupported", text: "", reason: "codex timeout" };
+        }
+        return run;
       }
 
-      try {
-        if (scenario.kind === "status") {
-          const result = await client.callTool({ name: "get_current_config", arguments: {} });
-          return { status: "ok", text: extractToolText(result) };
+      if (agent === "claude") {
+        const args = ["-p", "--output-format", "text", "--permission-mode", "bypassPermissions", prompt];
+        const run = runCommand("claude", args, ctx.workspace, [0], timeoutMs);
+        if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
+          return { status: "unsupported", text: "", reason: "claude timeout" };
         }
-        if (scenario.kind === "refresh") {
-          return { status: "unsupported", text: "", reason: "no direct refresh equivalent in Serena adapter" };
-        }
-        if (scenario.kind === "files") {
-          const result = await client.callTool({
-            name: "find_file",
-            arguments: { file_mask: `*${scenario.query}*`, relative_path: "." },
-          });
-          return { status: "ok", text: extractToolText(result) };
-        }
-        if (scenario.kind === "symbols") {
-          const result = await client.callTool({
-            name: "find_symbol",
-            arguments: { name_path_pattern: scenario.query, substring_matching: true, relative_path: "src" },
-          });
-          return { status: "ok", text: extractToolText(result) };
-        }
-        if (scenario.kind === "search") {
-          const result = await client.callTool({
-            name: "search_for_pattern",
-            arguments: { substring_pattern: scenario.query, relative_path: ".", max_answer_chars: 20000 },
-          });
-          return { status: "ok", text: extractToolText(result) };
-        }
-
-        if (
-          scenario.kind === "lookup" ||
-          scenario.kind === "web_search" ||
-          scenario.kind === "fetch_url" ||
-          scenario.kind === "diagnostics" ||
-          scenario.kind === "git_status" ||
-          scenario.kind === "git_log" ||
-          scenario.kind === "git_diff" ||
-          scenario.kind === "git_show" ||
-          scenario.kind === "gh_lookup"
-        ) {
-          return { status: "unsupported", text: "", reason: `no Serena mapping for '${scenario.kind}'` };
-        }
-
-        const files = await client.callTool({
-          name: "find_file",
-          arguments: { file_mask: "*homebrew*", relative_path: "." },
-        });
-        const symbols = await client.callTool({
-          name: "find_symbol",
-          arguments: { name_path_pattern: "build", substring_matching: true, relative_path: "src" },
-        });
-        const code = await client.callTool({
-          name: "search_for_pattern",
-          arguments: { substring_pattern: "homebrew|pnpm|build", relative_path: ".", max_answer_chars: 20000 },
-        });
-        return {
-          status: "ok",
-          text: [extractToolText(files), extractToolText(symbols), extractToolText(code)].join("\n"),
-        };
-      } catch (error) {
-        return {
-          status: "error",
-          text: "",
-          reason: String(error),
-        };
+        return run;
       }
-    },
-    teardown: async () => {
-      if (transport) {
-        await transport.close();
+
+      const args = ["run", "--format", "default", prompt];
+      const run = runCommand("opencode", args, ctx.workspace, [0], timeoutMs);
+      if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
+        return { status: "unsupported", text: "", reason: "opencode timeout" };
       }
-      transport = null;
-      client = null;
+      return run;
     },
   };
+}
+
+function createAgentMatrixAdapters(): Adapter[] {
+  const agents: AgentId[] = ["codex", "claude", "opencode"];
+  const modes: McpMode[] = ["veil", "serena", "none"];
+  const adapters: Adapter[] = [];
+  for (const agent of agents) {
+    for (const mode of modes) {
+      adapters.push(createAgentAdapter(agent, mode));
+    }
+  }
+  return adapters;
 }
 
 async function runScenarioPhase(
@@ -725,6 +644,16 @@ async function runScenarioPhase(
   }
 
   return { status, reason, samples };
+}
+
+function scenarioIterations(scenario: Scenario, phase: Phase, fallback: number): number {
+  if (scenario.kind === "gh_lookup") {
+    return 1;
+  }
+  if (phase === "warm") {
+    return Math.min(fallback, 1);
+  }
+  return fallback;
 }
 
 function toMarkdown(report: SuiteReport): string {
@@ -764,55 +693,65 @@ async function main(): Promise<void> {
   const workspace = resolve(getArg("--workspace") ?? process.cwd());
   const coldIterations = parseIntArg("--cold", 1);
   const warmIterations = parseIntArg("--warm", 50);
-  const outputDir = resolve(getArg("--out") ?? "benchmarks/results/latest");
-  const serenaConfigPath = getArg("--serena-config");
-
-  const serenaConfig = await loadExternalCommandConfig(serenaConfigPath);
-
-  const adapters: Adapter[] = [
-    createVeilAdapter(),
-    createShellAdapter(),
-    createSerenaAdapter(serenaConfig),
-  ];
+  const maxRuntimeMs = parseIntArg("--max-runtime-ms", 600_000);
+  const rawOutputRoot = resolve(getArg("--out") ?? "benchmarks/results");
+  const outputRoot = basename(rawOutputRoot) === "latest" ? dirname(rawOutputRoot) : rawOutputRoot;
+  const runId = toRunId(new Date());
+  const outputDir = resolve(join(outputRoot, runId));
+  const adapters: Adapter[] = createAgentMatrixAdapters();
 
   const ctx: RunContext = { workspace };
+  const suiteStarted = nowMs();
 
   for (const adapter of adapters) {
     await adapter.prepare(ctx);
   }
 
-  const competitorReports: CompetitorReport[] = [];
-
+  const scenarioByAdapter = new Map<string, Record<string, ScenarioSummary>>();
   for (const adapter of adapters) {
-    const scenarios: Record<string, ScenarioSummary> = {};
+    scenarioByAdapter.set(adapter.id, {});
+  }
 
-    for (const scenario of SCENARIOS) {
-      const cold = await runScenarioPhase(adapter, ctx, scenario, "cold", coldIterations);
-      if (cold.status !== "ok") {
+  for (const scenario of SCENARIOS) {
+    for (const adapter of adapters) {
+      const scenarios = scenarioByAdapter.get(adapter.id);
+      if (!scenarios) continue;
+
+      if (nowMs() - suiteStarted > maxRuntimeMs) {
         scenarios[scenario.id] = {
-          status: cold.status,
-          reason: cold.reason,
-          cold: summarize(cold.samples),
+          status: "unsupported",
+          reason: "suite runtime budget exceeded",
+          cold: summarize([]),
           warm: summarize([]),
         };
         continue;
       }
 
-      const warm = await runScenarioPhase(adapter, ctx, scenario, "warm", warmIterations);
+      const sampleCount = scenarioIterations(scenario, "warm", warmIterations);
+      const run = await runScenarioPhase(adapter, ctx, scenario, "warm", sampleCount);
+      if (run.status !== "ok") {
+        scenarios[scenario.id] = {
+          status: run.status,
+          reason: run.reason,
+          cold: summarize([]),
+          warm: summarize([]),
+        };
+        continue;
+      }
       scenarios[scenario.id] = {
-        status: warm.status,
-        reason: warm.reason,
-        cold: summarize(cold.samples),
-        warm: summarize(warm.samples),
+        status: run.status,
+        reason: run.reason,
+        cold: summarize([]),
+        warm: summarize(run.samples),
       };
     }
-
-    competitorReports.push({
-      id: adapter.id,
-      label: adapter.label,
-      scenarios,
-    });
   }
+
+  const competitorReports: CompetitorReport[] = adapters.map((adapter) => ({
+    id: adapter.id,
+    label: adapter.label,
+    scenarios: scenarioByAdapter.get(adapter.id) ?? {},
+  }));
 
   const cpu = cpus();
   const report: SuiteReport = {
@@ -844,13 +783,19 @@ async function main(): Promise<void> {
   await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf-8");
   await writeFile(markdownPath, toMarkdown(report), "utf-8");
 
+  const repoRoot = resolve(import.meta.dir, "..");
+  const benchmarksDocPath = join(repoRoot, "BENCHMARKS.md");
+  await writeFile(benchmarksDocPath, toBenchmarksMarkdown(report, repoRoot), "utf-8");
+
   for (const adapter of adapters) {
     if (adapter.teardown) {
       await adapter.teardown();
     }
   }
 
-  process.stdout.write(`${JSON.stringify({ ok: true, json: jsonPath, markdown: markdownPath }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ ok: true, run_id: runId, max_runtime_ms: maxRuntimeMs, json: jsonPath, markdown: markdownPath, benchmarks: benchmarksDocPath }, null, 2)}\n`,
+  );
 }
 
 main().catch((error) => {

@@ -1,0 +1,9 @@
+{
+  "agents": ["codex", "claude", "opencode"],
+  "mcp_modes": ["veil", "serena", "none"],
+  "notes": [
+    "This file documents the normalized benchmark matrix contract.",
+    "Each agent/mode cell must run the same scenario prompt and query against the same workspace.",
+    "Current bench-suite defaults already follow this matrix." 
+  ]
+}

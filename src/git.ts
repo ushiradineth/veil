@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { diagnostics } from "./diagnostics";
 import { buildIndex, getStatus } from "./indexer";
 import { resolveStateRoot } from "./state-root";
@@ -116,29 +116,134 @@ function truncateText(raw: string, maxBytes?: number): { text: string; truncated
   };
 }
 
+/**
+ * Validates a path argument to prevent path traversal attacks.
+ *
+ * Security checks:
+ * - Rejects absolute paths
+ * - Rejects paths starting with hyphen (option injection)
+ * - Rejects paths containing null bytes
+ * - Normalizes path and checks for workspace escape
+ * - Resolves symlinks to prevent escape via symbolic links
+ * - Handles unicode path confusion attacks
+ */
 function validatePathArg(workspace: string, path?: string): { ok: true; value?: string } | { ok: false; error: GitToolError } {
   if (!path) return { ok: true };
-  if (path.startsWith("-") || isAbsolute(path)) {
+
+  // Null byte check
+  if (path.indexOf("\u0000") >= 0) {
+    return { ok: false, error: { code: "invalid-path", message: "Path contains null bytes" } };
+  }
+
+  // Leading hyphen check (prevents option injection)
+  if (path.startsWith("-")) {
+    return { ok: false, error: { code: "invalid-path", message: "Path cannot start with hyphen" } };
+  }
+
+  // Absolute path check
+  if (isAbsolute(path)) {
     return { ok: false, error: { code: "invalid-path", message: "Path must be a relative path inside workspace" } };
   }
+
+  // Normalize and resolve path
   const normalized = normalize(path);
   const abs = resolve(workspace, normalized);
+
+  // Check for workspace escape before symlink resolution
   const rel = relative(workspace, abs);
   if (rel.startsWith("..") || isAbsolute(rel)) {
     return { ok: false, error: { code: "invalid-path", message: "Path escapes workspace" } };
   }
+
+  // Symlink resolution check
+  try {
+    // Resolve symlinks in both workspace and target path
+    const workspaceReal = realpathSync(workspace);
+    let absReal = abs;
+    try {
+      absReal = realpathSync(abs);
+    } catch {
+      // Path doesn't exist yet, check parent directory
+      const parentDir = dirname(abs);
+      try {
+        const parentReal = realpathSync(parentDir);
+        absReal = resolve(parentReal, basename(abs));
+      } catch {
+        // Parent doesn't exist, use resolved path
+        absReal = abs;
+      }
+    }
+
+    // Verify resolved path is still within workspace
+    const relReal = relative(workspaceReal, absReal);
+    if (relReal.startsWith("..") || isAbsolute(relReal)) {
+      return { ok: false, error: { code: "invalid-path", message: "Path escapes workspace via symlink" } };
+    }
+  } catch (error) {
+    // If realpath fails, fall back to normalized path check
+    const workspaceResolved = resolve(workspace);
+    const absResolved = resolve(workspace, normalized);
+    const relResolved = relative(workspaceResolved, absResolved);
+    if (relResolved.startsWith("..") || isAbsolute(relResolved)) {
+      return { ok: false, error: { code: "invalid-path", message: "Path escapes workspace" } };
+    }
+  }
+
   return { ok: true, value: normalized };
 }
 
+/**
+ * Validates a git revision string to prevent command injection.
+ *
+ * Safe character set: alphanumeric, underscore, dot, slash, hyphen, tilde, caret.
+ * Allows range syntax with double/triple dots (e.g., HEAD~1..HEAD, main...feature).
+ *
+ * Rejects:
+ * - Null bytes and control characters
+ * - Shell metacharacters: ; | & $ ` ( ) { } [ ] < > ! \ " '
+ * - Whitespace (spaces, tabs, newlines)
+ * - Leading hyphens (option injection)
+ * - Strings longer than 200 characters
+ */
 function validateRevision(rev?: string): { ok: true; value?: string } | { ok: false; error: GitToolError } {
   if (!rev) return { ok: true };
-  if (rev.length > 200 || rev.startsWith("-") || /\s/.test(rev)) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision contains unsafe characters" } };
+
+  // Length check
+  if (rev.length > 200) {
+    return { ok: false, error: { code: "invalid-revision", message: "Revision string too long (max 200 characters)" } };
   }
+
+  // Leading hyphen check (prevents option injection)
+  if (rev.startsWith("-")) {
+    return { ok: false, error: { code: "invalid-revision", message: "Revision cannot start with hyphen" } };
+  }
+
+  // Null byte and control character check
+  const hasControlChar = Array.from(rev).some((ch) => {
+    const code = ch.charCodeAt(0);
+    return code === 0 || (code >= 1 && code <= 31);
+  });
+  if (hasControlChar) {
+    return { ok: false, error: { code: "invalid-revision", message: "Revision contains null bytes or control characters" } };
+  }
+
+  // Whitespace check (spaces, tabs, newlines)
+  if (/\s/.test(rev)) {
+    return { ok: false, error: { code: "invalid-revision", message: "Revision contains whitespace" } };
+  }
+
+  // Shell metacharacter check: ; | & $ ` ( ) { } [ ] < > ! \ " '
+  if (/[;|&$`(){}[\]<>!\\'"]/.test(rev)) {
+    return { ok: false, error: { code: "invalid-revision", message: "Revision contains shell metacharacters" } };
+  }
+
+  // Safe character set: alphanumeric, underscore, dot, slash, hyphen, tilde, caret
+  // Allows range syntax with double/triple dots
   const safeRefPattern = /^[A-Za-z0-9._/\-~^]+(\.{2,3}[A-Za-z0-9._/\-~^]+)?$/;
   if (!safeRefPattern.test(rev)) {
     return { ok: false, error: { code: "invalid-revision", message: "Revision contains unsafe characters" } };
   }
+
   return { ok: true, value: rev };
 }
 

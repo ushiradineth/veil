@@ -21,11 +21,17 @@
 
 - `src/server.ts`: MCP tool registration and request handling.
 - `src/cli.ts`: CLI mirror of MCP capabilities.
+- `src/bin.ts`: npm package entrypoint router (`server` / `cli` subcommands).
 - `src/indexer.ts`: indexing and local code retrieval core.
 - `src/web-search.ts`: no-key multi-provider web search.
 - `src/fetch-url.ts`: markdown-first URL content retrieval.
 - `src/git.ts`: git and optional GitHub (`gh`) lookups.
+- `src/state-root.ts`: state directory resolution (default `.veil`).
+- `src/diagnostics.ts`: performance diagnostics and cache counters.
+- `src/types.ts`: shared response contracts.
 - `src/test.ts`: full Bun test suite.
+- `bin/veil.mjs`: npm bin wrapper (Node entrypoint).
+- `scripts/build-package.mjs`: esbuild bundler for npm publish.
 - `benchmarks/results/`: benchmark artifacts.
 
 ## Code Style
@@ -37,20 +43,7 @@
 
 ## MCP Tool Routing Policy
 
-Use this routing policy by default so agents actually use Veil tools correctly.
-
-- Local codebase intent -> `discover` first, then `lookup`, then `files|symbols|search` if needed.
-- Web facts/news/docs discovery -> `web_search`.
-- Page content extraction from URL -> `fetch_url` (`format=markdown`).
-- Repo state/history/patches -> `git_status`, `git_log`, `git_diff`, `git_show`.
-- GitHub issues/PR/checks -> `gh_lookup`.
-- Operational telemetry -> `diagnostics`.
-
-Routing anti-patterns:
-
-- Do not start with shell `find`/`grep` for normal code lookup.
-- Do not use generic web fetch for content extraction when `fetch_url` is available.
-- Do not skip `discover` for broad codebase questions.
+See `docs/SKILL.md` for the canonical routing order and anti-patterns.
 
 ## Skill Trigger (Operational)
 

@@ -23,9 +23,14 @@
 - `src/cli.ts`: CLI mirror of MCP capabilities.
 - `src/bin.ts`: npm package entrypoint router (`server` / `cli` subcommands).
 - `src/indexer.ts`: indexing and local code retrieval core.
+- `src/indexer/build.ts`: incremental merge and record sorting helpers.
+- `src/query.ts`: lookup scoring and ranking helpers.
+- `src/cache.ts`: shared TopK heap and bounded LRU helpers.
 - `src/web-search.ts`: no-key multi-provider web search.
 - `src/fetch-url.ts`: markdown-first URL content retrieval.
 - `src/git.ts`: git and optional GitHub (`gh`) lookups.
+- `src/validation.ts`: shared validation and clamp helpers.
+- `src/errors.ts`: shared error message and timeout helpers.
 - `src/state-root.ts`: state directory resolution (default `.veil`).
 - `src/diagnostics.ts`: performance diagnostics and cache counters.
 - `src/types.ts`: shared response contracts.

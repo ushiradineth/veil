@@ -51,6 +51,7 @@ export const __internalGit = {
 };
 
 function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): RunResult {
+  const started = nowMs();
   try {
     const out = spawnSync(command, args, {
       cwd,
@@ -58,12 +59,14 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
       stdio: "pipe",
       timeout: timeoutMs,
     });
+    const elapsed = nowMs() - started;
+    const timedOut = (out.signal === "SIGTERM" && out.status === null) || elapsed > timeoutMs;
     return {
-      ok: out.status === 0 && !out.error,
+      ok: out.status === 0 && !out.error && !timedOut,
       stdout: out.stdout ?? "",
       stderr: out.stderr ?? "",
       code: out.status,
-      timedOut: out.signal === "SIGTERM" && out.status === null,
+      timedOut,
       error: out.error?.message,
       errorCode: (out.error as { code?: string } | undefined)?.code,
     };

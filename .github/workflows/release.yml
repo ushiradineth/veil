@@ -72,7 +72,7 @@ jobs:
       - name: Verify package tarball
         run: npm pack --dry-run
 
-      - name: Bump version and prepare changelog
+      - name: Bump version
         id: prep
         env:
           VERSION_BUMP: ${{ inputs.version_bump }}
@@ -82,13 +82,13 @@ jobs:
           const { execSync } = require('child_process');
 
           const pkgPath = 'package.json';
-          const changelogPath = 'CHANGELOG.md';
           const bump = process.env.VERSION_BUMP || 'patch';
 
           const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
           const current = String(pkg.version || '0.1.0');
-          const currentMatch = current.match(/^(\d+)\.(\d+)\.(\d+)$/);
-          if (!currentMatch) throw new Error(`Unsupported package version: ${current}`);
+          if (!/^\d+\.\d+\.\d+$/.test(current)) {
+            throw new Error(`Unsupported package version: ${current}`);
+          }
 
           const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0', { encoding: 'utf8' }).trim();
           if (!/^v\d+\.\d+\.\d+$/.test(latestTag)) {
@@ -101,55 +101,16 @@ jobs:
           }
 
           let [major, minor, patch] = latestVersion.split('.').map((v) => Number(v));
-          if (bump === 'major') {
-            major += 1;
-            minor = 0;
-            patch = 0;
-          } else if (bump === 'minor') {
-            minor += 1;
-            patch = 0;
-          } else if (bump === 'patch') {
-            patch += 1;
-          } else {
-            throw new Error(`Unsupported bump type: ${bump}`);
-          }
+          if (bump === 'major') { major += 1; minor = 0; patch = 0; }
+          else if (bump === 'minor') { minor += 1; patch = 0; }
+          else if (bump === 'patch') { patch += 1; }
+          else { throw new Error(`Unsupported bump type: ${bump}`); }
 
           const nextVersion = `${major}.${minor}.${patch}`;
           const nextTag = `v${nextVersion}`;
 
           pkg.version = nextVersion;
           fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-
-          const range = latestTag === 'v0.0.0' ? 'HEAD' : `${latestTag}..HEAD`;
-          const log = execSync(`git log ${range} --pretty=format:%s`, { encoding: 'utf8' })
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .filter((line) => !line.startsWith('chore(release):'));
-
-          const date = new Date().toISOString().slice(0, 10);
-          const lines = [];
-          lines.push(`## [${nextTag}] - ${date}`);
-          lines.push('');
-          if (log.length === 0) {
-            lines.push('- chore: release housekeeping');
-          } else {
-            for (const entry of log) lines.push(`- ${entry}`);
-          }
-          lines.push('');
-
-          const existing = fs.existsSync(changelogPath)
-            ? fs.readFileSync(changelogPath, 'utf8')
-            : '# Changelog\n\nAll notable changes to this project are documented in this file.\n\n## [Unreleased]\n\n';
-
-          const marker = '## [Unreleased]';
-          if (!existing.includes(marker)) {
-            throw new Error('CHANGELOG.md must contain an Unreleased section');
-          }
-
-          const injection = `${marker}\n\n${lines.join('\n')}`;
-          const updated = existing.replace(marker, injection);
-          fs.writeFileSync(changelogPath, updated);
 
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${nextVersion}\n`);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${nextTag}\n`);
@@ -173,7 +134,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json CHANGELOG.md
+          git add package.json
           git commit -m "chore(release): bump version to ${VERSION}"
           git tag "${TAG}"
           git push origin HEAD
@@ -191,38 +152,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prep.outputs.tag }}
         run: |
-          generated_notes=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body || true)
-          fallback_notes=$(node <<'NODE'
-          const fs = require('fs');
-          const tag = process.env.TAG;
-          const changelogPath = 'CHANGELOG.md';
+          notes=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body 2>/dev/null || true)
 
-          let fallback = `## Changelog\n\n- Release ${tag}`;
-          if (tag && fs.existsSync(changelogPath)) {
-            const content = fs.readFileSync(changelogPath, 'utf8');
-            const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const sectionRegex = new RegExp(`^## \\[${escapedTag}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|$)`, 'm');
-            const match = content.match(sectionRegex);
-            if (match && match[1] && match[1].trim().length > 0) {
-              fallback = `## Changelog\n\n${match[1].trim()}`;
-            }
-          }
-
-          process.stdout.write(fallback);
-          NODE
-          )
-
-          notes="${generated_notes}"
-          generated_bullets=$(printf '%s' "${notes}" | grep -E '^[[:space:]]*[-*] ' || true)
-          if [ -z "${generated_bullets}" ]; then
-            notes="${fallback_notes}"
+          if [ -z "$(printf '%s' "${notes}" | grep -E '^[[:space:]]*[-*] ' || true)" ]; then
+            latest_tag=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+            if [ -n "${latest_tag}" ]; then
+              range="${latest_tag}..${TAG}"
+            else
+              range="${TAG}"
+            fi
+            log=$(git log "${range}" --pretty=format:"- %s" | grep -v "^- chore(release):" || true)
+            if [ -z "${log}" ]; then
+              log="- Release ${TAG}"
+            fi
+            printf -v notes '## What'\''s Changed\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s' "${log}" "${GITHUB_REPOSITORY}" "${latest_tag:-v0.0.0}" "${TAG}"
           fi
 
-          if [ -z "$(printf '%s' "${notes}" | tr -d '[:space:]')" ]; then
-            notes="## Changelog\n\n- Release ${TAG}"
-          fi
-
-          printf '%s\n' "${notes}" > release-notes.md
+          npm_link="**npm**: [\`@ushiradineth/veil@${TAG#v}\`](https://www.npmjs.com/package/@ushiradineth/veil/v/${TAG#v})"
+          printf '%s\n\n%s\n' "${notes}" "${npm_link}" > release-notes.md
 
       - name: Create GitHub release
         if: inputs.dry_run == false

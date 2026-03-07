@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { isAbsolute, normalize, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { diagnostics } from "./diagnostics";
+import { buildIndex, getStatus } from "./indexer";
+import { resolveStateRoot } from "./state-root";
 import type {
   GhLookupData,
   GhLookupKind,
@@ -448,31 +450,147 @@ export function gitShow(
 
 export function ghLookup(
   workspace: string,
-  options: { repo: string; kind: GhLookupKind; query?: string; limit?: number; timeout_ms?: number; command?: string },
-): GitToolResponse<GhLookupData> {
+  options: {
+    repo: string;
+    kind: GhLookupKind;
+    query?: string;
+    limit?: number;
+    timeout_ms?: number;
+    command?: string;
+    temp_root?: string;
+    state_root?: string;
+  },
+): Promise<GitToolResponse<GhLookupData>> {
   const started = nowMs();
   const timeoutMs = Math.min(20_000, Math.max(500, options.timeout_ms ?? 12_000));
   const command = options.command ?? "gh";
   const probe = runCommand(command, ["--version"], workspace, timeoutMs);
   if (probe.errorCode === "ENOENT" || (probe.error && probe.error.includes("ENOENT"))) {
     recordDiagnostics("gh_lookup", started, false, false);
-    return fail(workspace, "gh_lookup", started, { code: "gh-unavailable", message: "gh is not available in PATH" }, true);
+    return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "gh-unavailable", message: "gh is not available in PATH" }, true));
   }
   if (!probe.ok) {
     recordDiagnostics("gh_lookup", started, false, probe.timedOut);
-    return fail(workspace, "gh_lookup", started, {
+    return Promise.resolve(fail(workspace, "gh_lookup", started, {
       code: probe.timedOut ? "timeout" : "gh-unavailable",
       message: "gh command is unavailable",
-    });
+    }));
   }
 
   const auth = runCommand(command, ["auth", "status"], workspace, timeoutMs);
   if (!auth.ok) {
     recordDiagnostics("gh_lookup", started, false, auth.timedOut);
-    return fail(workspace, "gh_lookup", started, {
+    return Promise.resolve(fail(workspace, "gh_lookup", started, {
       code: auth.timedOut ? "timeout" : "gh-unauthenticated",
       message: "gh is unauthenticated or cannot access GitHub",
-    });
+    }));
+  }
+
+  const parseRepoRef = (repoRef: string): { repo: string; owner: string; name: string; url: string } | null => {
+    const trimmed = repoRef.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      try {
+        const url = new URL(trimmed);
+        const parts = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "").split("/").filter(Boolean);
+        if (parts.length < 2) return null;
+        const owner = parts[0] ?? "";
+        const name = parts[1] ?? "";
+        if (!owner || !name) return null;
+        return { repo: `${owner}/${name}`, owner, name, url: `https://github.com/${owner}/${name}.git` };
+      } catch {
+        return null;
+      }
+    }
+    const normalizedRepo = trimmed.replace(/\.git$/, "");
+    const parts = normalizedRepo.split("/").filter(Boolean);
+    if (parts.length !== 2) return null;
+    const owner = parts[0] ?? "";
+    const name = parts[1] ?? "";
+    if (!owner || !name) return null;
+    return { repo: `${owner}/${name}`, owner, name, url: `https://github.com/${owner}/${name}.git` };
+  };
+
+  const repoRef = parseRepoRef(options.repo);
+  if (!repoRef) {
+    recordDiagnostics("gh_lookup", started, false, false);
+    return Promise.resolve(
+      fail(workspace, "gh_lookup", started, {
+        code: "command-failed",
+        message: "repo must be 'owner/repo' or a GitHub URL",
+      }),
+    );
+  }
+
+  if (options.kind === "repo_context") {
+    const gitProbe = runCommand("git", ["--version"], workspace, timeoutMs);
+    if (gitProbe.errorCode === "ENOENT" || (gitProbe.error && gitProbe.error.includes("ENOENT"))) {
+      recordDiagnostics("gh_lookup", started, false, false);
+      return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "git-unavailable", message: "git is not available in PATH" }, false));
+    }
+    if (!gitProbe.ok) {
+      recordDiagnostics("gh_lookup", started, false, gitProbe.timedOut);
+      return Promise.resolve(
+        fail(workspace, "gh_lookup", started, {
+          code: gitProbe.timedOut ? "timeout" : "command-failed",
+          message: "git command is unavailable",
+        }, false),
+      );
+    }
+
+    const tempRoot = options.temp_root && options.temp_root.trim() ? options.temp_root.trim() : "/tmp";
+    const target = join(tempRoot, basename(repoRef.name));
+    mkdirSync(tempRoot, { recursive: true });
+    const gitDir = join(target, ".git");
+    let syncOut: RunResult;
+    if (!existsSync(gitDir)) {
+      syncOut = runCommand("git", ["clone", "--depth", "1", repoRef.url, target], workspace, timeoutMs);
+    } else {
+      const remote = runCommand("git", ["-C", target, "remote", "set-url", "origin", repoRef.url], workspace, timeoutMs);
+      const fetch = runCommand("git", ["-C", target, "fetch", "--depth", "1", "origin"], workspace, timeoutMs);
+      const headRef = runCommand("git", ["-C", target, "symbolic-ref", "refs/remotes/origin/HEAD"], workspace, timeoutMs);
+      const branchRef = headRef.ok ? headRef.stdout.trim().replace(/^refs\/remotes\//, "") : "origin/main";
+      const reset = runCommand("git", ["-C", target, "reset", "--hard", branchRef], workspace, timeoutMs);
+      syncOut = (!remote.ok || !fetch.ok || !reset.ok)
+        ? { ok: false, stdout: `${remote.stdout}\n${fetch.stdout}\n${reset.stdout}`, stderr: `${remote.stderr}\n${fetch.stderr}\n${reset.stderr}`, code: 1, timedOut: remote.timedOut || fetch.timedOut || reset.timedOut }
+        : reset;
+    }
+
+    if (!syncOut.ok) {
+      recordDiagnostics("gh_lookup", started, false, syncOut.timedOut);
+      return Promise.resolve(
+        fail(workspace, "gh_lookup", started, {
+          code: syncOut.timedOut ? "timeout" : "command-failed",
+          message: `failed to sync repo ${repoRef.repo}: ${(syncOut.stderr || syncOut.error || "unknown").trim()}`,
+        }),
+      );
+    }
+
+    return buildIndex(target, "changed", { state_root: options.state_root })
+      .then(async (manifest) => {
+        const status = await getStatus(target, { state_root: options.state_root });
+        const stateRootResolved = resolveStateRoot(target, options.state_root);
+        const data: GhLookupData = {
+          repo: repoRef.repo,
+          kind: "repo_context",
+          query: options.query ?? "",
+          limit: 0,
+          text: `repo indexed at ${target}`,
+          repo_url: repoRef.url,
+          cloned_workspace: target,
+          state_root: stateRootResolved,
+          status_exists: status.exists,
+        };
+        recordDiagnostics("gh_lookup", started, true, false);
+        return finish(workspace, "gh_lookup", started, data, { truncated: false });
+      })
+      .catch((error) => {
+        recordDiagnostics("gh_lookup", started, false, false);
+        return fail(workspace, "gh_lookup", started, {
+          code: "command-failed",
+          message: `failed to index cloned repo: ${String(error)}`,
+        });
+      });
   }
 
   const limit = Math.min(50, Math.max(1, options.limit ?? 10));
@@ -481,35 +599,36 @@ export function ghLookup(
   let args: string[];
   if (options.kind === "issues") {
     subcommand = "issue";
-    args = ["search", query || "is:open", "--repo", options.repo, "--limit", String(limit)];
+    args = ["search", query || "is:open", "--repo", repoRef.repo, "--limit", String(limit)];
   } else if (options.kind === "prs") {
     subcommand = "pr";
-    args = ["list", "--repo", options.repo, "--limit", String(limit)];
+    args = ["list", "--repo", repoRef.repo, "--limit", String(limit)];
     if (query) {
       args.push("--search", query);
     }
   } else {
     subcommand = "run";
-    args = ["list", "--repo", options.repo, "--limit", String(limit)];
+    args = ["list", "--repo", repoRef.repo, "--limit", String(limit)];
   }
 
   const out = runCommand(command, [subcommand, ...args], workspace, timeoutMs);
   if (!out.ok) {
     recordDiagnostics("gh_lookup", started, false, out.timedOut);
-    return fail(workspace, "gh_lookup", started, {
+    return Promise.resolve(fail(workspace, "gh_lookup", started, {
       code: out.timedOut ? "timeout" : "command-failed",
       message: `gh lookup failed: ${(out.stderr || out.error || "unknown").trim()}`,
-    });
+    }));
   }
 
   const truncation = truncateText(out.stdout, DEFAULT_MAX_BYTES);
   const data: GhLookupData = {
-    repo: options.repo,
+    repo: repoRef.repo,
     kind: options.kind,
     query,
     limit,
     text: truncation.text,
+    repo_url: repoRef.url,
   };
   recordDiagnostics("gh_lookup", started, true, false);
-  return finish(workspace, "gh_lookup", started, data, truncation);
+  return Promise.resolve(finish(workspace, "gh_lookup", started, data, truncation));
 }

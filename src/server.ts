@@ -6,6 +6,7 @@ import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { toToon } from "./format";
+import { diagnosticsStatePath } from "./state-root";
 import { webSearch } from "./web-search";
 
 function asText(data: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
@@ -21,7 +22,7 @@ function asText(data: unknown): { content: { type: "text"; text: string }[]; str
 
 const server = new McpServer({
   name: "veil",
-  version: "0.1.0",
+  version: process.env.VEIL_VERSION ?? "0.0.0",
 });
 
 server.tool(
@@ -29,25 +30,29 @@ server.tool(
   "Return current index status and staleness reasons",
   {
     workspace: z.string().optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace }) => {
+  async ({ workspace, state_root }) => {
     const ws = workspace ?? process.cwd();
-    const status = await getStatus(ws);
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const status = await getStatus(ws, { state_root });
     return asText(status);
   },
 );
 
 server.tool(
   "refresh",
-  "Build or refresh the index in .agents/index",
+  "Build or refresh the index in .veil/index",
   {
     workspace: z.string().optional(),
     mode: z.enum(["full", "changed"]).optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, mode }) => {
+  async ({ workspace, mode, state_root }) => {
     const ws = workspace ?? process.cwd();
     const selectedMode = mode ?? "changed";
-    const manifest = await buildIndex(ws, selectedMode);
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const manifest = await buildIndex(ws, selectedMode, { state_root });
     return asText({ ok: true, mode: selectedMode, manifest });
   },
 );
@@ -59,10 +64,12 @@ server.tool(
     workspace: z.string().optional(),
     query: z.string(),
     limit: z.number().int().positive().max(200).optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, query, limit }) => {
+  async ({ workspace, query, limit, state_root }) => {
     const ws = workspace ?? process.cwd();
-    const items = await queryFiles(ws, query, limit ?? 20);
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const items = await queryFiles(ws, query, limit ?? 20, { state_root });
     return asText({ items });
   },
 );
@@ -74,10 +81,12 @@ server.tool(
     workspace: z.string().optional(),
     query: z.string(),
     limit: z.number().int().positive().max(200).optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, query, limit }) => {
+  async ({ workspace, query, limit, state_root }) => {
     const ws = workspace ?? process.cwd();
-    const items = await querySymbols(ws, query, limit ?? 20);
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const items = await querySymbols(ws, query, limit ?? 20, { state_root });
     return asText({ items });
   },
 );
@@ -93,14 +102,17 @@ server.tool(
     path_prefix: z.string().optional(),
     language: z.string().optional(),
     intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, query, limit, prefer_code, path_prefix, language, intent }) => {
+  async ({ workspace, query, limit, prefer_code, path_prefix, language, intent, state_root }) => {
     const ws = workspace ?? process.cwd();
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     const items = await queryChunks(ws, query, limit ?? 10, {
       prefer_code,
       path_prefix,
       language,
       intent,
+      state_root,
     });
     return asText({ items });
   },
@@ -119,9 +131,11 @@ server.tool(
     path_prefix: z.string().optional(),
     language: z.string().optional(),
     intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, query, files_limit, symbols_limit, search_limit, prefer_code, path_prefix, language, intent }) => {
+  async ({ workspace, query, files_limit, symbols_limit, search_limit, prefer_code, path_prefix, language, intent, state_root }) => {
     const ws = workspace ?? process.cwd();
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     const result = await lookupIndex(ws, query, {
       files_limit,
       symbols_limit,
@@ -130,6 +144,7 @@ server.tool(
       path_prefix,
       language,
       intent,
+      state_root,
     });
     return asText(result);
   },
@@ -149,6 +164,7 @@ server.tool(
     path_prefix: z.string().optional(),
     language: z.string().optional(),
     intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+    state_root: z.string().optional(),
   },
   async ({
     workspace,
@@ -161,12 +177,14 @@ server.tool(
     path_prefix,
     language,
     intent,
+    state_root,
   }) => {
     const ws = workspace ?? process.cwd();
-    let status = await getStatus(ws);
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    let status = await getStatus(ws, { state_root });
     if (shouldRefreshDiscover(status) && (refresh_if_stale ?? true)) {
-      await buildIndex(ws, "changed");
-      status = await getStatus(ws);
+      await buildIndex(ws, "changed", { state_root });
+      status = await getStatus(ws, { state_root });
     }
 
     const discovered = await discoverIndex(ws, query, {
@@ -177,6 +195,7 @@ server.tool(
       path_prefix,
       language,
       intent,
+      state_root,
     });
 
     return asText({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
@@ -285,14 +304,17 @@ server.tool(
   {
     workspace: z.string().optional(),
     repo: z.string(),
-    kind: z.enum(["issues", "prs", "checks"]),
+    kind: z.enum(["repo_context", "issues", "prs", "checks"]),
     query: z.string().optional(),
     limit: z.number().int().positive().max(50).optional(),
     timeout_ms: z.number().int().positive().max(20000).optional(),
+    temp_root: z.string().optional(),
+    state_root: z.string().optional(),
   },
-  async ({ workspace, repo, kind, query, limit, timeout_ms }) => {
+  async ({ workspace, repo, kind, query, limit, timeout_ms, temp_root, state_root }) => {
     const ws = workspace ?? process.cwd();
-    return asText(ghLookup(ws, { repo, kind, query, limit, timeout_ms }));
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    return asText(await ghLookup(ws, { repo, kind, query, limit, timeout_ms, temp_root, state_root }));
   },
 );
 

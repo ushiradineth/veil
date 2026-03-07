@@ -18,6 +18,7 @@ import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import { __internalBin } from "./bin";
+import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -840,7 +841,7 @@ describe("Phase 3: Cache behavior", () => {
     expect(gitFail.meta.ok).toBe(false);
     await rm(nonRepo, { recursive: true });
 
-    const ghMissing = ghLookup(SMALL_REPO, {
+    const ghMissing = await ghLookup(SMALL_REPO, {
       repo: "owner/repo",
       kind: "issues",
       command: "gh-definitely-missing",
@@ -850,7 +851,7 @@ describe("Phase 3: Cache behavior", () => {
     const slowGh = join(TEMP_TEST_DIR, "slow-gh.sh");
     await writeFile(slowGh, "#!/bin/sh\nsleep 2\nexit 0\n", "utf-8");
     await chmod(slowGh, 0o755);
-    const ghTimeout = ghLookup(SMALL_REPO, {
+    const ghTimeout = await ghLookup(SMALL_REPO, {
       repo: "owner/repo",
       kind: "issues",
       command: slowGh,
@@ -1154,8 +1155,8 @@ describe("Phase 3: Cache behavior", () => {
       script,
       "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo gh-2; exit 0; fi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then echo ok; exit 0; fi\nif [ \"$1\" = \"pr\" ]; then echo pr-list; exit 0; fi\nif [ \"$1\" = \"run\" ]; then echo check-list; exit 0; fi\nexit 1\n",
     );
-    const prs = ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "prs", query: "is:open", command: script });
-    const checks = ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "checks", command: script });
+    const prs = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "prs", query: "is:open", command: script });
+    const checks = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "checks", command: script });
     expect(prs.meta.ok).toBe(true);
     expect(prs.data?.text.includes("pr-list")).toBe(true);
     expect(checks.meta.ok).toBe(true);
@@ -1168,7 +1169,7 @@ describe("Phase 3: Cache behavior", () => {
       script,
       "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo gh-2; exit 0; fi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then echo ok; exit 0; fi\nexit 5\n",
     );
-    const result = ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "issues", command: script });
+    const result = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "issues", command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
   });
@@ -1227,8 +1228,8 @@ describe("Phase 3: Cache behavior", () => {
     await rm(repo, { recursive: true });
   });
 
-  test("GH lookup reports unavailable binary deterministically", () => {
-    const result = ghLookup(SMALL_REPO, {
+  test("GH lookup reports unavailable binary deterministically", async () => {
+    const result = await ghLookup(SMALL_REPO, {
       repo: "owner/repo",
       kind: "issues",
       command: "gh-does-not-exist",
@@ -1237,8 +1238,8 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.error?.code).toBe("gh-unavailable");
   });
 
-  test("GH lookup reports unauthenticated when command is present without auth", () => {
-    const result = ghLookup(SMALL_REPO, {
+  test("GH lookup reports unauthenticated when command is present without auth", async () => {
+    const result = await ghLookup(SMALL_REPO, {
       repo: "owner/repo",
       kind: "issues",
       command: "git",
@@ -1302,7 +1303,7 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(join(repo, "alpha.ts"), "export const alpha = 1\n");
     await buildIndex(repo, "full");
 
-    const manifestPath = join(repo, ".agents", "index", "manifest.json");
+    const manifestPath = join(repo, ".veil", "index", "manifest.json");
     await writeFile(manifestPath, "{this-is-not-json\n");
 
     const status = await getStatus(repo);
@@ -1317,7 +1318,7 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
     await buildIndex(repo, "full");
 
-    const filesIndexPath = join(repo, ".agents", "index", "files.ndjson");
+    const filesIndexPath = join(repo, ".veil", "index", "files.ndjson");
     await writeFile(filesIndexPath, "{broken-json-line\n");
 
     const files = await queryFiles(repo, "beta", 10);
@@ -1509,4 +1510,51 @@ describe("Profiler utilities", () => {
     expect(snap.latency.max_ms).toBeGreaterThanOrEqual(0);
   });
 
+});
+
+describe("Benchmark report generation", () => {
+  test("Run id uses UTC timestamp format", () => {
+    const runId = toRunId(new Date("2026-03-07T12:34:56.000Z"));
+    expect(runId).toBe("20260307-123456Z");
+  });
+
+  test("BENCHMARKS markdown includes newest run paths", () => {
+    const report = {
+      generated_at: "2026-03-07T12:00:00.000Z",
+      config: {
+        workspace: "/tmp/repo",
+        cold_iterations: 1,
+        warm_iterations: 1,
+        output_dir: "/tmp/repo/benchmarks/results/20260307-120000Z",
+        competitors: ["codex-none"],
+      },
+      scenarios: [
+        {
+          id: "status-bootstrap",
+          kind: "status",
+          title: "Repository status bootstrap",
+        },
+      ],
+      competitors: [
+        {
+          id: "codex-none",
+          label: "codex (none)",
+          scenarios: {
+            "status-bootstrap": {
+              status: "ok",
+              reason: null,
+              warm: {
+                p50_ms: 10,
+                p95_ms: 12,
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const md = toBenchmarksMarkdown(report as never, "/tmp/repo");
+    expect(md.includes("benchmarks/results/20260307-120000Z/results.json")).toBe(true);
+    expect(md.includes("| status-bootstrap | 10.0000 / 12.0000 |")).toBe(true);
+  });
 });

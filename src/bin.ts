@@ -50,7 +50,12 @@ export const __internalBin = {
   route,
 };
 
-if (import.meta.main) {
+// Bun uses import.meta.main, Node does not define it.
+// Support both runtimes so the esbuild bundle works on Node.
+const meta = import.meta as unknown as Record<string, unknown>;
+const isMain = typeof meta.main === "boolean" ? meta.main : true;
+
+if (isMain) {
   main().catch((error) => {
     process.stderr.write(`${String(error)}\n`);
     process.exitCode = 1;

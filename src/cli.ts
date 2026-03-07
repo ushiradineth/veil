@@ -4,6 +4,7 @@ import { profiler, diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import { diagnosticsStatePath } from "./state-root";
 import { webSearch } from "./web-search";
 
 function getArg(name: string, fallback?: string): string | undefined {
@@ -27,6 +28,11 @@ function writeOutput(data: unknown): void {
 async function main(): Promise<void> {
   const cmd = process.argv[2] ?? "status";
   const workspace = resolveWorkspace();
+  const stateRoot = getArg("--state-root");
+  if (stateRoot) {
+    process.env.VEIL_STATE_ROOT = stateRoot;
+  }
+  diagnostics.configureStatePath(diagnosticsStatePath(workspace, stateRoot));
   const enableProfiling = hasFlag("--profile");
 
   if (enableProfiling) {
@@ -42,13 +48,13 @@ async function main(): Promise<void> {
 
   if (cmd === "refresh") {
     const mode = (getArg("--mode", "changed") as BuildMode) ?? "changed";
-    const manifest = await buildIndex(workspace, mode);
+    const manifest = await buildIndex(workspace, mode, { state_root: stateRoot });
     writeOutput({ ok: true, mode, manifest });
     return;
   }
 
   if (cmd === "status") {
-    const status = await getStatus(workspace);
+    const status = await getStatus(workspace, { state_root: stateRoot });
     writeOutput(status);
     return;
   }
@@ -57,12 +63,12 @@ async function main(): Promise<void> {
     const query = getArg("--query", "") ?? "";
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
     const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
-    let status = await getStatus(workspace);
+    let status = await getStatus(workspace, { state_root: stateRoot });
     if (shouldRefreshDiscover(status) && refreshIfStale) {
-      await buildIndex(workspace, "changed");
-      status = await getStatus(workspace);
+      await buildIndex(workspace, "changed", { state_root: stateRoot });
+      status = await getStatus(workspace, { state_root: stateRoot });
     }
-    const discovered = await discoverIndex(workspace, query, { prefer_code: true, intent });
+    const discovered = await discoverIndex(workspace, query, { prefer_code: true, intent, state_root: stateRoot });
     writeOutput({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
     return;
   }
@@ -70,7 +76,7 @@ async function main(): Promise<void> {
   if (cmd === "lookup") {
     const query = getArg("--query", "") ?? "";
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
-    const result = await lookupIndex(workspace, query, { intent, prefer_code: true });
+    const result = await lookupIndex(workspace, query, { intent, prefer_code: true, state_root: stateRoot });
     writeOutput(result);
     return;
   }
@@ -166,15 +172,17 @@ async function main(): Promise<void> {
 
   if (cmd === "gh-lookup") {
     const repo = getArg("--repo", "") ?? "";
-    const kind = (getArg("--kind", "issues") ?? "issues") as "issues" | "prs" | "checks";
+    const kind = (getArg("--kind", "repo_context") ?? "repo_context") as "repo_context" | "issues" | "prs" | "checks";
     const limit = Number(getArg("--limit", "10") ?? "10");
     const timeout_ms = Number(getArg("--timeout-ms", "12000") ?? "12000");
-    const result = ghLookup(workspace, {
+    const result = await ghLookup(workspace, {
       repo,
       kind,
       query: getArg("--query"),
       limit: Number.isFinite(limit) ? limit : 10,
       timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 12000,
+      state_root: stateRoot,
+      temp_root: getArg("--temp-root"),
     });
     writeOutput(result);
     return;
@@ -185,7 +193,7 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|fetch-url|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|fetch-url|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--state-root <.veil|relative|/abs/path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n",
   );
   process.exitCode = 1;
 }

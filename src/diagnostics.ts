@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveIndexDir } from "./state-root";
 
 /**
  * Performance diagnostics and profiling infrastructure
@@ -76,7 +77,7 @@ export class PerformanceDiagnostics {
   private dirty = false;
   private lastPersistMs = 0;
   private readonly persistIntervalMs: number;
-  private readonly statePath: string;
+  private statePath: string;
   private readonly registerHook: (event: string, handler: () => void) => void;
   private readonly exitFn: (code: number) => void;
 
@@ -87,13 +88,20 @@ export class PerformanceDiagnostics {
     exitFn?: (code: number) => void;
   }) {
     this.persistIntervalMs = options?.persistIntervalMs ?? Number(process.env.VEIL_DIAGNOSTICS_PERSIST_MS ?? "1000");
-    this.statePath = options?.statePath ?? (process.env.VEIL_DIAGNOSTICS_PATH ?? join(process.cwd(), ".agents", "index", "diagnostics-state.json"));
+    this.statePath = options?.statePath ?? (process.env.VEIL_DIAGNOSTICS_PATH ?? join(resolveIndexDir(process.cwd()), "diagnostics-state.json"));
     this.registerHook = options?.registerHook ?? ((event, handler) => {
       process.on(event, handler);
     });
     this.exitFn = options?.exitFn ?? ((code) => {
       process.exit(code);
     });
+  }
+
+  configureStatePath(statePath: string): void {
+    if (statePath.trim() && statePath !== this.statePath) {
+      this.statePath = statePath;
+      this.loaded = false;
+    }
   }
 
   private installExitHooks(): void {

@@ -1,4 +1,6 @@
 import type { WebSearchDebugResult, WebSearchProvider, WebSearchProviderTrace, WebSearchResponse, WebSearchResult } from "./types";
+import { errorMessage, isAbortLike } from "./errors";
+import { clampInt, trimQuery } from "./validation";
 
 type DuckTopic = {
   Text?: string;
@@ -379,9 +381,8 @@ async function runProvider(
       warning: results.length > 0 ? null : "no-parseable-results",
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const timeoutLike =
-      signal.aborted || message === "timeout" || message.includes("AbortError") || message.toLowerCase().includes("aborted");
+    const message = errorMessage(error);
+    const timeoutLike = isAbortLike(signal.aborted || message === "timeout", message);
     return {
       provider: def.provider,
       ok: false,
@@ -644,14 +645,33 @@ function traceForPending(provider: WebSearchProvider, durationMs: number, warnin
   };
 }
 
+/**
+ * Performs a multi-provider web search with bounded latency.
+ *
+ * Security features:
+ * - Timeout bounds: minimum 100ms, maximum 20s (enforced internally)
+ * - No arbitrary URL fetching (only known search providers)
+ * - Query sanitization to prevent injection
+ * - Bounded result limits to prevent memory exhaustion
+ *
+ * @param workspace - Workspace path (unused, kept for API consistency)
+ * @param options - Search options
+ * @param options.query - Search query string (required, trimmed)
+ * @param options.limit - Maximum results (1-25, default 8)
+ * @param options.timeout_ms - Timeout in milliseconds (100-20000, default 5000)
+ * @param options.fetch_impl - Custom fetch implementation for testing
+ * @param options.debug - Enable debug output with provider traces
+ * @returns Web search response with results and metadata
+ */
 export async function webSearch(
   workspace: string,
   options: { query: string; limit?: number; timeout_ms?: number; fetch_impl?: typeof fetch; debug?: boolean },
 ): Promise<WebSearchResponse> {
   const started = nowMs();
-  const query = options.query.trim();
-  const limit = Math.min(25, Math.max(1, options.limit ?? 8));
-  const timeoutMs = Math.min(15_000, Math.max(300, options.timeout_ms ?? 5_000));
+  const query = trimQuery(options.query);
+  const limit = clampInt(options.limit, 1, 25, 8);
+  // Enforce timeout bounds: min 100ms, max 20s
+  const timeoutMs = clampInt(options.timeout_ms, 100, 20_000, 5_000);
   const debug = options.debug ?? false;
 
   if (!query) {

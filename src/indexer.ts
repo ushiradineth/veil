@@ -8,15 +8,16 @@ import type {
   ChunkRecord,
   FileRecord,
   IndexStatus,
-  LookupConfidence,
-  LookupReason,
   LookupResponse,
   Manifest,
   QueryIntent,
   ResolvedQueryIntent,
   SymbolRecord,
 } from "./types";
+import { TopKHeap, getLru, setLru } from "./cache";
 import { diagnostics } from "./diagnostics";
+import { mergeIncrementalRecords, sortIndexedRecords } from "./indexer/build";
+import { rankLookupResults, scoreChunk, scoreFile, scoreSymbol } from "./query";
 import { relativeStateRoot, resolveIndexDir } from "./state-root";
 
 const SCHEMA_VERSION = "1";
@@ -25,80 +26,6 @@ const MAX_FILE_SIZE = 512 * 1024;
 const CHUNK_SIZE_LINES = 120;
 const CHUNK_OVERLAP_LINES = 20;
 const BATCH_SIZE = 20;
-
-/**
- * Min-heap based top-K algorithm for efficient scoring
- * Maintains K highest-scoring items in O(n log k) time vs O(n²) for array insertion
- */
-class TopKHeap<T> {
-  private heap: { item: T; score: number }[] = [];
-  private readonly k: number;
-
-  constructor(k: number) {
-    this.k = k;
-  }
-
-  private parent(i: number): number {
-    return Math.floor((i - 1) / 2);
-  }
-
-  private left(i: number): number {
-    return 2 * i + 1;
-  }
-
-  private right(i: number): number {
-    return 2 * i + 2;
-  }
-
-  private swap(i: number, j: number): void {
-    const temp = this.heap[i]!;
-    this.heap[i] = this.heap[j]!;
-    this.heap[j] = temp;
-  }
-
-  private heapifyUp(i: number): void {
-    while (i > 0) {
-      const p = this.parent(i);
-      if (this.heap[i]!.score >= this.heap[p]!.score) break;
-      this.swap(i, p);
-      i = p;
-    }
-  }
-
-  private heapifyDown(i: number): void {
-    while (true) {
-      let smallest = i;
-      const l = this.left(i);
-      const r = this.right(i);
-
-      if (l < this.heap.length && this.heap[l]!.score < this.heap[smallest]!.score) {
-        smallest = l;
-      }
-      if (r < this.heap.length && this.heap[r]!.score < this.heap[smallest]!.score) {
-        smallest = r;
-      }
-
-      if (smallest === i) break;
-      this.swap(i, smallest);
-      i = smallest;
-    }
-  }
-
-  insert(item: T, score: number): void {
-    if (this.heap.length < this.k) {
-      this.heap.push({ item, score });
-      this.heapifyUp(this.heap.length - 1);
-    } else if (score > this.heap[0]!.score) {
-      this.heap[0] = { item, score };
-      this.heapifyDown(0);
-    }
-  }
-
-  toSortedArray(): T[] {
-    const sorted = [...this.heap].sort((a, b) => b.score - a.score);
-    return sorted.map((entry) => entry.item);
-  }
-}
 
 type IndexCacheEntry = {
   filesMtimeMs: number | null;
@@ -153,6 +80,7 @@ const STATUS_CACHE = new Map<string, { value: IndexStatus; ts: number }>();
 const STATUS_CACHE_TTL_MS = 1500;
 const MAX_INDEX_CACHE_SIZE = 32;
 const MAX_STATUS_CACHE_SIZE = 64;
+const MAX_QUERY_CACHE_SIZE = 100; // LRU limit for per-index query caches
 const STOP_TOKENS = new Set([
   "the",
   "and",
@@ -903,22 +831,17 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
       const prevSymbols = await readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson", options.state_root);
       const prevChunks = await readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson", options.state_root);
 
-      const keptFiles = prevFiles.filter((f) => !changedSet.has(f.path));
-      const keptSymbols = prevSymbols.filter((s) => !changedSet.has(s.path));
-      const keptChunks = prevChunks.filter((c) => !changedSet.has(c.path));
-
       const changedPaths = [...changedSet];
       const recomputed = await computeForPaths(workspace, changedPaths, options.state_root);
 
-      files = [...keptFiles, ...recomputed.files];
-      symbols = [...keptSymbols, ...recomputed.symbols];
-      chunks = [...keptChunks, ...recomputed.chunks];
+      const merged = mergeIncrementalRecords(prevFiles, prevSymbols, prevChunks, changedSet, recomputed);
+      files = merged.files;
+      symbols = merged.symbols;
+      chunks = merged.chunks;
     }
   }
 
-  files.sort((a, b) => a.path.localeCompare(b.path));
-  symbols.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path)));
-  chunks.sort((a, b) => a.id.localeCompare(b.id));
+  sortIndexedRecords({ files, symbols, chunks });
 
   await writeFile(getIndexPath(workspace, "files.ndjson", options.state_root), toNdjson(files), "utf-8");
   await writeFile(getIndexPath(workspace, "symbols.ndjson", options.state_root), toNdjson(symbols), "utf-8");
@@ -961,7 +884,7 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
 
 function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): FileRecord[] {
   const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
-  const cached = cache.queryFilesCache.get(key);
+  const cached = getLru(cache.queryFilesCache, key);
   if (cached) {
     diagnostics.recordCacheHit();
     return cached;
@@ -984,13 +907,13 @@ function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit:
   }
 
   const result = heap.toSortedArray().map((index) => cache.files[index]!);
-  cache.queryFilesCache.set(key, result);
+  setLru(cache.queryFilesCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
 function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): SymbolRecord[] {
   const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
-  const cached = cache.querySymbolsCache.get(key);
+  const cached = getLru(cache.querySymbolsCache, key);
   if (cached) {
     diagnostics.recordCacheHit();
     return cached;
@@ -1024,7 +947,7 @@ function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limi
   }
 
   const result = heap.toSortedArray().map((index) => cache.symbols[index]!);
-  cache.querySymbolsCache.set(key, result);
+  setLru(cache.querySymbolsCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
@@ -1037,7 +960,7 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     options.path_prefix ?? "",
     options.language ?? "",
   ].join("\u0000");
-  const cached = cache.queryChunksCache.get(key);
+  const cached = getLru(cache.queryChunksCache, key);
   if (cached) {
     diagnostics.recordCacheHit();
     return cached;
@@ -1095,7 +1018,7 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
   }
 
   const result = heap.toSortedArray().map((index) => cache.chunks[index]!);
-  cache.queryChunksCache.set(key, result);
+  setLru(cache.queryChunksCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
@@ -1166,70 +1089,6 @@ export async function discoverIndex(
   return { intent: parsed.intent, files, symbols, chunks };
 }
 
-function toConfidence(score: number): LookupConfidence {
-  if (score >= 8) return "high";
-  if (score >= 4) return "medium";
-  return "low";
-}
-
-function scoreFile(path: string, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
-  const pathLower = normalizeText(path);
-  let score = pathLower.includes(parsed.normalized) ? 8 : 2;
-  const reasons: LookupReason[] = [];
-  if (pathLower.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-path-match", detail: "Path contains the full normalized query" });
-  }
-  for (const token of parsed.tokens) {
-    if (pathLower.includes(token)) {
-      score += 1.5;
-      reasons.push({ label: "token-path-match", detail: `Path contains token '${token}'` });
-    }
-  }
-  return { score, reasons };
-}
-
-function scoreSymbol(symbol: SymbolRecord, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
-  const nameLower = normalizeText(symbol.name);
-  const pathLower = normalizeText(symbol.path);
-  let score = nameLower.includes(parsed.normalized) ? 9 : 3;
-  const reasons: LookupReason[] = [];
-  if (nameLower.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-symbol-match", detail: "Symbol name contains the full query" });
-  }
-  for (const token of parsed.tokens) {
-    if (nameLower.includes(token)) {
-      score += 2;
-      reasons.push({ label: "token-symbol-match", detail: `Symbol name contains token '${token}'` });
-    }
-    if (pathLower.includes(token)) {
-      score += 0.8;
-      reasons.push({ label: "token-path-context", detail: `Symbol path contains token '${token}'` });
-    }
-  }
-  return { score, reasons };
-}
-
-function scoreChunk(chunk: ChunkRecord, parsed: ParsedQuery): { score: number; reasons: LookupReason[] } {
-  const hay = normalizeText(`${chunk.path}\n${chunk.content}`);
-  const pathLower = normalizeText(chunk.path);
-  let score = hay.includes(parsed.normalized) ? 7 : 2;
-  const reasons: LookupReason[] = [];
-  if (hay.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-content-match", detail: "Chunk content contains the full query" });
-  }
-  for (const token of parsed.tokens) {
-    if (hay.includes(token)) {
-      score += 1.3;
-      reasons.push({ label: "token-content-match", detail: `Chunk content contains token '${token}'` });
-    }
-    if (pathLower.includes(token)) {
-      score += 1;
-      reasons.push({ label: "token-path-match", detail: `Chunk path contains token '${token}'` });
-    }
-  }
-  return { score, reasons };
-}
-
 export const __internal = {
   TopKHeap,
   listFilesFallback,
@@ -1237,25 +1096,6 @@ export const __internal = {
   scoreSymbol,
   scoreChunk,
 };
-
-function ensureLookupReasons(reasons: LookupReason[], label: string, detail: string): LookupReason[] {
-  if (reasons.length > 0) return reasons;
-  return [{ label, detail }];
-}
-
-function rankLookupResults<T>(
-  items: T[],
-  scorer: (item: T) => { score: number; reasons: LookupReason[] },
-  fallbackReason: { label: string; detail: string },
-): { item: T; score: number; confidence: LookupConfidence; reasons: LookupReason[] }[] {
-  return items
-    .map((item) => {
-      const scored = scorer(item);
-      const reasons = ensureLookupReasons(scored.reasons, fallbackReason.label, fallbackReason.detail);
-      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons };
-    })
-    .sort((a, b) => b.score - a.score);
-}
 
 export async function lookupIndex(
   workspace: string,

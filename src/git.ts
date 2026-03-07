@@ -51,21 +51,44 @@ export const __internalGit = {
 };
 
 function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): RunResult {
-  const out = spawnSync(command, args, {
-    cwd,
-    encoding: "utf-8",
-    stdio: "pipe",
-    timeout: timeoutMs,
-  });
-  return {
-    ok: out.status === 0 && !out.error,
-    stdout: out.stdout ?? "",
-    stderr: out.stderr ?? "",
-    code: out.status,
-    timedOut: out.signal === "SIGTERM" && out.status === null,
-    error: out.error?.message,
-    errorCode: (out.error as { code?: string } | undefined)?.code,
-  };
+  try {
+    const out = spawnSync(command, args, {
+      cwd,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: timeoutMs,
+    });
+    return {
+      ok: out.status === 0 && !out.error,
+      stdout: out.stdout ?? "",
+      stderr: out.stderr ?? "",
+      code: out.status,
+      timedOut: out.signal === "SIGTERM" && out.status === null,
+      error: out.error?.message,
+      errorCode: (out.error as { code?: string } | undefined)?.code,
+    };
+  } catch (error) {
+    const value = error as { message?: string; code?: string };
+    return {
+      ok: false,
+      stdout: "",
+      stderr: "",
+      code: null,
+      timedOut: false,
+      error: value.message ?? String(error),
+      errorCode: value.code,
+    };
+  }
+}
+
+function isMissingBinary(result: RunResult): boolean {
+  if (result.errorCode === "ENOENT") return true;
+  if (!result.error) return false;
+  return (
+    result.error.includes("ENOENT") ||
+    result.error.includes("Executable not found in $PATH") ||
+    result.error.includes("No such file or directory")
+  );
 }
 
 function responseMeta(workspace: string, tool: GitToolName, started: number, truncated: boolean, warnings: string[]) {
@@ -249,7 +272,7 @@ function validateRevision(rev?: string): { ok: true; value?: string } | { ok: fa
 
 function ensureGitRepo(workspace: string, options: RunnerOptions): { ok: true } | { ok: false; error: GitToolError; gitAvailable: boolean } {
   const probe = runCommand(options.command ?? "git", ["-C", workspace, "rev-parse", "--is-inside-work-tree"], workspace, options.timeoutMs);
-  if (probe.errorCode === "ENOENT" || (probe.error && probe.error.includes("ENOENT"))) {
+  if (isMissingBinary(probe)) {
     return { ok: false, error: { code: "git-unavailable", message: "git is not available in PATH" }, gitAvailable: false };
   }
   if (!probe.ok) {
@@ -570,7 +593,7 @@ export function ghLookup(
   const timeoutMs = Math.min(20_000, Math.max(500, options.timeout_ms ?? 12_000));
   const command = options.command ?? "gh";
   const probe = runCommand(command, ["--version"], workspace, timeoutMs);
-  if (probe.errorCode === "ENOENT" || (probe.error && probe.error.includes("ENOENT"))) {
+  if (isMissingBinary(probe)) {
     recordDiagnostics("gh_lookup", started, false, false);
     return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "gh-unavailable", message: "gh is not available in PATH" }, true));
   }
@@ -629,7 +652,7 @@ export function ghLookup(
 
   if (options.kind === "repo_context") {
     const gitProbe = runCommand("git", ["--version"], workspace, timeoutMs);
-    if (gitProbe.errorCode === "ENOENT" || (gitProbe.error && gitProbe.error.includes("ENOENT"))) {
+    if (isMissingBinary(gitProbe)) {
       recordDiagnostics("gh_lookup", started, false, false);
       return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "git-unavailable", message: "git is not available in PATH" }, false));
     }

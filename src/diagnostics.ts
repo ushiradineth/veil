@@ -257,6 +257,9 @@ export class PerformanceDiagnostics {
 
   updateCacheSizes(indexSize: number, statusSize: number): void {
     this.ensureLoaded();
+    if (this.indexCacheSize === indexSize && this.statusCacheSize === statusSize) {
+      return;
+    }
     this.indexCacheSize = indexSize;
     this.statusCacheSize = statusSize;
     this.schedulePersist();

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,12 @@ import {
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
+import {
+  diagnosticsStatePath,
+  resolveIndexDir,
+  resolveStateRoot,
+  relativeStateRoot,
+} from "./state-root";
 import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -669,6 +675,47 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("timeout");
     expect(result.data).toBeNull();
+  });
+
+  test("Web search returns results with pending-provider timeout traces", async () => {
+    const mockFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return Promise.resolve(
+          new Response('<a class="result__a" href="https://example.com/fast">Fast Result</a>', {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+        );
+      }
+      return new Promise<Response>((_, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (!signal) return;
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("AbortError"));
+          },
+          { once: true },
+        );
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "partial timeout",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 200,
+      debug: true,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data).not.toBeNull();
+    expect(result.data?.results.some((row) => row.url.includes("example.com/fast"))).toBe(true);
+    expect(
+      result.data?.debug?.provider_trace.some(
+        (trace) => trace.provider === "google" && trace.warning === "timeout",
+      ),
+    ).toBe(true);
   });
 
   test("Web search rejects empty query", async () => {
@@ -1507,6 +1554,72 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.error?.code).toBe("command-failed");
   });
 
+  test("GH lookup rejects invalid repo reference", async () => {
+    const script = join(TEMP_TEST_DIR, "mock-gh-invalid-repo.sh");
+    await writeExecutableScript(
+      script,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nexit 1\n',
+    );
+    const result = await ghLookup(SMALL_REPO, {
+      repo: "not-a-repo-ref",
+      kind: "issues",
+      command: script,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("command-failed");
+    expect(result.error?.message.includes("owner/repo")).toBe(true);
+  });
+
+  test("GH repo_context returns command-failed when git sync fails", async () => {
+    const script = join(TEMP_TEST_DIR, "mock-gh-repo-context-auth.sh");
+    await writeExecutableScript(
+      script,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nexit 1\n',
+    );
+    const tempRoot = join(TEMP_TEST_DIR, "gh-repo-context-fail");
+    const existingRepo = join(tempRoot, "repo");
+    await mkdir(existingRepo, { recursive: true });
+    git(existingRepo, ["init"]);
+    await writeFile(join(existingRepo, "tracked.ts"), "export const tracked = true\n");
+    git(existingRepo, ["add", "."]);
+    git(existingRepo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    const result = await ghLookup(SMALL_REPO, {
+      repo: "owner/repo",
+      kind: "repo_context",
+      command: script,
+      temp_root: tempRoot,
+      timeout_ms: 500,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("command-failed");
+  });
+
+  test("GH lookup accepts GitHub URL repository references", async () => {
+    const script = join(TEMP_TEST_DIR, "mock-gh-url-repo.sh");
+    await writeExecutableScript(
+      script,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nif [ "$1" = "issue" ] && [ "$2" = "search" ]; then echo issue-list; exit 0; fi\nexit 1\n',
+    );
+    const result = await ghLookup(SMALL_REPO, {
+      repo: "https://github.com/owner/repo",
+      kind: "issues",
+      command: script,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.repo).toBe("owner/repo");
+    expect(result.data?.repo_url).toBe("https://github.com/owner/repo.git");
+    expect(result.data?.text.includes("issue-list")).toBe(true);
+  });
+
   test("Git show returns commit metadata", async () => {
     const repo = join(TEMP_TEST_DIR, "git-show-repo");
     await mkdir(repo, { recursive: true });
@@ -1747,6 +1860,46 @@ describe("Phase 3: Cache behavior", () => {
       threw = true;
     }
     expect(threw).toBe(true);
+  });
+
+  test("Git internals runCommand returns error data on invalid cwd", () => {
+    const result = __internalGit.runCommand(
+      "git",
+      ["status"],
+      "/definitely/missing/cwd-for-run-command",
+      200,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+  });
+
+  test("Git internals validatePathArg blocks symlink traversal", async () => {
+    const workspace = join(TEMP_TEST_DIR, "git-symlink-path-workspace");
+    const outside = await mkdtemp(join(tmpdir(), "veil-outside-path-"));
+    await mkdir(workspace, { recursive: true });
+    const link = join(workspace, "ext");
+    await symlink(outside, link);
+
+    try {
+      const result = __internalGit.validatePathArg(workspace, "ext/escape.txt");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("invalid-path");
+      }
+    } finally {
+      await rm(link, { force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("Git internals validatePathArg tolerates unresolved workspace", () => {
+    const result = __internalGit.validatePathArg("/definitely/missing/workspace", "safe/path.ts");
+    expect(result.ok).toBe(true);
+  });
+
+  test("Git internals validateRevision accepts safe ranges", () => {
+    const accepted = __internalGit.validateRevision("HEAD~1..HEAD");
+    expect(accepted.ok).toBe(true);
   });
 });
 
@@ -2309,6 +2462,130 @@ describe("Profiler utilities", () => {
     expect(text.includes("veil cli")).toBe(true);
   });
 
+  test("Bin default loader imports module specifier", async () => {
+    const mod = await __internalBin.defaultLoad("./bench-report");
+    expect(typeof mod).toBe("object");
+  });
+
+  test("Bin main usage path sets exitCode", async () => {
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.argv = ["bun", "src/bin.ts"];
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      process.exitCode = 0;
+      await __internalBin.main();
+    } finally {
+      process.argv = originalArgv;
+      process.stderr.write = originalWrite;
+      process.exitCode = originalExitCode;
+    }
+
+    expect(writes.join(" ")).toContain("Usage: veil");
+  });
+
+  test("Bin main server path loads server module", async () => {
+    const originalArgv = process.argv;
+    const loaded: string[] = [];
+    process.argv = ["bun", "src/bin.ts", "server"];
+
+    try {
+      await __internalBin.main((specifier: string) => {
+        loaded.push(specifier);
+        return Promise.resolve({});
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(loaded).toEqual(["./server"]);
+  });
+
+  test("Bin main cli path rewrites argv and loads cli module", async () => {
+    const originalArgv = process.argv;
+    const loaded: string[] = [];
+    process.argv = ["bun", "src/bin.ts", "cli", "status"];
+
+    try {
+      await __internalBin.main((specifier: string) => {
+        loaded.push(specifier);
+        return Promise.resolve({});
+      });
+      expect(process.argv).toEqual(["bun", "src/bin.ts", "status"]);
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(loaded).toEqual(["./cli"]);
+  });
+
+  test("Bin runMain catches thrown errors", async () => {
+    const originalExitCode = process.exitCode;
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      process.exitCode = 0;
+      await __internalBin.runMain(() => Promise.reject(new Error("boom")));
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.stderr.write = originalWrite;
+      process.exitCode = originalExitCode;
+    }
+
+    expect(writes.join(" ")).toContain("boom");
+  });
+
+  test("Bin runMain uses default runner", async () => {
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.argv = ["bun", "src/bin.ts"];
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    try {
+      process.exitCode = 0;
+      await __internalBin.runMain();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.argv = originalArgv;
+      process.exitCode = originalExitCode;
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  test("State root helpers handle absolute and relative overrides", () => {
+    const workspace = join(TEMP_TEST_DIR, "state-root-workspace");
+    const absRoot = "/tmp/veil-state-root";
+    const defaultRoot = resolveStateRoot(workspace);
+    expect(defaultRoot.endsWith("/.veil") || defaultRoot.endsWith("\\.veil")).toBe(true);
+    expect(resolveStateRoot(workspace, "   ")).toBe(join(workspace, ".veil"));
+    expect(resolveStateRoot(workspace, " custom-state ")).toBe(join(workspace, "custom-state"));
+    expect(resolveStateRoot(workspace, absRoot)).toBe(absRoot);
+    expect(resolveIndexDir(workspace, "custom-state")).toBe(
+      join(workspace, "custom-state", "index"),
+    );
+    expect(diagnosticsStatePath(workspace, "custom-state")).toBe(
+      join(workspace, "custom-state", "index", "diagnostics-state.json"),
+    );
+  });
+
+  test("State root relative helper returns null for outside workspace", () => {
+    const workspace = join(TEMP_TEST_DIR, "state-root-relative-workspace");
+    expect(relativeStateRoot(workspace, "nested/.veil")).toBe("nested/.veil");
+    expect(relativeStateRoot(workspace, "/tmp/veil-state")).toBeNull();
+  });
+
   test("Profiler reports no data when empty", () => {
     profiler.reset();
     expect(profiler.report()).toBe("No profiling data available");
@@ -2394,6 +2671,38 @@ describe("Profiler utilities", () => {
     d.recordQuery(1);
     const snap = d.getDiagnostics();
     expect(snap.latency.max_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  test("Diagnostics default hooks and configureStatePath paths execute", () => {
+    const originalOn = process.on.bind(process);
+    const originalExit = process.exit.bind(process);
+    const hooks = new Map<string, () => void>();
+    const exitCodes: number[] = [];
+
+    (process.on as unknown as (event: string, handler: () => void) => void) = (event, handler) => {
+      hooks.set(event, handler);
+      return;
+    };
+    (process.exit as unknown as (code?: number) => never) = (code?: number) => {
+      exitCodes.push(code ?? -1);
+      throw new Error("exit-intercept");
+    };
+
+    try {
+      const d = new PerformanceDiagnostics();
+      d.configureStatePath(join(TEMP_TEST_DIR, "diag-reconfigured-state.json"));
+      d.recordCacheMiss();
+      expect(hooks.has("SIGINT")).toBe(true);
+      try {
+        hooks.get("SIGINT")?.();
+      } catch {
+        // expected from intercepted process.exit
+      }
+      expect(exitCodes.includes(130)).toBe(true);
+    } finally {
+      process.on = originalOn;
+      process.exit = originalExit;
+    }
   });
 });
 

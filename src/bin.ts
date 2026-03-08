@@ -24,17 +24,21 @@ function route(argv: string[]): BinRoute {
   return { type: "usage" };
 }
 
-async function main(): Promise<void> {
+function defaultLoad(specifier: string): Promise<unknown> {
+  return import(specifier);
+}
+
+async function main(load: (specifier: string) => Promise<unknown> = defaultLoad): Promise<void> {
   const selected = route(process.argv);
 
   if (selected.type === "server") {
-    await import("./server");
+    await load("./server");
     return;
   }
 
   if (selected.type === "cli") {
     process.argv = selected.argv;
-    await import("./cli");
+    await load("./cli");
     return;
   }
 
@@ -42,9 +46,21 @@ async function main(): Promise<void> {
   process.exitCode = 1;
 }
 
+async function runMain(runner: () => Promise<void> = main): Promise<void> {
+  try {
+    await runner();
+  } catch (error: unknown) {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  }
+}
+
 export const __internalBin = {
   usage,
   route,
+  defaultLoad,
+  main,
+  runMain,
 };
 
 // Bun uses import.meta.main, Node does not define it.
@@ -53,8 +69,5 @@ const meta = import.meta as unknown as Record<string, unknown>;
 const isMain = typeof meta.main === "boolean" ? meta.main : true;
 
 if (isMain) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`${String(error)}\n`);
-    process.exitCode = 1;
-  });
+  void runMain();
 }

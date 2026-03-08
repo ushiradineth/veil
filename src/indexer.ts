@@ -34,8 +34,10 @@ type IndexCacheEntry = {
   chunksMtimeMs: number | null;
   files: FileRecord[];
   filesLower: string[];
+  filesTopLevelLower: string[];
   symbols: SymbolRecord[];
   symbolsLower: string[];
+  symbolsPathLower: string[];
   symbolTokenToIndexes: Map<string, number[]>;
   chunks: ChunkRecord[];
   chunksSearch: string[];
@@ -511,6 +513,8 @@ function buildCacheEntry(
     return cached;
   };
 
+  const filesLower = files.map((f) => normalizePath(f.path));
+  const filesTopLevelLower = files.map((f) => normalizeText(getTopLevel(f.path)));
   const chunksPathLower = chunks.map((c) => normalizePath(c.path));
   const chunksTopLevelLower = chunks.map((c) => normalizeText(getTopLevel(c.path)));
   const chunksBasenameLower = chunks.map((c) => normalizeText(getBasename(c.path)));
@@ -520,15 +524,18 @@ function buildCacheEntry(
     docsPathBias(pathLower, chunksBasenameLower[i] ?? ""),
   );
   const symbolsLower = symbols.map((s) => normalizeText(s.name));
+  const symbolsPathLower = symbols.map((s) => normalizePath(s.path));
 
   return {
     filesMtimeMs: mtimes.files,
     symbolsMtimeMs: mtimes.symbols,
     chunksMtimeMs: mtimes.chunks,
     files,
-    filesLower: files.map((f) => normalizePath(f.path)),
+    filesLower,
+    filesTopLevelLower,
     symbols,
     symbolsLower,
+    symbolsPathLower,
     symbolTokenToIndexes: buildSymbolTokenIndex(symbolsLower),
     chunks,
     chunksSearch,
@@ -1017,7 +1024,7 @@ function queryFilesFromCache(
     for (const token of parsed.tokens) {
       if (pathLower.includes(token)) score += token.includes("/") ? 3 : 1.5;
     }
-    const topDir = normalizeText(topLevel(pathLower));
+    const topDir = cache.filesTopLevelLower[i] ?? "";
     if (parsed.intent === "code" && CODE_TOP_LEVEL_HINTS.has(topDir)) score += 0.6;
     if (parsed.intent === "docs" && (pathLower.endsWith(".md") || pathLower.includes("/docs/")))
       score += 1.5;
@@ -1054,9 +1061,8 @@ function querySymbolsFromCache(
   const heap = new TopKHeap<number>(limit);
 
   for (const i of candidateIndexes) {
-    const symbol = cache.symbols[i];
     const nameLower = cache.symbolsLower[i] ?? "";
-    const pathLower = normalizeText(symbol.path);
+    const pathLower = cache.symbolsPathLower[i] ?? "";
     let score = nameLower.includes(parsed.normalized) ? 7 : 0;
     for (const token of parsed.tokens) {
       if (nameLower.includes(token)) score += 2;
@@ -1104,11 +1110,6 @@ function queryChunksFromCache(
       tokenScoreByIndex.set(idx, (tokenScoreByIndex.get(idx) ?? 0) + 1.5);
     }
   }
-  const candidateIndexes =
-    tokenScoreByIndex.size > 0
-      ? [...tokenScoreByIndex.keys()]
-      : cache.chunks.map((_, index) => index);
-
   const topLevelHints = new Set<string>();
   for (const token of parsed.tokens) {
     if (CODE_TOP_LEVEL_HINTS.has(token)) topLevelHints.add(token);
@@ -1120,12 +1121,12 @@ function queryChunksFromCache(
 
   const heap = new TopKHeap<number>(limit);
 
-  for (const i of candidateIndexes) {
+  const scoreChunkIndex = (i: number, baseScore: number): void => {
     const pathLower = cache.chunksPathLower[i] ?? "";
-    if (pathPrefix && !pathLower.startsWith(pathPrefix)) continue;
-    if (!matchesLanguage(pathLower, languageFilter)) continue;
+    if (pathPrefix && !pathLower.startsWith(pathPrefix)) return;
+    if (!matchesLanguage(pathLower, languageFilter)) return;
 
-    let score = tokenScoreByIndex.get(i) ?? 0;
+    let score = baseScore;
     const hay = cache.chunksSearch[i] ?? "";
     if (hay.includes(parsed.normalized)) score += 6;
     if (pathLower.includes(parsed.normalized)) score += 3;
@@ -1141,6 +1142,16 @@ function queryChunksFromCache(
     if (parsed.intent === "code" && pathLower.endsWith(".md")) score -= 3;
 
     if (score >= 2) heap.insert(i, score);
+  };
+
+  if (tokenScoreByIndex.size > 0) {
+    for (const [i, baseScore] of tokenScoreByIndex) {
+      scoreChunkIndex(i, baseScore);
+    }
+  } else {
+    for (let i = 0; i < cache.chunks.length; i++) {
+      scoreChunkIndex(i, 0);
+    }
   }
 
   const result = heap.toSortedArray().map((index) => cache.chunks[index]);

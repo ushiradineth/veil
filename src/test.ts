@@ -2074,6 +2074,16 @@ describe("Phase 5: TopKHeap correctness verification", () => {
     expect(["a", "b", "c", "d"].filter((x) => result.includes(x)).length).toBe(3);
   });
 
+  test("TopKHeap keeps earliest items for equal scores", () => {
+    const heap = new __internal.TopKHeap<string>(3);
+    heap.insert("a", 5);
+    heap.insert("b", 5);
+    heap.insert("c", 5);
+    heap.insert("d", 5);
+    heap.insert("e", 5);
+    expect(heap.toSortedArray()).toEqual(["a", "b", "c"]);
+  });
+
   test("TopKHeap maintains descending order after replacements", () => {
     const heap = new __internal.TopKHeap<string>(3);
     heap.insert("a", 1);
@@ -2162,6 +2172,34 @@ describe("Phase 6: Query cache optimization", () => {
     // Misses should not increase on second query
     expect(misses2).toBe(misses1);
     expect(files1.length).toBe(files2.length);
+  });
+
+  test("Query cache evicts least recently used entries", async () => {
+    diagnostics.reset();
+    await queryFiles(SMALL_REPO, "hello", 10);
+    const missesBefore = diagnostics.getDiagnostics().cache.query_cache_misses;
+
+    for (let i = 0; i < 120; i++) {
+      await queryFiles(SMALL_REPO, `lru-evict-${String(i)}`, 10);
+    }
+
+    await queryFiles(SMALL_REPO, "hello", 10);
+    const missesAfter = diagnostics.getDiagnostics().cache.query_cache_misses;
+    expect(missesAfter).toBeGreaterThan(missesBefore);
+  });
+
+  test("Symbol query keeps relevant hit when one token matches", async () => {
+    const symbols = await querySymbols(SMALL_REPO, "add nonexistenttoken", 10);
+    expect(symbols.some((symbol) => symbol.name === "add")).toBe(true);
+  });
+
+  test("Query helpers return empty lists when limit is zero", async () => {
+    const files = await queryFiles(SMALL_REPO, "hello", 0);
+    const symbols = await querySymbols(SMALL_REPO, "add", 0);
+    const chunks = await queryChunks(SMALL_REPO, "hello", 0);
+    expect(files).toEqual([]);
+    expect(symbols).toEqual([]);
+    expect(chunks).toEqual([]);
   });
 });
 

@@ -1,6 +1,7 @@
 export class TopKHeap<T> {
-  private heap: { item: T; score: number }[] = [];
+  private heap: { item: T; score: number; seq: number }[] = [];
   private readonly k: number;
+  private nextSeq = 0;
 
   constructor(k: number) {
     this.k = k;
@@ -27,7 +28,7 @@ export class TopKHeap<T> {
   private heapifyUp(i: number): void {
     while (i > 0) {
       const p = this.parent(i);
-      if (this.heap[i].score >= this.heap[p].score) break;
+      if (this.compare(this.heap[i], this.heap[p]) >= 0) break;
       this.swap(i, p);
       i = p;
     }
@@ -39,10 +40,10 @@ export class TopKHeap<T> {
       const l = this.left(i);
       const r = this.right(i);
 
-      if (l < this.heap.length && this.heap[l].score < this.heap[smallest].score) {
+      if (l < this.heap.length && this.compare(this.heap[l], this.heap[smallest]) < 0) {
         smallest = l;
       }
-      if (r < this.heap.length && this.heap[r].score < this.heap[smallest].score) {
+      if (r < this.heap.length && this.compare(this.heap[r], this.heap[smallest]) < 0) {
         smallest = r;
       }
 
@@ -52,19 +53,28 @@ export class TopKHeap<T> {
     }
   }
 
+  private compare(a: { score: number; seq: number }, b: { score: number; seq: number }): number {
+    if (a.score !== b.score) return a.score - b.score;
+    return b.seq - a.seq;
+  }
+
   insert(item: T, score: number): void {
     if (this.k <= 0) return;
+    const entry = { item, score, seq: this.nextSeq++ };
     if (this.heap.length < this.k) {
-      this.heap.push({ item, score });
+      this.heap.push(entry);
       this.heapifyUp(this.heap.length - 1);
-    } else if (score > this.heap[0].score) {
-      this.heap[0] = { item, score };
+    } else if (this.compare(entry, this.heap[0]) > 0) {
+      this.heap[0] = entry;
       this.heapifyDown(0);
     }
   }
 
   toSortedArray(): T[] {
-    const sorted = [...this.heap].sort((a, b) => b.score - a.score);
+    const sorted = [...this.heap].sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score;
+      return a.seq - b.seq;
+    });
     return sorted.map((entry) => entry.item);
   }
 }

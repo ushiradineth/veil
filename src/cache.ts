@@ -19,30 +19,30 @@ export class TopKHeap<T> {
   }
 
   private swap(i: number, j: number): void {
-    const temp = this.heap[i]!;
-    this.heap[i] = this.heap[j]!;
-    this.heap[j] = temp;
+    const tmp = this.heap[i];
+    this.heap[i] = this.heap[j];
+    this.heap[j] = tmp;
   }
 
   private heapifyUp(i: number): void {
     while (i > 0) {
       const p = this.parent(i);
-      if (this.heap[i]!.score >= this.heap[p]!.score) break;
+      if (this.heap[i].score >= this.heap[p].score) break;
       this.swap(i, p);
       i = p;
     }
   }
 
   private heapifyDown(i: number): void {
-    while (true) {
+    for (;;) {
       let smallest = i;
       const l = this.left(i);
       const r = this.right(i);
 
-      if (l < this.heap.length && this.heap[l]!.score < this.heap[smallest]!.score) {
+      if (l < this.heap.length && this.heap[l].score < this.heap[smallest].score) {
         smallest = l;
       }
-      if (r < this.heap.length && this.heap[r]!.score < this.heap[smallest]!.score) {
+      if (r < this.heap.length && this.heap[r].score < this.heap[smallest].score) {
         smallest = r;
       }
 
@@ -57,7 +57,7 @@ export class TopKHeap<T> {
     if (this.heap.length < this.k) {
       this.heap.push({ item, score });
       this.heapifyUp(this.heap.length - 1);
-    } else if (score > this.heap[0]!.score) {
+    } else if (score > this.heap[0].score) {
       this.heap[0] = { item, score };
       this.heapifyDown(0);
     }

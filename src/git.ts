@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+
 import { diagnostics } from "./diagnostics";
 import { buildIndex, getStatus } from "./indexer";
 import { resolveStateRoot } from "./state-root";
@@ -41,7 +42,7 @@ function nowMs(bunRef?: { nanoseconds?: () => number }): number {
   }
   const runtimeBun = bunRef ?? (globalThis as { Bun?: { nanoseconds?: () => number } }).Bun;
   if (runtimeBun && typeof runtimeBun.nanoseconds === "function") {
-    return Number(runtimeBun.nanoseconds()) / 1_000_000;
+    return runtimeBun.nanoseconds() / 1_000_000;
   }
   return Date.now();
 }
@@ -63,8 +64,8 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
     const timedOut = (out.signal === "SIGTERM" && out.status === null) || elapsed > timeoutMs;
     return {
       ok: out.status === 0 && !out.error && !timedOut,
-      stdout: out.stdout ?? "",
-      stderr: out.stderr ?? "",
+      stdout: out.stdout,
+      stderr: out.stderr,
       code: out.status,
       timedOut,
       error: out.error?.message,
@@ -94,7 +95,13 @@ function isMissingBinary(result: RunResult): boolean {
   );
 }
 
-function responseMeta(workspace: string, tool: GitToolName, started: number, truncated: boolean, warnings: string[]) {
+function responseMeta(
+  workspace: string,
+  tool: GitToolName,
+  started: number,
+  truncated: boolean,
+  warnings: string[],
+) {
   return {
     ok: true,
     workspace,
@@ -128,7 +135,10 @@ function fail<T>(
   };
 }
 
-function truncateText(raw: string, maxBytes?: number): { text: string; truncated: boolean; warning?: string } {
+function truncateText(
+  raw: string,
+  maxBytes?: number,
+): { text: string; truncated: boolean; warning?: string } {
   const safeMax = Math.max(1024, Math.min(maxBytes ?? DEFAULT_MAX_BYTES, MAX_BYTES_CAP));
   const bytes = Buffer.byteLength(raw, "utf-8");
   if (bytes <= safeMax) {
@@ -138,7 +148,7 @@ function truncateText(raw: string, maxBytes?: number): { text: string; truncated
   return {
     text: sliced.trim(),
     truncated: true,
-    warning: `output truncated to ${safeMax} bytes`,
+    warning: `output truncated to ${String(safeMax)} bytes`,
   };
 }
 
@@ -153,11 +163,14 @@ function truncateText(raw: string, maxBytes?: number): { text: string; truncated
  * - Resolves symlinks to prevent escape via symbolic links
  * - Handles unicode path confusion attacks
  */
-function validatePathArg(workspace: string, path?: string): { ok: true; value?: string } | { ok: false; error: GitToolError } {
+function validatePathArg(
+  workspace: string,
+  path?: string,
+): { ok: true; value?: string } | { ok: false; error: GitToolError } {
   if (!path) return { ok: true };
 
   // Null byte check
-  if (path.indexOf("\u0000") >= 0) {
+  if (path.includes("\u0000")) {
     return { ok: false, error: { code: "invalid-path", message: "Path contains null bytes" } };
   }
 
@@ -168,7 +181,10 @@ function validatePathArg(workspace: string, path?: string): { ok: true; value?: 
 
   // Absolute path check
   if (isAbsolute(path)) {
-    return { ok: false, error: { code: "invalid-path", message: "Path must be a relative path inside workspace" } };
+    return {
+      ok: false,
+      error: { code: "invalid-path", message: "Path must be a relative path inside workspace" },
+    };
   }
 
   // Normalize and resolve path
@@ -203,9 +219,12 @@ function validatePathArg(workspace: string, path?: string): { ok: true; value?: 
     // Verify resolved path is still within workspace
     const relReal = relative(workspaceReal, absReal);
     if (relReal.startsWith("..") || isAbsolute(relReal)) {
-      return { ok: false, error: { code: "invalid-path", message: "Path escapes workspace via symlink" } };
+      return {
+        ok: false,
+        error: { code: "invalid-path", message: "Path escapes workspace via symlink" },
+      };
     }
-  } catch (error) {
+  } catch {
     // If realpath fails, fall back to normalized path check
     const workspaceResolved = resolve(workspace);
     const absResolved = resolve(workspace, normalized);
@@ -231,17 +250,25 @@ function validatePathArg(workspace: string, path?: string): { ok: true; value?: 
  * - Leading hyphens (option injection)
  * - Strings longer than 200 characters
  */
-function validateRevision(rev?: string): { ok: true; value?: string } | { ok: false; error: GitToolError } {
+function validateRevision(
+  rev?: string,
+): { ok: true; value?: string } | { ok: false; error: GitToolError } {
   if (!rev) return { ok: true };
 
   // Length check
   if (rev.length > 200) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision string too long (max 200 characters)" } };
+    return {
+      ok: false,
+      error: { code: "invalid-revision", message: "Revision string too long (max 200 characters)" },
+    };
   }
 
   // Leading hyphen check (prevents option injection)
   if (rev.startsWith("-")) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision cannot start with hyphen" } };
+    return {
+      ok: false,
+      error: { code: "invalid-revision", message: "Revision cannot start with hyphen" },
+    };
   }
 
   // Null byte and control character check
@@ -250,40 +277,80 @@ function validateRevision(rev?: string): { ok: true; value?: string } | { ok: fa
     return code === 0 || (code >= 1 && code <= 31);
   });
   if (hasControlChar) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision contains null bytes or control characters" } };
+    return {
+      ok: false,
+      error: {
+        code: "invalid-revision",
+        message: "Revision contains null bytes or control characters",
+      },
+    };
   }
 
   // Whitespace check (spaces, tabs, newlines)
   if (/\s/.test(rev)) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision contains whitespace" } };
+    return {
+      ok: false,
+      error: { code: "invalid-revision", message: "Revision contains whitespace" },
+    };
   }
 
   // Shell metacharacter check: ; | & $ ` ( ) { } [ ] < > ! \ " '
   if (/[;|&$`(){}[\]<>!\\'"]/.test(rev)) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision contains shell metacharacters" } };
+    return {
+      ok: false,
+      error: { code: "invalid-revision", message: "Revision contains shell metacharacters" },
+    };
   }
 
   // Safe character set: alphanumeric, underscore, dot, slash, hyphen, tilde, caret
   // Allows range syntax with double/triple dots
   const safeRefPattern = /^[A-Za-z0-9._/\-~^]+(\.{2,3}[A-Za-z0-9._/\-~^]+)?$/;
   if (!safeRefPattern.test(rev)) {
-    return { ok: false, error: { code: "invalid-revision", message: "Revision contains unsafe characters" } };
+    return {
+      ok: false,
+      error: { code: "invalid-revision", message: "Revision contains unsafe characters" },
+    };
   }
 
   return { ok: true, value: rev };
 }
 
-function ensureGitRepo(workspace: string, options: RunnerOptions): { ok: true } | { ok: false; error: GitToolError; gitAvailable: boolean } {
-  const probe = runCommand(options.command ?? "git", ["-C", workspace, "rev-parse", "--is-inside-work-tree"], workspace, options.timeoutMs);
+function ensureGitRepo(
+  workspace: string,
+  options: RunnerOptions,
+): { ok: true } | { ok: false; error: GitToolError; gitAvailable: boolean } {
+  const probe = runCommand(
+    options.command ?? "git",
+    ["-C", workspace, "rev-parse", "--is-inside-work-tree"],
+    workspace,
+    options.timeoutMs,
+  );
   if (isMissingBinary(probe)) {
-    return { ok: false, error: { code: "git-unavailable", message: "git is not available in PATH" }, gitAvailable: false };
+    return {
+      ok: false,
+      error: { code: "git-unavailable", message: "git is not available in PATH" },
+      gitAvailable: false,
+    };
   }
   if (!probe.ok) {
-    return { ok: false, error: { code: "not-a-repo", message: "Workspace is not a git repository" }, gitAvailable: true };
+    return {
+      ok: false,
+      error: { code: "not-a-repo", message: "Workspace is not a git repository" },
+      gitAvailable: true,
+    };
   }
-  const top = runCommand(options.command ?? "git", ["-C", workspace, "rev-parse", "--show-toplevel"], workspace, options.timeoutMs);
+  const top = runCommand(
+    options.command ?? "git",
+    ["-C", workspace, "rev-parse", "--show-toplevel"],
+    workspace,
+    options.timeoutMs,
+  );
   if (!top.ok) {
-    return { ok: false, error: { code: "not-a-repo", message: "Workspace is not a git repository" }, gitAvailable: true };
+    return {
+      ok: false,
+      error: { code: "not-a-repo", message: "Workspace is not a git repository" },
+      gitAvailable: true,
+    };
   }
   let workspaceReal = workspace;
   let topReal = top.stdout.trim();
@@ -296,7 +363,11 @@ function ensureGitRepo(workspace: string, options: RunnerOptions): { ok: true } 
   }
   const fromTop = relative(topReal, workspaceReal);
   if (fromTop.startsWith("..") || isAbsolute(fromTop)) {
-    return { ok: false, error: { code: "not-a-repo", message: "Workspace is outside git repository root" }, gitAvailable: true };
+    return {
+      ok: false,
+      error: { code: "not-a-repo", message: "Workspace is outside git repository root" },
+      gitAvailable: true,
+    };
   }
   return { ok: true };
 }
@@ -307,8 +378,8 @@ function parsePorcelain(raw: string): GitStatusData["paths"] {
   const untracked = new Set<string>();
   for (const line of raw.split("\n")) {
     if (line.length < 4) continue;
-    const x = line[0] ?? " ";
-    const y = line[1] ?? " ";
+    const x = line[0];
+    const y = line[1];
     const path = line.slice(3).trim();
     if (!path) continue;
     if (x === "?" && y === "?") {
@@ -332,12 +403,13 @@ function parseLog(raw: string): GitLogEntry[] {
     .filter(Boolean)
     .map((line) => {
       const [commit, author, date, subject, parentsRaw] = line.split("\t");
+      const parentsField = typeof parentsRaw === "string" ? parentsRaw : "";
       return {
-        commit: commit ?? "",
-        author: author ?? "",
-        date: date ?? "",
-        subject: subject ?? "",
-        parents: (parentsRaw ?? "").split(" ").filter(Boolean),
+        commit,
+        author,
+        date,
+        subject,
+        parents: parentsField.split(" ").filter(Boolean),
       };
     });
 }
@@ -357,13 +429,21 @@ function finish<T>(
   };
 }
 
-function recordDiagnostics(tool: GitToolName, started: number, ok: boolean, timedOut: boolean): void {
+function recordDiagnostics(
+  tool: GitToolName,
+  started: number,
+  ok: boolean,
+  timedOut: boolean,
+): void {
   const elapsed = nowMs() - started;
   const isGh = tool === "gh_lookup";
   diagnostics.recordGitCall(elapsed, ok, timedOut, isGh);
 }
 
-export function gitStatus(workspace: string, options?: { timeout_ms?: number; command?: string }): GitToolResponse<GitStatusData> {
+export function gitStatus(
+  workspace: string,
+  options?: { timeout_ms?: number; command?: string },
+): GitToolResponse<GitStatusData> {
   const started = nowMs();
   const timeoutMs = Math.min(10_000, Math.max(500, options?.timeout_ms ?? 5_000));
   const runner = { timeoutMs, command: options?.command };
@@ -373,8 +453,18 @@ export function gitStatus(workspace: string, options?: { timeout_ms?: number; co
     return fail(workspace, "git_status", started, repoCheck.error, repoCheck.gitAvailable);
   }
 
-  const branch = runCommand(runner.command ?? "git", ["-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"], workspace, timeoutMs);
-  const head = runCommand(runner.command ?? "git", ["-C", workspace, "rev-parse", "HEAD"], workspace, timeoutMs);
+  const branch = runCommand(
+    runner.command ?? "git",
+    ["-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
+    workspace,
+    timeoutMs,
+  );
+  const head = runCommand(
+    runner.command ?? "git",
+    ["-C", workspace, "rev-parse", "HEAD"],
+    workspace,
+    timeoutMs,
+  );
   const upstream = runCommand(
     runner.command ?? "git",
     ["-C", workspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
@@ -387,7 +477,12 @@ export function gitStatus(workspace: string, options?: { timeout_ms?: number; co
     workspace,
     timeoutMs,
   );
-  const porcelain = runCommand(runner.command ?? "git", ["-C", workspace, "status", "--porcelain"], workspace, timeoutMs);
+  const porcelain = runCommand(
+    runner.command ?? "git",
+    ["-C", workspace, "status", "--porcelain"],
+    workspace,
+    timeoutMs,
+  );
 
   if (!branch.ok || !head.ok || !porcelain.ok) {
     const timedOut = branch.timedOut || head.timedOut || porcelain.timedOut;
@@ -404,8 +499,8 @@ export function gitStatus(workspace: string, options?: { timeout_ms?: number; co
     branch: branch.stdout.trim(),
     head: head.stdout.trim(),
     upstream: upstream.ok ? upstream.stdout.trim() : null,
-    ahead: Number(aheadRaw ?? "0") || 0,
-    behind: Number(behindRaw ?? "0") || 0,
+    ahead: Number(aheadRaw || "0") || 0,
+    behind: Number(behindRaw || "0") || 0,
     dirty: paths.staged.length + paths.unstaged.length + paths.untracked.length > 0,
     changed: {
       staged: paths.staged.length,
@@ -420,7 +515,14 @@ export function gitStatus(workspace: string, options?: { timeout_ms?: number; co
 
 export function gitLog(
   workspace: string,
-  options?: { limit?: number; since?: string; author?: string; grep?: string; timeout_ms?: number; command?: string },
+  options?: {
+    limit?: number;
+    since?: string;
+    author?: string;
+    grep?: string;
+    timeout_ms?: number;
+    command?: string;
+  },
 ): GitToolResponse<GitLogData> {
   const started = nowMs();
   const timeoutMs = Math.min(12_000, Math.max(500, options?.timeout_ms ?? 8_000));
@@ -432,7 +534,14 @@ export function gitLog(
   }
 
   const limit = Math.min(200, Math.max(1, options?.limit ?? 30));
-  const args = ["-C", workspace, "log", `-n${String(limit)}`, "--date=iso-strict", "--pretty=format:%H%x09%an%x09%ad%x09%s%x09%P"];
+  const args = [
+    "-C",
+    workspace,
+    "log",
+    `-n${String(limit)}`,
+    "--date=iso-strict",
+    "--pretty=format:%H%x09%an%x09%ad%x09%s%x09%P",
+  ];
   if (options?.since) args.push(`--since=${options.since}`);
   if (options?.author) args.push(`--author=${options.author}`);
   if (options?.grep) args.push(`--grep=${options.grep}`);
@@ -442,7 +551,7 @@ export function gitLog(
     recordDiagnostics("git_log", started, false, out.timedOut);
     return fail(workspace, "git_log", started, {
       code: out.timedOut ? "timeout" : "command-failed",
-      message: `git log failed: ${(out.stderr || out.error || "unknown").trim()}`,
+      message: `git log failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
     });
   }
 
@@ -493,11 +602,13 @@ export function gitDiff(
   if (options?.staged) args.push("--cached");
   if (options?.name_only) args.push("--name-only");
 
-  const hasRange = Boolean(baseValidated.value && headValidated.value);
-  if (hasRange) {
-    args.push(`${baseValidated.value}..${headValidated.value}`);
-  } else if (baseValidated.value) {
-    args.push(baseValidated.value);
+  const baseValue = baseValidated.value;
+  const headValue = headValidated.value;
+  const hasRange = Boolean(baseValue && headValue);
+  if (baseValue && headValue) {
+    args.push(`${baseValue}..${headValue}`);
+  } else if (baseValue) {
+    args.push(baseValue);
   }
   if (pathValidated.value) {
     args.push("--", pathValidated.value);
@@ -508,7 +619,7 @@ export function gitDiff(
     recordDiagnostics("git_diff", started, false, out.timedOut);
     return fail(workspace, "git_diff", started, {
       code: out.timedOut ? "timeout" : "command-failed",
-      message: `git diff failed: ${(out.stderr || out.error || "unknown").trim()}`,
+      message: `git diff failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
     });
   }
 
@@ -528,7 +639,14 @@ export function gitDiff(
 
 export function gitShow(
   workspace: string,
-  options?: { rev: string; path?: string; patch?: boolean; max_bytes?: number; timeout_ms?: number; command?: string },
+  options?: {
+    rev: string;
+    path?: string;
+    patch?: boolean;
+    max_bytes?: number;
+    timeout_ms?: number;
+    command?: string;
+  },
 ): GitToolResponse<GitShowData> {
   const started = nowMs();
   const timeoutMs = Math.min(12_000, Math.max(500, options?.timeout_ms ?? 8_000));
@@ -542,7 +660,14 @@ export function gitShow(
   const revValidated = validateRevision(options?.rev);
   if (!revValidated.ok || !revValidated.value) {
     recordDiagnostics("git_show", started, false, false);
-    return fail(workspace, "git_show", started, revValidated.ok ? { code: "invalid-revision", message: "Revision is required" } : revValidated.error);
+    return fail(
+      workspace,
+      "git_show",
+      started,
+      revValidated.ok
+        ? { code: "invalid-revision", message: "Revision is required" }
+        : revValidated.error,
+    );
   }
   const pathValidated = validatePathArg(workspace, options?.path);
   if (!pathValidated.ok) {
@@ -550,7 +675,14 @@ export function gitShow(
     return fail(workspace, "git_show", started, pathValidated.error);
   }
 
-  const args = ["-C", workspace, "show", revValidated.value, "--date=iso-strict", "--pretty=fuller"];
+  const args = [
+    "-C",
+    workspace,
+    "show",
+    revValidated.value,
+    "--date=iso-strict",
+    "--pretty=fuller",
+  ];
   if (options?.patch === false) {
     args.push("--no-patch");
   }
@@ -560,11 +692,12 @@ export function gitShow(
 
   const out = runCommand(runner.command ?? "git", args, workspace, timeoutMs);
   if (!out.ok) {
-    const invalidRevision = out.stderr.includes("bad revision") || out.stderr.includes("unknown revision");
+    const invalidRevision =
+      out.stderr.includes("bad revision") || out.stderr.includes("unknown revision");
     recordDiagnostics("git_show", started, false, out.timedOut);
     return fail(workspace, "git_show", started, {
       code: out.timedOut ? "timeout" : invalidRevision ? "invalid-revision" : "command-failed",
-      message: `git show failed: ${(out.stderr || out.error || "unknown").trim()}`,
+      message: `git show failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
     });
   }
 
@@ -598,37 +731,60 @@ export function ghLookup(
   const probe = runCommand(command, ["--version"], workspace, timeoutMs);
   if (isMissingBinary(probe)) {
     recordDiagnostics("gh_lookup", started, false, false);
-    return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "gh-unavailable", message: "gh is not available in PATH" }, true));
+    return Promise.resolve(
+      fail(
+        workspace,
+        "gh_lookup",
+        started,
+        { code: "gh-unavailable", message: "gh is not available in PATH" },
+        true,
+      ),
+    );
   }
   if (!probe.ok) {
     recordDiagnostics("gh_lookup", started, false, probe.timedOut);
-    return Promise.resolve(fail(workspace, "gh_lookup", started, {
-      code: probe.timedOut ? "timeout" : "gh-unavailable",
-      message: "gh command is unavailable",
-    }));
+    return Promise.resolve(
+      fail(workspace, "gh_lookup", started, {
+        code: probe.timedOut ? "timeout" : "gh-unavailable",
+        message: "gh command is unavailable",
+      }),
+    );
   }
 
   const auth = runCommand(command, ["auth", "status"], workspace, timeoutMs);
   if (!auth.ok) {
     recordDiagnostics("gh_lookup", started, false, auth.timedOut);
-    return Promise.resolve(fail(workspace, "gh_lookup", started, {
-      code: auth.timedOut ? "timeout" : "gh-unauthenticated",
-      message: "gh is unauthenticated or cannot access GitHub",
-    }));
+    return Promise.resolve(
+      fail(workspace, "gh_lookup", started, {
+        code: auth.timedOut ? "timeout" : "gh-unauthenticated",
+        message: "gh is unauthenticated or cannot access GitHub",
+      }),
+    );
   }
 
-  const parseRepoRef = (repoRef: string): { repo: string; owner: string; name: string; url: string } | null => {
+  const parseRepoRef = (
+    repoRef: string,
+  ): { repo: string; owner: string; name: string; url: string } | null => {
     const trimmed = repoRef.trim();
     if (!trimmed) return null;
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
       try {
         const url = new URL(trimmed);
-        const parts = url.pathname.replace(/^\/+/, "").replace(/\.git$/, "").split("/").filter(Boolean);
+        const parts = url.pathname
+          .replace(/^\/+/, "")
+          .replace(/\.git$/, "")
+          .split("/")
+          .filter(Boolean);
         if (parts.length < 2) return null;
         const owner = parts[0] ?? "";
         const name = parts[1] ?? "";
         if (!owner || !name) return null;
-        return { repo: `${owner}/${name}`, owner, name, url: `https://github.com/${owner}/${name}.git` };
+        return {
+          repo: `${owner}/${name}`,
+          owner,
+          name,
+          url: `https://github.com/${owner}/${name}.git`,
+        };
       } catch {
         return null;
       }
@@ -639,7 +795,12 @@ export function ghLookup(
     const owner = parts[0] ?? "";
     const name = parts[1] ?? "";
     if (!owner || !name) return null;
-    return { repo: `${owner}/${name}`, owner, name, url: `https://github.com/${owner}/${name}.git` };
+    return {
+      repo: `${owner}/${name}`,
+      owner,
+      name,
+      url: `https://github.com/${owner}/${name}.git`,
+    };
   };
 
   const repoRef = parseRepoRef(options.repo);
@@ -657,34 +818,82 @@ export function ghLookup(
     const gitProbe = runCommand("git", ["--version"], workspace, timeoutMs);
     if (isMissingBinary(gitProbe)) {
       recordDiagnostics("gh_lookup", started, false, false);
-      return Promise.resolve(fail(workspace, "gh_lookup", started, { code: "git-unavailable", message: "git is not available in PATH" }, false));
+      return Promise.resolve(
+        fail(
+          workspace,
+          "gh_lookup",
+          started,
+          { code: "git-unavailable", message: "git is not available in PATH" },
+          false,
+        ),
+      );
     }
     if (!gitProbe.ok) {
       recordDiagnostics("gh_lookup", started, false, gitProbe.timedOut);
       return Promise.resolve(
-        fail(workspace, "gh_lookup", started, {
-          code: gitProbe.timedOut ? "timeout" : "command-failed",
-          message: "git command is unavailable",
-        }, false),
+        fail(
+          workspace,
+          "gh_lookup",
+          started,
+          {
+            code: gitProbe.timedOut ? "timeout" : "command-failed",
+            message: "git command is unavailable",
+          },
+          false,
+        ),
       );
     }
 
-    const tempRoot = options.temp_root && options.temp_root.trim() ? options.temp_root.trim() : "/tmp";
+    const tempRoot = options.temp_root?.trim() ? options.temp_root.trim() : "/tmp";
     const target = join(tempRoot, basename(repoRef.name));
     mkdirSync(tempRoot, { recursive: true });
     const gitDir = join(target, ".git");
     let syncOut: RunResult;
     if (!existsSync(gitDir)) {
-      syncOut = runCommand("git", ["clone", "--depth", "1", repoRef.url, target], workspace, timeoutMs);
+      syncOut = runCommand(
+        "git",
+        ["clone", "--depth", "1", repoRef.url, target],
+        workspace,
+        timeoutMs,
+      );
     } else {
-      const remote = runCommand("git", ["-C", target, "remote", "set-url", "origin", repoRef.url], workspace, timeoutMs);
-      const fetch = runCommand("git", ["-C", target, "fetch", "--depth", "1", "origin"], workspace, timeoutMs);
-      const headRef = runCommand("git", ["-C", target, "symbolic-ref", "refs/remotes/origin/HEAD"], workspace, timeoutMs);
-      const branchRef = headRef.ok ? headRef.stdout.trim().replace(/^refs\/remotes\//, "") : "origin/main";
-      const reset = runCommand("git", ["-C", target, "reset", "--hard", branchRef], workspace, timeoutMs);
-      syncOut = (!remote.ok || !fetch.ok || !reset.ok)
-        ? { ok: false, stdout: `${remote.stdout}\n${fetch.stdout}\n${reset.stdout}`, stderr: `${remote.stderr}\n${fetch.stderr}\n${reset.stderr}`, code: 1, timedOut: remote.timedOut || fetch.timedOut || reset.timedOut }
-        : reset;
+      const remote = runCommand(
+        "git",
+        ["-C", target, "remote", "set-url", "origin", repoRef.url],
+        workspace,
+        timeoutMs,
+      );
+      const fetch = runCommand(
+        "git",
+        ["-C", target, "fetch", "--depth", "1", "origin"],
+        workspace,
+        timeoutMs,
+      );
+      const headRef = runCommand(
+        "git",
+        ["-C", target, "symbolic-ref", "refs/remotes/origin/HEAD"],
+        workspace,
+        timeoutMs,
+      );
+      const branchRef = headRef.ok
+        ? headRef.stdout.trim().replace(/^refs\/remotes\//, "")
+        : "origin/main";
+      const reset = runCommand(
+        "git",
+        ["-C", target, "reset", "--hard", branchRef],
+        workspace,
+        timeoutMs,
+      );
+      syncOut =
+        !remote.ok || !fetch.ok || !reset.ok
+          ? {
+              ok: false,
+              stdout: `${remote.stdout}\n${fetch.stdout}\n${reset.stdout}`,
+              stderr: `${remote.stderr}\n${fetch.stderr}\n${reset.stderr}`,
+              code: 1,
+              timedOut: remote.timedOut || fetch.timedOut || reset.timedOut,
+            }
+          : reset;
     }
 
     if (!syncOut.ok) {
@@ -692,13 +901,13 @@ export function ghLookup(
       return Promise.resolve(
         fail(workspace, "gh_lookup", started, {
           code: syncOut.timedOut ? "timeout" : "command-failed",
-          message: `failed to sync repo ${repoRef.repo}: ${(syncOut.stderr || syncOut.error || "unknown").trim()}`,
+          message: `failed to sync repo ${repoRef.repo}: ${syncOut.stderr.trim() !== "" ? syncOut.stderr.trim() : (syncOut.error ?? "unknown")}`,
         }),
       );
     }
 
     return buildIndex(target, "changed", { state_root: options.state_root })
-      .then(async (manifest) => {
+      .then(async () => {
         const status = await getStatus(target, { state_root: options.state_root });
         const stateRootResolved = resolveStateRoot(target, options.state_root);
         const data: GhLookupData = {
@@ -715,7 +924,7 @@ export function ghLookup(
         recordDiagnostics("gh_lookup", started, true, false);
         return finish(workspace, "gh_lookup", started, data, { truncated: false });
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         recordDiagnostics("gh_lookup", started, false, false);
         return fail(workspace, "gh_lookup", started, {
           code: "command-failed",
@@ -745,10 +954,12 @@ export function ghLookup(
   const out = runCommand(command, [subcommand, ...args], workspace, timeoutMs);
   if (!out.ok) {
     recordDiagnostics("gh_lookup", started, false, out.timedOut);
-    return Promise.resolve(fail(workspace, "gh_lookup", started, {
-      code: out.timedOut ? "timeout" : "command-failed",
-      message: `gh lookup failed: ${(out.stderr || out.error || "unknown").trim()}`,
-    }));
+    return Promise.resolve(
+      fail(workspace, "gh_lookup", started, {
+        code: out.timedOut ? "timeout" : "command-failed",
+        message: `gh lookup failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
+      }),
+    );
   }
 
   const truncation = truncateText(out.stdout, DEFAULT_MAX_BYTES);

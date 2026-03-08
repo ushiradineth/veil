@@ -24,6 +24,8 @@ export function sortIndexedRecords(records: {
   chunks: ChunkRecord[];
 }): void {
   records.files.sort((a, b) => a.path.localeCompare(b.path));
-  records.symbols.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path)));
+  records.symbols.sort((a, b) =>
+    a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path),
+  );
   records.chunks.sort((a, b) => a.id.localeCompare(b.id));
 }

@@ -4,5 +4,10 @@ export function errorMessage(error: unknown): string {
 
 export function isAbortLike(aborted: boolean, message: string): boolean {
   const lower = message.toLowerCase();
-  return aborted || message.includes("AbortError") || lower.includes("aborted") || lower.includes("timeout");
+  return (
+    aborted ||
+    message.includes("AbortError") ||
+    lower.includes("aborted") ||
+    lower.includes("timeout")
+  );
 }

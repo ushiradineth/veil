@@ -4,7 +4,7 @@ export function greet(name: string): string {
 
 export class Greeter {
   constructor(private prefix: string) {}
-  
+
   greet(name: string): string {
     return `${this.prefix} ${name}!`;
   }

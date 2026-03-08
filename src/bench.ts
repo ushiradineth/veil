@@ -1,9 +1,10 @@
 import { performance } from "node:perf_hooks";
+
 import { discoverIndex, getStatus, queryChunks, queryFiles, querySymbols } from "./indexer";
 
 const nowMs =
   typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
-    ? (): number => Number(Bun.nanoseconds()) / 1_000_000
+    ? (): number => Bun.nanoseconds() / 1_000_000
     : (): number => performance.now();
 
 type Sample = {
@@ -18,7 +19,11 @@ function percentile(values: number[], p: number): number {
   return sorted[idx] ?? 0;
 }
 
-async function measure(label: string, iterations: number, fn: () => Promise<unknown>): Promise<Sample[]> {
+async function measure(
+  label: string,
+  iterations: number,
+  fn: () => Promise<unknown>,
+): Promise<Sample[]> {
   const samples: Sample[] = [];
   for (let i = 0; i < iterations; i++) {
     const start = nowMs();
@@ -49,14 +54,23 @@ async function main(): Promise<void> {
   const workspace = workspaceArgIndex >= 0 ? process.argv[workspaceArgIndex + 1] : process.cwd();
   const iterationsArgIndex = process.argv.indexOf("--iterations");
   const iterationsRaw = iterationsArgIndex >= 0 ? Number(process.argv[iterationsArgIndex + 1]) : 30;
-  const iterations = Number.isFinite(iterationsRaw) && iterationsRaw > 0 ? Math.floor(iterationsRaw) : 30;
+  const iterations =
+    Number.isFinite(iterationsRaw) && iterationsRaw > 0 ? Math.floor(iterationsRaw) : 30;
 
   await getStatus(workspace);
 
   const results: Sample[] = [];
   results.push(...(await measure("status", iterations, async () => getStatus(workspace))));
-  results.push(...(await measure("files:homebrew", iterations, async () => queryFiles(workspace, "homebrew", 20))));
-  results.push(...(await measure("symbols:build", iterations, async () => querySymbols(workspace, "build", 20))));
+  results.push(
+    ...(await measure("files:homebrew", iterations, async () =>
+      queryFiles(workspace, "homebrew", 20),
+    )),
+  );
+  results.push(
+    ...(await measure("symbols:build", iterations, async () =>
+      querySymbols(workspace, "build", 20),
+    )),
+  );
   results.push(
     ...(await measure("search:pnpm install", iterations, async () =>
       queryChunks(workspace, "pnpm install", 10, { prefer_code: true }),
@@ -69,10 +83,15 @@ async function main(): Promise<void> {
   );
   results.push(
     ...(await measure("search:noisy prompt", iterations, async () =>
-      queryChunks(workspace, "without editing files find where homebrew pnpm build is configured", 10, {
-        prefer_code: true,
-        intent: "code",
-      }),
+      queryChunks(
+        workspace,
+        "without editing files find where homebrew pnpm build is configured",
+        10,
+        {
+          prefer_code: true,
+          intent: "code",
+        },
+      ),
     )),
   );
   results.push(
@@ -94,17 +113,17 @@ async function main(): Promise<void> {
       status: summarize(results, "status"),
       "files:homebrew": summarize(results, "files:homebrew"),
       "symbols:build": summarize(results, "symbols:build"),
-        "search:pnpm install": summarize(results, "search:pnpm install"),
-        "search:homebrew enable": summarize(results, "search:homebrew enable"),
-        "search:noisy prompt": summarize(results, "search:noisy prompt"),
-        "discover:homebrew pnpm build": summarize(results, "discover:homebrew pnpm build"),
-      },
-    };
+      "search:pnpm install": summarize(results, "search:pnpm install"),
+      "search:homebrew enable": summarize(results, "search:homebrew enable"),
+      "search:noisy prompt": summarize(results, "search:noisy prompt"),
+      "discover:homebrew pnpm build": summarize(results, "discover:homebrew pnpm build"),
+    },
+  };
 
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(`${String(error)}\n`);
   process.exitCode = 1;
 });

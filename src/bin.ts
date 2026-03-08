@@ -6,14 +6,11 @@ function usage(): string {
     "Examples:",
     "  veil server",
     "  veil cli status",
-    "  veil cli discover --query \"homebrew pnpm\"",
+    '  veil cli discover --query "homebrew pnpm"',
   ].join("\n");
 }
 
-type BinRoute =
-  | { type: "server" }
-  | { type: "cli"; argv: string[] }
-  | { type: "usage" };
+type BinRoute = { type: "server" } | { type: "cli"; argv: string[] } | { type: "usage" };
 
 function route(argv: string[]): BinRoute {
   const cmd = argv[2];
@@ -21,7 +18,7 @@ function route(argv: string[]): BinRoute {
   if (cmd === "cli") {
     return {
       type: "cli",
-      argv: [argv[0] ?? "bun", argv[1] ?? "src/cli.ts", ...(argv.slice(3) ?? [])],
+      argv: [argv[0] ?? "bun", argv[1] ?? "src/cli.ts", ...argv.slice(3)],
     };
   }
   return { type: "usage" };
@@ -56,7 +53,7 @@ const meta = import.meta as unknown as Record<string, unknown>;
 const isMain = typeof meta.main === "boolean" ? meta.main : true;
 
 if (isMain) {
-  main().catch((error) => {
+  main().catch((error: unknown) => {
     process.stderr.write(`${String(error)}\n`);
     process.exitCode = 1;
   });

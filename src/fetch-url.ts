@@ -1,11 +1,16 @@
-import type { FetchUrlFormat, FetchUrlResponse } from "./types";
 import { NodeHtmlMarkdown } from "node-html-markdown";
+
 import { errorMessage, isAbortLike } from "./errors";
+import type { FetchUrlFormat, FetchUrlResponse } from "./types";
 import { clampInt } from "./validation";
 
-function nowMs(bunLike: { nanoseconds?: () => number } | undefined = typeof Bun === "undefined" ? undefined : Bun): number {
+function nowMs(
+  bunLike: { nanoseconds?: () => number } | undefined = typeof Bun === "undefined"
+    ? undefined
+    : Bun,
+): number {
   if (bunLike && typeof bunLike.nanoseconds === "function") {
-    return Number(bunLike.nanoseconds()) / 1_000_000;
+    return bunLike.nanoseconds() / 1_000_000;
   }
   return Date.now();
 }
@@ -77,7 +82,11 @@ function isHtml(contentType: string): boolean {
 }
 
 function isMarkdown(contentType: string): boolean {
-  return contentType.includes("text/markdown") || contentType.includes("text/x-markdown") || contentType.includes("markdown");
+  return (
+    contentType.includes("text/markdown") ||
+    contentType.includes("text/x-markdown") ||
+    contentType.includes("markdown")
+  );
 }
 
 function truncateTo(value: string, maxBytes: number): { value: string; truncated: boolean } {
@@ -127,15 +136,13 @@ function parseUrl(raw: string): URL | null {
  * @param options.fetch_impl - Custom fetch implementation for testing
  * @returns Fetch URL response with content and metadata
  */
-export async function fetchUrl(
-  options: {
-    url: string;
-    format?: FetchUrlFormat;
-    timeout_ms?: number;
-    max_bytes?: number;
-    fetch_impl?: typeof fetch;
-  },
-): Promise<FetchUrlResponse> {
+export async function fetchUrl(options: {
+  url: string;
+  format?: FetchUrlFormat;
+  timeout_ms?: number;
+  max_bytes?: number;
+  fetch_impl?: typeof fetch;
+}): Promise<FetchUrlResponse> {
   const started = nowMs();
   const parsed = parseUrl(options.url.trim());
   const format: FetchUrlFormat = options.format ?? "markdown";
@@ -153,7 +160,9 @@ export async function fetchUrl(
 
   const fetchImpl = options.fetch_impl ?? fetch;
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort("timeout"), timeoutMs);
+  const timer = setTimeout(() => {
+    abort.abort("timeout");
+  }, timeoutMs);
 
   try {
     const response = await fetchImpl(parsed.toString(), {
@@ -202,7 +211,7 @@ export async function fetchUrl(
           vary,
           content: truncated.value,
         },
-        error: { code: "fetch-failed", message: `HTTP ${status}` },
+        error: { code: "fetch-failed", message: `HTTP ${String(status)}` },
       };
     }
 

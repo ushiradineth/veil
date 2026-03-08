@@ -49,6 +49,9 @@ function nowMs(bunRef?: { nanoseconds?: () => number }): number {
 
 export const __internalGit = {
   nowMs,
+  runCommand,
+  validatePathArg,
+  validateRevision,
 };
 
 function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): RunResult {

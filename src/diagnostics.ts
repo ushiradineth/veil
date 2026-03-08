@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+
 import { resolveIndexDir } from "./state-root";
 
 /**
  * Performance diagnostics and profiling infrastructure
- * 
+ *
  * Tracks:
  * - Cache hit rates
  * - Query latency histograms
@@ -87,14 +88,22 @@ export class PerformanceDiagnostics {
     registerHook?: (event: string, handler: () => void) => void;
     exitFn?: (code: number) => void;
   }) {
-    this.persistIntervalMs = options?.persistIntervalMs ?? Number(process.env.VEIL_DIAGNOSTICS_PERSIST_MS ?? "1000");
-    this.statePath = options?.statePath ?? (process.env.VEIL_DIAGNOSTICS_PATH ?? join(resolveIndexDir(process.cwd()), "diagnostics-state.json"));
-    this.registerHook = options?.registerHook ?? ((event, handler) => {
-      process.on(event, handler);
-    });
-    this.exitFn = options?.exitFn ?? ((code) => {
-      process.exit(code);
-    });
+    this.persistIntervalMs =
+      options?.persistIntervalMs ?? Number(process.env.VEIL_DIAGNOSTICS_PERSIST_MS ?? "1000");
+    this.statePath =
+      options?.statePath ??
+      process.env.VEIL_DIAGNOSTICS_PATH ??
+      join(resolveIndexDir(process.cwd()), "diagnostics-state.json");
+    this.registerHook =
+      options?.registerHook ??
+      ((event, handler) => {
+        process.on(event, handler);
+      });
+    this.exitFn =
+      options?.exitFn ??
+      ((code) => {
+        process.exit(code);
+      });
   }
 
   configureStatePath(statePath: string): void {
@@ -139,7 +148,9 @@ export class PerformanceDiagnostics {
       this.gitFailures = Number(data.gitFailures ?? 0);
       this.gitTimeouts = Number(data.gitTimeouts ?? 0);
       this.ghCalls = Number(data.ghCalls ?? 0);
-      this.latencies = Array.isArray(data.latencies) ? data.latencies.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+      this.latencies = Array.isArray(data.latencies)
+        ? data.latencies.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
       this.buildLatencies = Array.isArray(data.buildLatencies)
         ? data.buildLatencies.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
@@ -215,7 +226,7 @@ export class PerformanceDiagnostics {
     this.ensureLoaded();
     this.totalQueries++;
     this.latencies.push(latencyMs);
-    
+
     // Keep only last 1000 latencies to avoid unbounded growth
     if (this.latencies.length > 1000) {
       this.latencies.shift();
@@ -330,11 +341,14 @@ export class PerformanceDiagnostics {
         p99_ms: Number(this.percentile(this.latencies, 99).toFixed(4)),
         max_ms: this.latencies.length > 0 ? Number(Math.max(...this.latencies).toFixed(4)) : 0,
         build_p95_ms: Number(this.percentile(this.buildLatencies, 95).toFixed(4)),
-        build_max_ms: this.buildLatencies.length > 0 ? Number(Math.max(...this.buildLatencies).toFixed(4)) : 0,
+        build_max_ms:
+          this.buildLatencies.length > 0 ? Number(Math.max(...this.buildLatencies).toFixed(4)) : 0,
         git_p95_ms: Number(this.percentile(this.gitLatencies, 95).toFixed(4)),
-        git_max_ms: this.gitLatencies.length > 0 ? Number(Math.max(...this.gitLatencies).toFixed(4)) : 0,
+        git_max_ms:
+          this.gitLatencies.length > 0 ? Number(Math.max(...this.gitLatencies).toFixed(4)) : 0,
         gh_p95_ms: Number(this.percentile(this.ghLatencies, 95).toFixed(4)),
-        gh_max_ms: this.ghLatencies.length > 0 ? Number(Math.max(...this.ghLatencies).toFixed(4)) : 0,
+        gh_max_ms:
+          this.ghLatencies.length > 0 ? Number(Math.max(...this.ghLatencies).toFixed(4)) : 0,
       },
       memory: {
         heap_used_mb: Number((memUsage.heapUsed / 1024 / 1024).toFixed(2)),
@@ -405,21 +419,23 @@ class Profiler {
 
   mark(name: string): void {
     if (!this.enabled) return;
-    
-    const now = typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
-      ? Number(Bun.nanoseconds()) / 1_000_000
-      : Date.now();
-    
+
+    const now =
+      typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
+        ? Bun.nanoseconds() / 1_000_000
+        : Date.now();
+
     this.markers.push({ name, start: now });
   }
 
   measure(name: string): void {
     if (!this.enabled) return;
-    
-    const now = typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
-      ? Number(Bun.nanoseconds()) / 1_000_000
-      : Date.now();
-    
+
+    const now =
+      typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
+        ? Bun.nanoseconds() / 1_000_000
+        : Date.now();
+
     // Find the most recent marker with this name
     for (let i = this.markers.length - 1; i >= 0; i--) {
       const marker = this.markers[i];
@@ -447,7 +463,8 @@ class Profiler {
 
     const lines = ["=== Profiling Report ==="];
     for (const marker of completed) {
-      lines.push(`${marker.name}: ${marker.duration!.toFixed(4)}ms`);
+      if (marker.duration === undefined) continue;
+      lines.push(`${marker.name}: ${marker.duration.toFixed(4)}ms`);
     }
 
     return lines.join("\n");

@@ -1,13 +1,9 @@
-import { cpus } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { cpus } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
-import { diagnostics } from "./diagnostics";
-import { fetchUrl } from "./fetch-url";
-import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
-import { buildIndex, discoverIndex, getStatus, lookupIndex, queryChunks, queryFiles, querySymbols } from "./indexer";
-import { webSearch } from "./web-search";
 
 type Phase = "cold" | "warm";
 type ScenarioKind =
@@ -110,7 +106,7 @@ type SuiteReport = {
 
 const nowMs =
   typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
-    ? (): number => Number(Bun.nanoseconds()) / 1_000_000
+    ? (): number => Bun.nanoseconds() / 1_000_000
     : (): number => performance.now();
 
 const SCENARIOS: Scenario[] = [
@@ -306,8 +302,8 @@ function runCommand(
     stdio: "pipe",
     timeout: timeoutMs,
   });
-  const stdout = (out.stdout ?? "").trim();
-  const stderr = (out.stderr ?? "").trim();
+  const stdout = out.stdout.trim();
+  const stderr = out.stderr.trim();
 
   if (out.error) {
     return { status: "error", text: `${stdout}\n${stderr}`.trim(), reason: out.error.message };
@@ -328,223 +324,12 @@ function runCommand(
   };
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function queryTokens(query: string): string[] {
-  const tokens = query
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-  return tokens.length > 0 ? tokens : [query];
-}
-
 function makePrompt(scenario: Scenario, mode: McpMode): string {
   const modeInstruction =
     mode === "none"
       ? "MCP mode is none. Do not use any MCP tools."
       : `MCP mode is ${mode}. Use only ${mode} MCP tools when relevant.`;
   return `${modeInstruction}\nTask: ${scenario.prompt}\nQuery: ${scenario.query}\nReturn concise plain text output.`;
-}
-
-function createVeilAdapter(): Adapter {
-  return {
-    id: "veil",
-    label: "Veil MCP index",
-    prepare: async (ctx) => {
-      const status = await getStatus(ctx.workspace);
-      if (!status.exists || status.stale) {
-        await buildIndex(ctx.workspace, "changed");
-      }
-    },
-    run: async (ctx, scenario) => {
-      try {
-        if (scenario.kind === "status") {
-          const status = await getStatus(ctx.workspace);
-          return { status: "ok", text: JSON.stringify(status) };
-        }
-        if (scenario.kind === "refresh") {
-          const manifest = await buildIndex(ctx.workspace, "changed");
-          return { status: "ok", text: JSON.stringify(manifest) };
-        }
-        if (scenario.kind === "files") {
-          const rows = await queryFiles(ctx.workspace, scenario.query, 20);
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "symbols") {
-          const rows = await querySymbols(ctx.workspace, scenario.query, 20);
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "search") {
-          const rows = await queryChunks(ctx.workspace, scenario.query, 10, { prefer_code: true });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "lookup") {
-          const rows = await lookupIndex(ctx.workspace, scenario.query, { prefer_code: true, intent: "code" });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "web_search") {
-          const rows = await webSearch(ctx.workspace, { query: scenario.query, limit: 5, timeout_ms: 4_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "fetch_url") {
-          const rows = await fetchUrl({ url: scenario.query, format: "markdown", timeout_ms: 4_000, max_bytes: 8_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "diagnostics") {
-          const rows = diagnostics.getDiagnostics();
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "git_status") {
-          const rows = gitStatus(ctx.workspace, { timeout_ms: 5_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "git_log") {
-          const rows = gitLog(ctx.workspace, { limit: 10, timeout_ms: 8_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "git_diff") {
-          const rows = gitDiff(ctx.workspace, { staged: false, timeout_ms: 5_000, max_bytes: 100_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "git_show") {
-          const rows = gitShow(ctx.workspace, { rev: "HEAD", timeout_ms: 8_000, max_bytes: 100_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        if (scenario.kind === "gh_lookup") {
-          const rows = await ghLookup(ctx.workspace, { repo: scenario.query, kind: "repo_context", limit: 3, timeout_ms: 10_000 });
-          return { status: "ok", text: JSON.stringify(rows) };
-        }
-        const rows = await discoverIndex(ctx.workspace, scenario.query, {
-          files_limit: 20,
-          symbols_limit: 20,
-          search_limit: 10,
-          prefer_code: true,
-        });
-        return { status: "ok", text: JSON.stringify(rows) };
-      } catch (error) {
-        return { status: "error", text: "", reason: String(error) };
-      }
-    },
-  };
-}
-
-function createShellAdapter(): Adapter {
-  return {
-    id: "shell-tools",
-    label: "Shell tool workflow",
-    prepare: async () => {
-      return;
-    },
-    run: async (ctx, scenario) => {
-      if (scenario.kind === "status") {
-        const first = runCommand("ls", ["-la"], ctx.workspace);
-        const second = runCommand("git", ["status", "--short"], ctx.workspace);
-        const third = runCommand("find", [".", "-type", "f"], ctx.workspace);
-        if (first.status !== "ok") return first;
-        if (second.status !== "ok") return second;
-        if (third.status !== "ok") return third;
-        return { status: "ok", text: `${first.text}\n${second.text}\n${third.text}`.trim() };
-      }
-
-      if (scenario.kind === "refresh") {
-        return { status: "unsupported", text: "", reason: "no index refresh equivalent in shell baseline" };
-      }
-
-      if (scenario.kind === "files") {
-        return runCommand("find", [".", "-type", "f", "-iname", `*${scenario.query}*`], ctx.workspace);
-      }
-
-      if (scenario.kind === "symbols") {
-        const escaped = escapeRegex(scenario.query);
-        return runCommand(
-          "rg",
-          ["-n", `(function|class|def|const|type|interface).*${escaped}`, ".", "--max-count", "20"],
-          ctx.workspace,
-          [0, 1],
-        );
-      }
-
-      if (scenario.kind === "search") {
-        return runCommand("rg", ["-n", scenario.query, ".", "--max-count", "10"], ctx.workspace, [0, 1]);
-      }
-
-      if (scenario.kind === "lookup") {
-        return runCommand("rg", ["-n", "buildIndex", ".", "--max-count", "20"], ctx.workspace, [0, 1]);
-      }
-
-      if (scenario.kind === "web_search") {
-        return runCommand(
-          "curl",
-          ["-sL", `https://duckduckgo.com/html/?q=${encodeURIComponent(scenario.query)}`],
-          ctx.workspace,
-          [0],
-        );
-      }
-
-      if (scenario.kind === "fetch_url") {
-        return runCommand("curl", ["-sL", scenario.query], ctx.workspace, [0]);
-      }
-
-      if (scenario.kind === "diagnostics") {
-        return { status: "unsupported", text: "", reason: "no equivalent tool in shell baseline" };
-      }
-
-      if (scenario.kind === "git_status") {
-        return runCommand("git", ["status", "--short", "--branch"], ctx.workspace);
-      }
-
-      if (scenario.kind === "git_log") {
-        return runCommand("git", ["log", "-n", "10", "--oneline"], ctx.workspace);
-      }
-
-      if (scenario.kind === "git_diff") {
-        return runCommand("git", ["diff"], ctx.workspace);
-      }
-
-      if (scenario.kind === "git_show") {
-        return runCommand("git", ["show", "--name-only", "HEAD"], ctx.workspace);
-      }
-
-      if (scenario.kind === "gh_lookup") {
-        const repoRef = scenario.query;
-        const repoName = repoRef.split("/").pop() ?? "repo";
-        const target = `/tmp/${repoName}`;
-        const clone = runCommand("git", ["clone", "--depth", "1", `https://github.com/${repoRef}.git`, target], ctx.workspace, [0, 128]);
-        if (clone.status !== "ok") {
-          const fetch = runCommand("git", ["-C", target, "fetch", "--depth", "1", "origin"], ctx.workspace, [0]);
-          if (fetch.status !== "ok") return fetch;
-        }
-        return runCommand("rg", ["-n", "function|class|interface", target, "--max-count", "20"], ctx.workspace, [0, 1]);
-      }
-
-      const tokens = queryTokens(scenario.query);
-      const findResults: ScenarioRun[] = [];
-      const symbolResults: ScenarioRun[] = [];
-      for (const token of tokens) {
-        const files = runCommand("find", [".", "-type", "f", "-iname", `*${token}*`], ctx.workspace);
-        if (files.status !== "ok") return files;
-        findResults.push(files);
-
-        const symbols = runCommand(
-          "rg",
-          ["-n", `(function|class|def|const|type|interface).*${escapeRegex(token)}`, ".", "--max-count", "20"],
-          ctx.workspace,
-          [0, 1],
-        );
-        if (symbols.status !== "ok") return symbols;
-        symbolResults.push(symbols);
-      }
-
-      const code = runCommand("rg", ["-n", tokens.map(escapeRegex).join("|"), ".", "--max-count", "20"], ctx.workspace, [0, 1]);
-      if (code.status !== "ok") return code;
-      return {
-        status: "ok",
-        text: [...findResults.map((item) => item.text), ...symbolResults.map((item) => item.text), code.text].join("\n").trim(),
-      };
-    },
-  };
 }
 
 function timeoutForScenario(scenario: Scenario): number {
@@ -561,45 +346,56 @@ function createAgentAdapter(agent: AgentId, mode: McpMode): Adapter {
   return {
     id,
     label,
-    prepare: async (ctx) => {
+    prepare: (ctx) => {
       const probeCmd = agent;
       const probe = runCommand(probeCmd, ["--help"], ctx.workspace, [0, 1]);
       if (probe.status !== "ok") {
         blockedReason = `${agent} CLI unavailable`;
       }
+      return Promise.resolve();
     },
-    run: async (ctx, scenario) => {
+    run: (ctx, scenario) => {
       if (blockedReason) {
-        return { status: "unsupported", text: "", reason: blockedReason };
+        return Promise.resolve({ status: "unsupported", text: "", reason: blockedReason });
       }
       const prompt = makePrompt(scenario, mode);
       const timeoutMs = timeoutForScenario(scenario);
 
       if (agent === "codex") {
         const base = ["--dangerously-bypass-approvals-and-sandbox"];
-        const args = scenario.kind === "web_search" ? [...base, "--search", "exec", prompt] : [...base, "exec", prompt];
+        const args =
+          scenario.kind === "web_search"
+            ? [...base, "--search", "exec", prompt]
+            : [...base, "exec", prompt];
         const run = runCommand("codex", args, ctx.workspace, [0], timeoutMs);
         if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
-          return { status: "unsupported", text: "", reason: "codex timeout" };
+          return Promise.resolve({ status: "unsupported", text: "", reason: "codex timeout" });
         }
-        return run;
+        return Promise.resolve(run);
       }
 
       if (agent === "claude") {
-        const args = ["-p", "--output-format", "text", "--permission-mode", "bypassPermissions", prompt];
+        const args = [
+          "-p",
+          "--output-format",
+          "text",
+          "--permission-mode",
+          "bypassPermissions",
+          prompt,
+        ];
         const run = runCommand("claude", args, ctx.workspace, [0], timeoutMs);
         if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
-          return { status: "unsupported", text: "", reason: "claude timeout" };
+          return Promise.resolve({ status: "unsupported", text: "", reason: "claude timeout" });
         }
-        return run;
+        return Promise.resolve(run);
       }
 
       const args = ["run", "--format", "default", prompt];
       const run = runCommand("opencode", args, ctx.workspace, [0], timeoutMs);
       if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
-        return { status: "unsupported", text: "", reason: "opencode timeout" };
+        return Promise.resolve({ status: "unsupported", text: "", reason: "opencode timeout" });
       }
-      return run;
+      return Promise.resolve(run);
     },
   };
 }
@@ -662,19 +458,27 @@ function toMarkdown(report: SuiteReport): string {
   lines.push("");
   lines.push(`Generated: ${report.generated_at}`);
   lines.push(`Workspace: ${report.config.workspace}`);
-  lines.push(`Iterations: cold=${report.config.cold_iterations}, warm=${report.config.warm_iterations}`);
+  lines.push(
+    `Iterations: cold=${String(report.config.cold_iterations)}, warm=${String(report.config.warm_iterations)}`,
+  );
   lines.push("");
   lines.push("## Environment");
   lines.push("");
   lines.push(`- Platform: ${report.environment.platform} (${report.environment.arch})`);
   lines.push(`- Node: ${report.environment.node}`);
   lines.push(`- Bun: ${report.environment.bun ?? "n/a"}`);
-  lines.push(`- CPU: ${report.environment.cpu_model} (${report.environment.cpu_cores} cores)`);
+  lines.push(
+    `- CPU: ${report.environment.cpu_model} (${String(report.environment.cpu_cores)} cores)`,
+  );
   lines.push("");
   lines.push("## Results");
   lines.push("");
-  lines.push("| Competitor | Scenario | Warm p50 (ms) | Warm p95 (ms) | Success | Relevance | Status |");
-  lines.push("|------------|----------|---------------|---------------|---------|-----------|--------|");
+  lines.push(
+    "| Competitor | Scenario | Warm p50 (ms) | Warm p95 (ms) | Success | Relevance | Status |",
+  );
+  lines.push(
+    "|------------|----------|---------------|---------------|---------|-----------|--------|",
+  );
 
   for (const competitor of report.competitors) {
     for (const scenario of report.scenarios) {
@@ -798,7 +602,7 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(`${String(error)}\n`);
   process.exitCode = 1;
 });

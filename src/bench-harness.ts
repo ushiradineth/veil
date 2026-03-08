@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+
 import { discoverIndex, getStatus, queryChunks, queryFiles, querySymbols } from "./indexer";
 
 type Case = {
@@ -18,7 +19,7 @@ type BenchmarkResult = {
   workspace: string;
   timestamp: string;
   warm_iterations: number;
-  metrics: Record<string, { cold: Record<string, number>; warm: Record<string, number> }>;
+  metrics: Partial<Record<string, { cold: Record<string, number>; warm: Record<string, number> }>>;
 };
 
 type ComparisonResult = {
@@ -32,7 +33,7 @@ type ComparisonResult = {
 
 const nowMs =
   typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function"
-    ? (): number => Number(Bun.nanoseconds()) / 1_000_000
+    ? (): number => Bun.nanoseconds() / 1_000_000
     : (): number => Date.now();
 
 function percentile(values: number[], p: number): number {
@@ -42,7 +43,11 @@ function percentile(values: number[], p: number): number {
   return sorted[idx] ?? 0;
 }
 
-function summarize(samples: Sample[], phase: "cold" | "warm", name: string): Record<string, number> {
+function summarize(
+  samples: Sample[],
+  phase: "cold" | "warm",
+  name: string,
+): Record<string, number> {
   const values = samples
     .filter((sample) => sample.phase === phase && sample.name === name)
     .map((sample) => sample.ms);
@@ -60,7 +65,11 @@ function summarize(samples: Sample[], phase: "cold" | "warm", name: string): Rec
   };
 }
 
-async function measure(caseDef: Case, iterations: number, phase: "cold" | "warm"): Promise<Sample[]> {
+async function measure(
+  caseDef: Case,
+  iterations: number,
+  phase: "cold" | "warm",
+): Promise<Sample[]> {
   const out: Sample[] = [];
   for (let i = 0; i < iterations; i++) {
     const start = nowMs();
@@ -74,18 +83,19 @@ async function measure(caseDef: Case, iterations: number, phase: "cold" | "warm"
 async function compareWithBaseline(
   current: BenchmarkResult,
   baselinePath: string,
-  threshold: number = 10
+  threshold = 10,
 ): Promise<ComparisonResult[]> {
   if (!existsSync(baselinePath)) {
     return [];
   }
 
   const baselineContent = await readFile(baselinePath, "utf-8");
-  const baseline: BenchmarkResult = JSON.parse(baselineContent);
+  const baseline = JSON.parse(baselineContent) as BenchmarkResult;
 
   const comparisons: ComparisonResult[] = [];
 
   for (const [metricName, metricData] of Object.entries(current.metrics)) {
+    if (!metricData) continue;
     const baselineMetric = baseline.metrics[metricName];
     if (!baselineMetric) continue;
 
@@ -94,7 +104,7 @@ async function compareWithBaseline(
       const currentP95 = metricData[phase].p95_ms;
       const baselineP95 = baselineMetric[phase].p95_ms;
 
-      if (baselineP95 === 0) continue;
+      if (!currentP95 || !baselineP95) continue;
 
       const changePct = ((currentP95 - baselineP95) / baselineP95) * 100;
       const regression = changePct > threshold;
@@ -118,8 +128,11 @@ async function main(): Promise<void> {
   const workspace = workspaceArgIndex >= 0 ? process.argv[workspaceArgIndex + 1] : process.cwd();
   const warmArgIndex = process.argv.indexOf("--warm");
   const warmIterationsRaw = warmArgIndex >= 0 ? Number(process.argv[warmArgIndex + 1]) : 50;
-  const warmIterations = Number.isFinite(warmIterationsRaw) && warmIterationsRaw > 0 ? Math.floor(warmIterationsRaw) : 50;
-  
+  const warmIterations =
+    Number.isFinite(warmIterationsRaw) && warmIterationsRaw > 0
+      ? Math.floor(warmIterationsRaw)
+      : 50;
+
   const saveBaseline = process.argv.includes("--save-baseline");
   const compareBaseline = process.argv.includes("--compare");
   const baselinePath = join(import.meta.dir, "../.agents/benchmarks/baseline.json");
@@ -127,7 +140,10 @@ async function main(): Promise<void> {
   const cases: Case[] = [
     { name: "status", run: async () => getStatus(workspace) },
     { name: "files:homebrew", run: async () => queryFiles(workspace, "homebrew", 20) },
-    { name: "symbols:managedInstallsEnabled", run: async () => querySymbols(workspace, "managedInstallsEnabled", 20) },
+    {
+      name: "symbols:managedInstallsEnabled",
+      run: async () => querySymbols(workspace, "managedInstallsEnabled", 20),
+    },
     {
       name: "search:pnpm install",
       run: async () => queryChunks(workspace, "pnpm install", 10, { prefer_code: true }),
@@ -138,15 +154,25 @@ async function main(): Promise<void> {
     },
     {
       name: "search:path+lang filter",
-      run: async () => queryChunks(workspace, "build with installs", 10, { prefer_code: true, path_prefix: "just", language: "text" }),
+      run: async () =>
+        queryChunks(workspace, "build with installs", 10, {
+          prefer_code: true,
+          path_prefix: "just",
+          language: "text",
+        }),
     },
     {
       name: "search:noisy prompt",
       run: async () =>
-        queryChunks(workspace, "without editing files find where homebrew pnpm build is configured", 10, {
-          prefer_code: true,
-          intent: "code",
-        }),
+        queryChunks(
+          workspace,
+          "without editing files find where homebrew pnpm build is configured",
+          10,
+          {
+            prefer_code: true,
+            intent: "code",
+          },
+        ),
     },
     {
       name: "discover:homebrew pnpm build",
@@ -168,7 +194,8 @@ async function main(): Promise<void> {
     samples.push(...(await measure(caseDef, warmIterations, "warm")));
   }
 
-  const metrics: Record<string, { cold: Record<string, number>; warm: Record<string, number> }> = {};
+  const metrics: Record<string, { cold: Record<string, number>; warm: Record<string, number> }> =
+    {};
   for (const caseDef of cases) {
     metrics[caseDef.name] = {
       cold: summarize(samples, "cold", caseDef.name),
@@ -193,24 +220,26 @@ async function main(): Promise<void> {
   // Compare with baseline if requested
   if (compareBaseline) {
     const comparisons = await compareWithBaseline(result, baselinePath);
-    
+
     if (comparisons.length === 0) {
       console.error("⚠ No baseline found for comparison");
     } else {
       const regressions = comparisons.filter((c) => c.regression);
-      
+
       console.error("\n=== Benchmark Comparison ===");
       for (const comp of comparisons) {
         const symbol = comp.regression ? "✗" : "✓";
         const color = comp.regression ? "\x1b[31m" : "\x1b[32m";
         const reset = "\x1b[0m";
         console.error(
-          `${color}${symbol}${reset} ${comp.metric} (${comp.phase}): ${comp.baseline.toFixed(2)}ms → ${comp.current.toFixed(2)}ms (${comp.change_pct > 0 ? "+" : ""}${comp.change_pct}%)`
+          `${color}${symbol}${reset} ${comp.metric} (${comp.phase}): ${comp.baseline.toFixed(2)}ms -> ${comp.current.toFixed(2)}ms (${comp.change_pct > 0 ? "+" : ""}${String(comp.change_pct)}%)`,
         );
       }
-      
+
       if (regressions.length > 0) {
-        console.error(`\n\x1b[31m✗ ${regressions.length} regression(s) detected (>10% slower)\x1b[0m`);
+        console.error(
+          `\n\x1b[31m✗ ${String(regressions.length)} regression(s) detected (>10% slower)\x1b[0m`,
+        );
         process.exitCode = 1;
       } else {
         console.error(`\n\x1b[32m✓ No regressions detected\x1b[0m`);
@@ -222,7 +251,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(`${String(error)}\n`);
   process.exitCode = 1;
 });

@@ -172,7 +172,13 @@ export type GhLookupData = {
   status_exists?: boolean;
 };
 
-export type WebSearchProvider = "google" | "duckduckgo" | "wikipedia" | "github" | "reddit" | "deepwiki";
+export type WebSearchProvider =
+  | "google"
+  | "duckduckgo"
+  | "wikipedia"
+  | "github"
+  | "reddit"
+  | "deepwiki";
 
 export type WebSearchProviderTrace = {
   provider: WebSearchProvider;
@@ -206,7 +212,11 @@ export type WebSearchData = {
   };
 };
 
-export type WebSearchErrorCode = "invalid-query" | "provider-unavailable" | "timeout" | "internal-error";
+export type WebSearchErrorCode =
+  | "invalid-query"
+  | "provider-unavailable"
+  | "timeout"
+  | "internal-error";
 
 export type WebSearchError = {
   code: WebSearchErrorCode;

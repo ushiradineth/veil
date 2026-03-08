@@ -1,8 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+
+import { toBenchmarksMarkdown, toRunId } from "./bench-report";
+import { __internalBin } from "./bin";
+import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
+import { __internalFetchUrl, fetchUrl } from "./fetch-url";
+import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
   __internal,
   buildIndex,
@@ -14,11 +21,6 @@ import {
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
-import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
-import { __internalFetchUrl, fetchUrl } from "./fetch-url";
-import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
-import { __internalBin } from "./bin";
-import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -32,6 +34,19 @@ function git(repo: string, args: string[]): string {
     throw new Error(`Git command failed: git -C ${repo} ${args.join(" ")}\n${out.stderr}`);
   }
   return out.stdout.trim();
+}
+
+function must<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) {
+    throw new Error("Expected value to be defined");
+  }
+  return value;
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (input instanceof URL) return input.toString();
+  if (typeof input === "string") return input;
+  return input.url;
 }
 
 async function writeExecutableScript(path: string, body: string): Promise<void> {
@@ -143,7 +158,8 @@ describe("Phase 2: Query accuracy", () => {
       symbols_limit: 5,
       search_limit: 5,
     });
-    const hasResults = result.files.length > 0 || result.symbols.length > 0 || result.chunks.length > 0;
+    const hasResults =
+      result.files.length > 0 || result.symbols.length > 0 || result.chunks.length > 0;
     expect(hasResults).toBe(true);
   });
 
@@ -152,8 +168,8 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.intent).toBe("code");
     expect(result.symbols.length > 0 || result.chunks.length > 0).toBe(true);
 
-    const firstSymbol = result.symbols[0];
-    if (firstSymbol) {
+    if (result.symbols.length > 0) {
+      const firstSymbol = result.symbols[0];
       expect(firstSymbol.score).toBeGreaterThan(0);
       expect(firstSymbol.reasons.length).toBeGreaterThan(0);
       expect(["high", "medium", "low"]).toContain(firstSymbol.confidence);
@@ -164,7 +180,7 @@ describe("Phase 2: Query accuracy", () => {
 
     for (const group of [result.files, result.symbols, result.chunks]) {
       for (let i = 0; i + 1 < group.length; i += 1) {
-        expect(group[i]!.score >= group[i + 1]!.score).toBe(true);
+        expect(group[i].score >= group[i + 1].score).toBe(true);
       }
       for (const row of group) {
         expect(row.reasons.length).toBeGreaterThan(0);
@@ -176,14 +192,15 @@ describe("Phase 2: Query accuracy", () => {
     const result = await lookupIndex(MEDIUM_REPO, "service process");
     for (const group of [result.files, result.symbols, result.chunks]) {
       for (let i = 0; i + 1 < group.length; i += 1) {
-        expect(group[i]!.score >= group[i + 1]!.score).toBe(true);
+        expect(group[i].score >= group[i + 1].score).toBe(true);
       }
     }
   });
 
   test("Web search parses Google provider results", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("google.com/search")) {
         return new Response(
           '<a href="/url?q=https%3A%2F%2Fexample.com%2Fa&amp;sa=U"><h3>Example A</h3></a>',
@@ -193,25 +210,38 @@ describe("Phase 2: Query accuracy", () => {
       return new Response("{}", { status: 503 });
     }) as unknown as typeof fetch;
 
-    const result = await webSearch(MEDIUM_REPO, { query: "example query", fetch_impl: mockFetch, limit: 3, timeout_ms: 600 });
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "example query",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 600,
+    });
     expect(result.meta.ok).toBe(true);
     expect(result.error).toBeNull();
     expect(result.data).not.toBeNull();
-    expect(result.data!.results[0]!.title).toBe("Example A");
-    expect(result.data!.debug).toBeUndefined();
+    const data = must(result.data);
+    expect(data.results[0]?.title).toBe("Example A");
+    expect(data.debug).toBeUndefined();
   });
 
   test("Web search uses Google fallback path when SERP is unparseable", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("google.com/search")) {
-        return new Response("<html>blocked</html>", { status: 200, headers: { "content-type": "text/html" } });
-      }
-      if (url.includes("html.duckduckgo.com/html/")) {
-        return new Response('<a class="result__a" href="https://example.com/fallback">Fallback Result</a>', {
+        return new Response("<html>blocked</html>", {
           status: 200,
           headers: { "content-type": "text/html" },
         });
+      }
+      if (url.includes("html.duckduckgo.com/html/")) {
+        return new Response(
+          '<a class="result__a" href="https://example.com/fallback">Fallback Result</a>',
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        );
       }
       return new Response("{}", { status: 503 });
     }) as unknown as typeof fetch;
@@ -225,14 +255,20 @@ describe("Phase 2: Query accuracy", () => {
     });
     expect(result.meta.ok).toBe(true);
     expect(result.error).toBeNull();
-    expect(result.data?.debug?.provider_trace.some((trace) => trace.provider === "google" && trace.ok)).toBe(true);
+    expect(
+      result.data?.debug?.provider_trace.some((trace) => trace.provider === "google" && trace.ok),
+    ).toBe(true);
   });
 
   test("Web search parses GitHub provider results", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("google.com/search")) {
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("api.duckduckgo.com")) {
         return new Response(JSON.stringify({ RelatedTopics: [] }), {
@@ -241,11 +277,22 @@ describe("Phase 2: Query accuracy", () => {
         });
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(["q", [], [], []]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("api.github.com/search/repositories")) {
         return new Response(
-          JSON.stringify({ items: [{ full_name: "owner/repo", html_url: "https://github.com/owner/repo", description: "Repo" }] }),
+          JSON.stringify({
+            items: [
+              {
+                full_name: "owner/repo",
+                html_url: "https://github.com/owner/repo",
+                description: "Repo",
+              },
+            ],
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -255,15 +302,22 @@ describe("Phase 2: Query accuracy", () => {
       });
     }) as unknown as typeof fetch;
 
-    const result = await webSearch(MEDIUM_REPO, { query: "owner repo", fetch_impl: mockFetch, limit: 3, timeout_ms: 800 });
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "owner repo",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 800,
+    });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.results.some((row) => row.url === "https://github.com/owner/repo")).toBe(true);
+    const data = must(result.data);
+    expect(data.results.some((row) => row.url === "https://github.com/owner/repo")).toBe(true);
   });
 
   test("Web search parses Reddit provider results", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("reddit.com/search.json")) {
         return new Response(
           JSON.stringify({
@@ -283,7 +337,10 @@ describe("Phase 2: Query accuracy", () => {
         );
       }
       if (url.includes("google.com/search")) {
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("api.duckduckgo.com")) {
         return new Response(JSON.stringify({ RelatedTopics: [] }), {
@@ -292,23 +349,36 @@ describe("Phase 2: Query accuracy", () => {
         });
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(["q", [], [], []]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("api.github.com/search/repositories")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       return new Response("{}", { status: 500 });
     }) as unknown as typeof fetch;
 
-    const result = await webSearch(MEDIUM_REPO, { query: "typescript reddit", fetch_impl: mockFetch, limit: 3, timeout_ms: 800 });
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "typescript reddit",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 800,
+    });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.results.some((row) => row.url.includes("reddit.com/r/typescript"))).toBe(true);
+    const data = must(result.data);
+    expect(data.results.some((row) => row.url.includes("reddit.com/r/typescript"))).toBe(true);
   });
 
   test("Web search parses DeepWiki provider results", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("html.duckduckgo.com/html/") && url.includes("site%3Adeepwiki.com")) {
         return new Response(
           '<a class="result__a" href="https://deepwiki.com/kubernetes/ingress-nginx">Ingress Docs</a>',
@@ -316,10 +386,16 @@ describe("Phase 2: Query accuracy", () => {
         );
       }
       if (url.includes("html.duckduckgo.com/html/")) {
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("google.com/search")) {
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("api.duckduckgo.com")) {
         return new Response(JSON.stringify({ RelatedTopics: [] }), {
@@ -328,13 +404,22 @@ describe("Phase 2: Query accuracy", () => {
         });
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(["q", [], [], []]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("api.github.com/search/repositories")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("reddit.com/search.json")) {
-        return new Response(JSON.stringify({ data: { children: [] } }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ data: { children: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       return new Response("{}", { status: 500 });
     }) as unknown as typeof fetch;
@@ -348,16 +433,23 @@ describe("Phase 2: Query accuracy", () => {
     });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.results.some((row) => row.url.startsWith("https://deepwiki.com/"))).toBe(true);
-    expect(result.data?.debug?.provider_trace.some((trace) => trace.provider === "deepwiki" && trace.ok)).toBe(true);
+    const data = must(result.data);
+    expect(data.results.some((row) => row.url.startsWith("https://deepwiki.com/"))).toBe(true);
+    expect(
+      result.data?.debug?.provider_trace.some((trace) => trace.provider === "deepwiki" && trace.ok),
+    ).toBe(true);
   });
 
   test("Web search keeps parallel provider merge without early cancel", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("google.com/search")) {
         await Bun.sleep(80);
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("html.duckduckgo.com/html/")) {
         return new Response(
@@ -366,17 +458,31 @@ describe("Phase 2: Query accuracy", () => {
         );
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(["q", [], [], []]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("api.github.com/search/repositories")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("reddit.com/search.json")) {
         await Bun.sleep(20);
         return new Response(
           JSON.stringify({
             data: {
-              children: [{ data: { title: "Reddit Result", permalink: "/r/dev/comments/1/reddit/", selftext: "hint" } }],
+              children: [
+                {
+                  data: {
+                    title: "Reddit Result",
+                    permalink: "/r/dev/comments/1/reddit/",
+                    selftext: "hint",
+                  },
+                },
+              ],
             },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -385,16 +491,23 @@ describe("Phase 2: Query accuracy", () => {
       return new Response("{}", { status: 500 });
     }) as unknown as typeof fetch;
 
-    const result = await webSearch(MEDIUM_REPO, { query: "parallel merge", fetch_impl: mockFetch, limit: 5, timeout_ms: 500 });
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "parallel merge",
+      fetch_impl: mockFetch,
+      limit: 5,
+      timeout_ms: 500,
+    });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.results.some((row) => row.url.includes("example.com/duck"))).toBe(true);
-    expect(result.data!.results.some((row) => row.url.includes("reddit.com/r/dev"))).toBe(true);
+    const data = must(result.data);
+    expect(data.results.some((row) => row.url.includes("example.com/duck"))).toBe(true);
+    expect(data.results.some((row) => row.url.includes("reddit.com/r/dev"))).toBe(true);
   });
 
   test("Web search decodes DuckDuckGo redirect URLs", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("html.duckduckgo.com/html/")) {
         return new Response(
           '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgateway-api.sigs.k8s.io%2Fguide">Gateway API</a>',
@@ -402,29 +515,52 @@ describe("Phase 2: Query accuracy", () => {
         );
       }
       if (url.includes("google.com/search")) {
-        return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", [], [], []]), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(["q", [], [], []]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("api.github.com/search/repositories")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.includes("reddit.com/search.json")) {
-        return new Response(JSON.stringify({ data: { children: [] } }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ data: { children: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
-      return new Response(JSON.stringify({ RelatedTopics: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ RelatedTopics: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }) as unknown as typeof fetch;
 
-    const result = await webSearch(MEDIUM_REPO, { query: "gateway api", fetch_impl: mockFetch, limit: 3, timeout_ms: 500 });
+    const result = await webSearch(MEDIUM_REPO, {
+      query: "gateway api",
+      fetch_impl: mockFetch,
+      limit: 3,
+      timeout_ms: 500,
+    });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.results.some((row) => row.url === "https://gateway-api.sigs.k8s.io/guide")).toBe(true);
+    expect(
+      must(result.data).results.some((row) => row.url === "https://gateway-api.sigs.k8s.io/guide"),
+    ).toBe(true);
   });
 
   test("Web search merges, dedupes, and keeps descending score", async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
+      await Promise.resolve();
       if (url.includes("google.com/search")) {
         return new Response(
           [
@@ -446,14 +582,25 @@ describe("Phase 2: Query accuracy", () => {
         );
       }
       if (url.includes("wikipedia.org")) {
-        return new Response(JSON.stringify(["q", ["Gamma"], ["Wiki desc"], ["https://example.com/gamma"]]), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify(["q", ["Gamma"], ["Wiki desc"], ["https://example.com/gamma"]]),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       if (url.includes("api.github.com/search/repositories")) {
         return new Response(
-          JSON.stringify({ items: [{ full_name: "owner/delta", html_url: "https://example.com/delta", description: "Delta" }] }),
+          JSON.stringify({
+            items: [
+              {
+                full_name: "owner/delta",
+                html_url: "https://example.com/delta",
+                description: "Delta",
+              },
+            ],
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -461,7 +608,13 @@ describe("Phase 2: Query accuracy", () => {
         JSON.stringify({
           data: {
             children: [
-              { data: { title: "Epsilon", permalink: "/r/dev/comments/1/test/", selftext: "epsilon" } },
+              {
+                data: {
+                  title: "Epsilon",
+                  permalink: "/r/dev/comments/1/test/",
+                  selftext: "epsilon",
+                },
+              },
             ],
           },
         }),
@@ -479,11 +632,11 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
 
-    const urls = result.data!.results.map((row) => row.url);
+    const urls = must(result.data).results.map((row) => row.url);
     expect(urls.filter((url) => url.includes("example.com/shared")).length).toBe(1);
     const detailed = result.data?.debug?.detailed_results ?? [];
     for (let i = 0; i + 1 < detailed.length; i += 1) {
-      expect(detailed[i]!.score >= detailed[i + 1]!.score).toBe(true);
+      expect(detailed[i].score >= detailed[i + 1].score).toBe(true);
     }
   });
 
@@ -525,7 +678,10 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Web search returns provider-unavailable when all providers fail", async () => {
-    const mockFetch = (async () => new Response("upstream unavailable", { status: 503 })) as unknown as typeof fetch;
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("upstream unavailable", { status: 503 }),
+      )) as unknown as typeof fetch;
     const result = await webSearch(MEDIUM_REPO, {
       query: "all fail",
       fetch_impl: mockFetch,
@@ -540,7 +696,10 @@ describe("Phase 2: Query accuracy", () => {
 
   test("Fetch URL prefers markdown and returns content", async () => {
     const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const accept = String((init?.headers as Record<string, string> | undefined)?.accept ?? "").toLowerCase();
+      const accept = (
+        (init?.headers as Record<string, string> | undefined)?.accept ?? ""
+      ).toLowerCase();
+      await Promise.resolve();
       expect(accept.includes("text/markdown")).toBe(true);
       return new Response("# Title\n\nBody", {
         status: 200,
@@ -567,12 +726,13 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL converts html to markdown on markdown format", async () => {
-    const mockFetch = (async () => {
-      return new Response('<h1>Hello</h1><p>See <a href="https://example.com">docs</a></p>', {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      });
-    }) as unknown as typeof fetch;
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response('<h1>Hello</h1><p>See <a href="https://example.com">docs</a></p>', {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      )) as unknown as typeof fetch;
 
     const result = await fetchUrl({
       url: "https://example.com/page",
@@ -615,12 +775,13 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL truncates oversized content", async () => {
-    const mockFetch = (async () => {
-      return new Response("x".repeat(1000), {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      });
-    }) as unknown as typeof fetch;
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("x".repeat(1000), {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      )) as unknown as typeof fetch;
 
     const result = await fetchUrl({
       url: "https://example.com/large",
@@ -633,12 +794,13 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL returns fetch-failed payload for non-OK response", async () => {
-    const mockFetch = (async () => {
-      return new Response("nope", {
-        status: 503,
-        headers: { "content-type": "text/plain" },
-      });
-    }) as unknown as typeof fetch;
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("nope", {
+          status: 503,
+          headers: { "content-type": "text/plain" },
+        }),
+      )) as unknown as typeof fetch;
 
     const result = await fetchUrl({
       url: "https://example.com/unavailable",
@@ -652,12 +814,13 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL converts markdown to text when text format is requested", async () => {
-    const mockFetch = (async () => {
-      return new Response("# Header\n\nParagraph", {
-        status: 200,
-        headers: { "content-type": "text/markdown" },
-      });
-    }) as unknown as typeof fetch;
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("# Header\n\nParagraph", {
+          status: 200,
+          headers: { "content-type": "text/markdown" },
+        }),
+      )) as unknown as typeof fetch;
 
     const result = await fetchUrl({
       url: "https://example.com/markdown",
@@ -672,7 +835,10 @@ describe("Phase 2: Query accuracy", () => {
 
   test("Fetch URL sends html accept header for html format", async () => {
     const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const accept = String((init?.headers as Record<string, string> | undefined)?.accept ?? "").toLowerCase();
+      const accept = (
+        (init?.headers as Record<string, string> | undefined)?.accept ?? ""
+      ).toLowerCase();
+      await Promise.resolve();
       expect(accept.includes("application/xhtml+xml")).toBe(true);
       return new Response("<main><h1>Raw</h1></main>", {
         status: 200,
@@ -690,9 +856,7 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL reports internal-error for non-timeout failures", async () => {
-    const mockFetch = (async () => {
-      throw new Error("network down");
-    }) as unknown as typeof fetch;
+    const mockFetch = (() => Promise.reject(new Error("network down"))) as unknown as typeof fetch;
 
     const result = await fetchUrl({
       url: "https://example.com/fail",
@@ -705,7 +869,7 @@ describe("Phase 2: Query accuracy", () => {
 
   test("Fetch URL internals cover helper branches", () => {
     expect(__internalFetchUrl.parseUrl("ftp://example.com")).toBeNull();
-    expect(__internalFetchUrl.decodeHtml("&amp;&lt;&gt;&quot;&#39;&nbsp;")).toBe('&<>"\' ');
+    expect(__internalFetchUrl.decodeHtml("&amp;&lt;&gt;&quot;&#39;&nbsp;")).toBe("&<>\"' ");
     expect(__internalFetchUrl.stripTags("<p>hi</p><br>")).toBe(" hi  ");
     expect(__internalFetchUrl.collapseWhitespace("a\r\n\n\n\tb")).toBe("a\n\n b");
     expect(__internalFetchUrl.chooseAccept("html")).toContain("application/xhtml+xml");
@@ -744,7 +908,7 @@ describe("Phase 2: Query accuracy", () => {
   });
 
   test("Fetch URL markdown fallback handles converter errors", () => {
-    const originalTranslate = __internalFetchUrl.NHM.translate;
+    const originalTranslate = __internalFetchUrl.NHM.translate.bind(__internalFetchUrl.NHM);
     __internalFetchUrl.NHM.translate = () => {
       throw new Error("translate fail");
     };
@@ -761,7 +925,6 @@ describe("Phase 2: Query accuracy", () => {
     expect(Number.isFinite(value)).toBe(true);
     expect(value).toBeGreaterThan(0);
   });
-
 });
 
 describe("Phase 3: Cache behavior", () => {
@@ -769,17 +932,30 @@ describe("Phase 3: Cache behavior", () => {
     const status = await getStatus(SMALL_REPO);
     expect(status.exists).toBe(true);
     expect(status.manifest).not.toBeNull();
-    expect(status.manifest!.file_count).toBeGreaterThan(0);
-    expect(status.manifest!.symbol_count).toBeGreaterThan(0);
-    expect(status.manifest!.chunk_count).toBeGreaterThan(0);
+    const manifest = must(status.manifest);
+    expect(manifest.file_count).toBeGreaterThan(0);
+    expect(manifest.symbol_count).toBeGreaterThan(0);
+    expect(manifest.chunk_count).toBeGreaterThan(0);
   });
 
   test("Discover refresh guard skips dirty-only staleness", () => {
     expect(
-      shouldRefreshDiscover({ exists: true, stale: true, reasons: ["workspace-dirty"], manifest: null, current_git_head: null }),
+      shouldRefreshDiscover({
+        exists: true,
+        stale: true,
+        reasons: ["workspace-dirty"],
+        manifest: null,
+        current_git_head: null,
+      }),
     ).toBe(false);
     expect(
-      shouldRefreshDiscover({ exists: true, stale: true, reasons: ["ttl-expired"], manifest: null, current_git_head: null }),
+      shouldRefreshDiscover({
+        exists: true,
+        stale: true,
+        reasons: ["ttl-expired"],
+        manifest: null,
+        current_git_head: null,
+      }),
     ).toBe(true);
     expect(
       shouldRefreshDiscover({
@@ -818,7 +994,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "b.ts"), "export const beta = () => 'base-beta'\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     await buildIndex(repo, "full");
 
@@ -897,14 +1081,23 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "a.ts"), "export const a = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await writeFile(join(repo, "a.ts"), "export const a = 2\n");
 
     const result = gitStatus(repo);
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.dirty).toBe(true);
-    expect(result.data!.changed.unstaged).toBeGreaterThan(0);
+    const data = must(result.data);
+    expect(data.dirty).toBe(true);
+    expect(data.changed.unstaged).toBeGreaterThan(0);
   });
 
   test("Git status counts untracked files", async () => {
@@ -913,7 +1106,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "u.ts"), "export const u = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await writeFile(join(repo, "new.ts"), "export const n = 1\n");
 
     const result = gitStatus(repo);
@@ -921,7 +1122,7 @@ describe("Phase 3: Cache behavior", () => {
     expect((result.data?.changed.untracked ?? 0) > 0).toBe(true);
   });
 
-  test("Git status supports forced Date.now fallback clock", async () => {
+  test("Git status supports forced Date.now fallback clock", () => {
     const prev = process.env.VEIL_FORCE_DATE_NOW ?? "0";
     process.env.VEIL_FORCE_DATE_NOW = prev;
     let toggled = false;
@@ -947,15 +1148,31 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "log.ts"), "export const log = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "first"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "first",
+    ]);
     await writeFile(join(repo, "log.ts"), "export const log = 2\n");
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "second"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "second",
+    ]);
 
     const result = gitLog(repo, { limit: 2 });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.entries.length).toBeLessThan(3);
+    expect(must(result.data).entries.length).toBeLessThan(3);
   });
 
   test("Git diff includes unstaged changes", async () => {
@@ -964,13 +1181,21 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "b.ts"), "export const b = 'before'\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await writeFile(join(repo, "b.ts"), "export const b = 'after'\n");
 
     const result = gitDiff(repo, { path: "b.ts" });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.text.includes("after")).toBe(true);
+    expect(must(result.data).text.includes("after")).toBe(true);
   });
 
   test("Git diff rejects invalid path outside workspace", async () => {
@@ -979,7 +1204,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "p.ts"), "export const p = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitDiff(repo, { path: "../escape.ts" });
     expect(result.meta.ok).toBe(false);
@@ -992,7 +1225,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "rev.ts"), "export const rev = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitDiff(repo, { base: "HEAD bad" });
     expect(result.meta.ok).toBe(false);
@@ -1005,7 +1246,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "rev.ts"), "export const rev = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitDiff(repo, { base: "HEAD", head: "HEAD bad" });
     expect(result.meta.ok).toBe(false);
@@ -1018,7 +1267,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "show.ts"), "export const show = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitShow(repo, { rev: "" });
     expect(result.meta.ok).toBe(false);
@@ -1031,7 +1288,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "big.ts"), "export const big = 'a'\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await writeFile(join(repo, "big.ts"), `${"x".repeat(4000)}\n`);
 
     const result = gitDiff(repo, { path: "big.ts", max_bytes: 1024 });
@@ -1040,7 +1305,7 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.meta.warnings.length).toBeGreaterThan(0);
   });
 
-  test("Git status reports git-unavailable when command is missing", async () => {
+  test("Git status reports git-unavailable when command is missing", () => {
     const result = gitStatus(SMALL_REPO, { command: "git-missing-binary" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("git-unavailable");
@@ -1050,7 +1315,7 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-git-status-fail.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--is-inside-work-tree\" ]; then echo true; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--show-toplevel\" ]; then pwd; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--abbrev-ref\" ]; then exit 2; fi\nexit 0\n",
+      '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--abbrev-ref" ]; then exit 2; fi\nexit 0\n',
     );
     const result = gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
@@ -1061,7 +1326,7 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-git-top-fail.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--is-inside-work-tree\" ]; then echo true; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--show-toplevel\" ]; then exit 2; fi\nexit 0\n",
+      '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then exit 2; fi\nexit 0\n',
     );
     const result = gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
@@ -1072,7 +1337,7 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-git-bad-top.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--is-inside-work-tree\" ]; then echo true; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--show-toplevel\" ]; then echo /no/such/root; exit 0; fi\nexit 0\n",
+      '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then echo /no/such/root; exit 0; fi\nexit 0\n',
     );
     const result = gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
@@ -1094,7 +1359,7 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-git-log-fail.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--is-inside-work-tree\" ]; then echo true; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--show-toplevel\" ]; then pwd; exit 0; fi\nif [ \"$3\" = \"log\" ]; then exit 9; fi\nexit 0\n",
+      '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "log" ]; then exit 9; fi\nexit 0\n',
     );
     const result = gitLog(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
@@ -1113,7 +1378,7 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-git-diff-fail.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--is-inside-work-tree\" ]; then echo true; exit 0; fi\nif [ \"$3\" = \"rev-parse\" ] && [ \"$4\" = \"--show-toplevel\" ]; then pwd; exit 0; fi\nif [ \"$3\" = \"diff\" ]; then exit 7; fi\nexit 0\n",
+      '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "diff" ]; then exit 7; fi\nexit 0\n',
     );
     const result = gitDiff(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
@@ -1126,7 +1391,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "base.ts"), "export const base = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitDiff(repo, { base: "HEAD", name_only: true });
     expect(result.meta.ok).toBe(true);
@@ -1139,7 +1412,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "show.ts"), "export const show = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitShow(repo, { rev: "notarev123" });
     expect(result.meta.ok).toBe(false);
@@ -1152,7 +1433,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "unsafe.ts"), "export const unsafe = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitDiff(repo, { base: "HEAD:foo" });
     expect(result.meta.ok).toBe(false);
@@ -1165,7 +1454,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "show.ts"), "export const show = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitShow(repo, { rev: "HEAD", path: "/abs/path.ts" });
     expect(result.meta.ok).toBe(false);
@@ -1176,10 +1473,19 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-gh-ok.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo gh-2; exit 0; fi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then echo ok; exit 0; fi\nif [ \"$1\" = \"pr\" ]; then echo pr-list; exit 0; fi\nif [ \"$1\" = \"run\" ]; then echo check-list; exit 0; fi\nexit 1\n",
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nif [ "$1" = "pr" ]; then echo pr-list; exit 0; fi\nif [ "$1" = "run" ]; then echo check-list; exit 0; fi\nexit 1\n',
     );
-    const prs = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "prs", query: "is:open", command: script });
-    const checks = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "checks", command: script });
+    const prs = await ghLookup(SMALL_REPO, {
+      repo: "owner/repo",
+      kind: "prs",
+      query: "is:open",
+      command: script,
+    });
+    const checks = await ghLookup(SMALL_REPO, {
+      repo: "owner/repo",
+      kind: "checks",
+      command: script,
+    });
     expect(prs.meta.ok).toBe(true);
     expect(prs.data?.text.includes("pr-list")).toBe(true);
     expect(checks.meta.ok).toBe(true);
@@ -1190,9 +1496,13 @@ describe("Phase 3: Cache behavior", () => {
     const script = join(TEMP_TEST_DIR, "mock-gh-fail-after-auth.sh");
     await writeExecutableScript(
       script,
-      "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo gh-2; exit 0; fi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then echo ok; exit 0; fi\nexit 5\n",
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nexit 5\n',
     );
-    const result = await ghLookup(SMALL_REPO, { repo: "owner/repo", kind: "issues", command: script });
+    const result = await ghLookup(SMALL_REPO, {
+      repo: "owner/repo",
+      kind: "issues",
+      command: script,
+    });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
   });
@@ -1203,12 +1513,20 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "show.ts"), "export const show = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "show"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "show",
+    ]);
 
     const result = gitShow(repo, { rev: "HEAD", patch: false });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.text.includes("Commit:")).toBe(true);
+    expect(must(result.data).text.includes("Commit:")).toBe(true);
   });
 
   test("Git status works from repository subdirectory workspace", async () => {
@@ -1218,7 +1536,15 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(subdir, "mod.ts"), "export const mod = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
 
     const result = gitStatus(subdir);
     expect(result.meta.ok).toBe(true);
@@ -1231,15 +1557,31 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "range.ts"), "export const value = 1\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "first"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "first",
+    ]);
     await writeFile(join(repo, "range.ts"), "export const value = 2\n");
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "second"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "second",
+    ]);
 
     const result = gitDiff(repo, { base: "HEAD~1", head: "HEAD", name_only: true });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
-    expect(result.data!.text.includes("range.ts")).toBe(true);
+    expect(must(result.data).text.includes("range.ts")).toBe(true);
   });
 
   describe("Git command injection protection", () => {
@@ -1250,7 +1592,15 @@ describe("Phase 3: Cache behavior", () => {
       await writeFile(join(repo, "test.ts"), "export const test = 1\n");
       git(repo, ["init"]);
       git(repo, ["add", "."]);
-      git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+      git(repo, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "init",
+      ]);
     });
 
     const injectionVectors = [
@@ -1300,7 +1650,15 @@ describe("Phase 3: Cache behavior", () => {
       await writeFile(join(repo, "test.ts"), "export const test = 1\n");
       git(repo, ["init"]);
       git(repo, ["add", "."]);
-      git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+      git(repo, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "init",
+      ]);
     });
 
     test("Git diff rejects path with null byte", () => {
@@ -1465,7 +1823,9 @@ describe("Phase 4: Edge cases", () => {
     await buildIndex(repo, "full");
 
     const manifestPath = join(repo, ".veil", "index", "manifest.json");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    const manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as {
+      schema_version: string;
+    };
     manifest.schema_version = "999";
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
@@ -1481,17 +1841,25 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(join(repo, "delta.ts"), "export const delta = 4\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await buildIndex(repo, "full");
 
     // Read the actual valid file record from the index
     const filesIndexPath = join(repo, ".veil", "index", "files.ndjson");
     const validContent = await readFile(filesIndexPath, "utf-8");
     const validLine = validContent.split("\n").find((line) => line.includes("delta.ts")) ?? "";
-    
+
     // Verify we found a valid line
     expect(validLine.length).toBeGreaterThan(0);
-    
+
     // Create NDJSON with malformed lines interspersed with valid lines
     const malformedContent = `{broken1\n${validLine}\n{broken2}\n{broken3}\n`;
     await writeFile(filesIndexPath, malformedContent);
@@ -1513,7 +1881,15 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(join(repo, "epsilon.ts"), "export const epsilon = 5\n");
     git(repo, ["init"]);
     git(repo, ["add", "."]);
-    git(repo, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
     await buildIndex(repo, "full");
 
     // Run concurrent operations - testing that they don't crash or corrupt
@@ -1537,7 +1913,7 @@ describe("Phase 4.5: Query accuracy verification", () => {
     const result = await lookupIndex(MEDIUM_REPO, "service process");
     for (const group of [result.files, result.symbols, result.chunks]) {
       for (let i = 0; i + 1 < group.length; i += 1) {
-        expect(group[i]!.score >= group[i + 1]!.score).toBe(true);
+        expect(group[i].score >= group[i + 1].score).toBe(true);
       }
     }
   });
@@ -1596,7 +1972,7 @@ describe("Phase 4.5: Query accuracy verification", () => {
     const files = await queryFiles(SMALL_REPO, nonexistentQuery, 10);
     const symbols = await querySymbols(SMALL_REPO, nonexistentQuery, 10);
     const chunks = await queryChunks(SMALL_REPO, nonexistentQuery, 10);
-    
+
     expect(files.length).toBe(0);
     expect(symbols.length).toBe(0);
     expect(chunks.length).toBe(0);
@@ -1748,7 +2124,7 @@ describe("Phase 5: TopKHeap correctness verification", () => {
       heap.insert(i, score);
     }
     const result = heap.toSortedArray();
-    const topScores = scores.sort((a, b) => b - a).slice(0, 5);
+    scores.sort((a, b) => b - a).slice(0, 5);
     // The heap should contain the items with the top 5 scores
     expect(result.length).toBe(5);
   });
@@ -1759,10 +2135,10 @@ describe("Phase 6: Query cache optimization", () => {
     // Make many different queries to trigger cache eviction
     const queries = [];
     for (let i = 0; i < 150; i++) {
-      queries.push(queryFiles(SMALL_REPO, `unique-query-${i}`, 10));
+      queries.push(queryFiles(SMALL_REPO, `unique-query-${String(i)}`, 10));
     }
     await Promise.all(queries);
-    
+
     // Cache should not grow unbounded
     // The exact size depends on MAX_QUERY_CACHE_SIZE (100)
     // We just verify it doesn't crash and completes successfully
@@ -1772,17 +2148,17 @@ describe("Phase 6: Query cache optimization", () => {
   test("Repeated queries hit cache", async () => {
     // Clear diagnostics
     diagnostics.reset();
-    
+
     // First query - cache miss
     const files1 = await queryFiles(SMALL_REPO, "hello", 10);
     const snap1 = diagnostics.getDiagnostics();
     const misses1 = snap1.cache.query_cache_misses;
-    
+
     // Second query - should hit cache
     const files2 = await queryFiles(SMALL_REPO, "hello", 10);
     const snap2 = diagnostics.getDiagnostics();
     const misses2 = snap2.cache.query_cache_misses;
-    
+
     // Misses should not increase on second query
     expect(misses2).toBe(misses1);
     expect(files1.length).toBe(files2.length);
@@ -1859,9 +2235,18 @@ describe("Indexer internals", () => {
       intent: "code",
     } as const;
     const file = __internal.scoreFile("src/hello-world.ts", parsed as never);
-    const symbol = __internal.scoreSymbol({ path: "src/hello.ts", line: 1, kind: "function", name: "helloWorld" }, parsed as never);
+    const symbol = __internal.scoreSymbol(
+      { path: "src/hello.ts", line: 1, kind: "function", name: "helloWorld" },
+      parsed as never,
+    );
     const chunk = __internal.scoreChunk(
-      { id: "1", path: "src/hello.ts", start_line: 1, end_line: 1, content: "export const helloWorld = true" },
+      {
+        id: "1",
+        path: "src/hello.ts",
+        start_line: 1,
+        end_line: 1,
+        content: "export const helloWorld = true",
+      },
       parsed as never,
     );
     expect(file.reasons.length).toBeGreaterThan(0);
@@ -1972,7 +2357,6 @@ describe("Profiler utilities", () => {
     const snap = d.getDiagnostics();
     expect(snap.latency.max_ms).toBeGreaterThanOrEqual(0);
   });
-
 });
 
 describe("Benchmark report generation", () => {

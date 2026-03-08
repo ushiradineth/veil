@@ -1,5 +1,11 @@
-import type { WebSearchDebugResult, WebSearchProvider, WebSearchProviderTrace, WebSearchResponse, WebSearchResult } from "./types";
 import { errorMessage, isAbortLike } from "./errors";
+import type {
+  WebSearchDebugResult,
+  WebSearchProvider,
+  WebSearchProviderTrace,
+  WebSearchResponse,
+  WebSearchResult,
+} from "./types";
 import { clampInt, trimQuery } from "./validation";
 
 type DuckTopic = {
@@ -31,7 +37,7 @@ type RedditPost = {
 
 type RedditResponse = {
   data?: {
-    children?: Array<{ data?: RedditPost }>;
+    children?: { data?: RedditPost }[];
   };
 };
 
@@ -51,7 +57,12 @@ type ProviderOutcome = {
 
 type ProviderDef = {
   provider: WebSearchProvider;
-  run: (fetchImpl: typeof fetch, query: string, limit: number, signal: AbortSignal) => Promise<ProviderRawResult[]>;
+  run: (
+    fetchImpl: typeof fetch,
+    query: string,
+    limit: number,
+    signal: AbortSignal,
+  ) => Promise<ProviderRawResult[]>;
 };
 
 type ScoredResult = {
@@ -60,10 +71,17 @@ type ScoredResult = {
   url: string;
   snippet: string;
   score: number;
-  reasons: Array<{ label: string; detail: string }>;
+  reasons: { label: string; detail: string }[];
 };
 
-const PROVIDER_ORDER: WebSearchProvider[] = ["google", "duckduckgo", "wikipedia", "github", "reddit", "deepwiki"];
+const PROVIDER_ORDER: WebSearchProvider[] = [
+  "google",
+  "duckduckgo",
+  "wikipedia",
+  "github",
+  "reddit",
+  "deepwiki",
+];
 
 const PROVIDER_BASE_SCORE: Record<WebSearchProvider, number> = {
   google: 10,
@@ -87,7 +105,7 @@ const TRACKING_PARAMS = new Set([
 
 function nowMs(): number {
   if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
-    return Number(Bun.nanoseconds()) / 1_000_000;
+    return Bun.nanoseconds() / 1_000_000;
   }
   return Date.now();
 }
@@ -114,7 +132,7 @@ function normalizeUrl(raw: string): string {
   if (!trimmed) return "";
   try {
     const parsed = new URL(trimmed);
-    const kept: Array<[string, string]> = [];
+    const kept: [string, string][] = [];
     for (const [key, value] of parsed.searchParams.entries()) {
       if (!TRACKING_PARAMS.has(key.toLowerCase())) {
         kept.push([key, value]);
@@ -171,7 +189,21 @@ function scoreFor(provider: WebSearchProvider, rank: number): number {
 }
 
 function queryTerms(query: string): string[] {
-  const stopWords = new Set(["a", "an", "the", "to", "from", "for", "of", "in", "on", "with", "how", "do", "i"]);
+  const stopWords = new Set([
+    "a",
+    "an",
+    "the",
+    "to",
+    "from",
+    "for",
+    "of",
+    "in",
+    "on",
+    "with",
+    "how",
+    "do",
+    "i",
+  ]);
   const tokens = query
     .toLowerCase()
     .replace(/[^a-z0-9\s]+/g, " ")
@@ -206,12 +238,12 @@ function parseGoogleResults(html: string, limit: number): ProviderRawResult[] {
   const pattern = /<a href="\/url\?q=([^"&]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
   let match = pattern.exec(html);
   while (match && rows.length < limit) {
-    const rawUrl = cleanText(decodeURIComponent(decodeHtml(match[1] ?? "")));
+    const rawUrl = cleanText(decodeURIComponent(decodeHtml(match[1])));
     if (!rawUrl || rawUrl.includes("webcache.googleusercontent.com")) {
       match = pattern.exec(html);
       continue;
     }
-    const body = match[2] ?? "";
+    const body = match[2];
     const titleMatch = /<h3[^>]*>([\s\S]*?)<\/h3>/.exec(body);
     const title = cleanText(decodeHtml(stripTags(titleMatch?.[1] ?? "")));
     if (!title) {
@@ -264,8 +296,8 @@ function parseDuckHtmlResults(html: string, limit: number): ProviderRawResult[] 
   let match = pattern.exec(html);
 
   while (match && out.length < limit) {
-    const url = resolveResultUrl(match[1] ?? "");
-    const title = cleanText(decodeHtml(stripTags(match[2] ?? "")));
+    const url = resolveResultUrl(match[1]);
+    const title = cleanText(decodeHtml(stripTags(match[2])));
     if (!url || !title) {
       match = pattern.exec(html);
       continue;
@@ -279,12 +311,12 @@ function parseDuckHtmlResults(html: string, limit: number): ProviderRawResult[] 
 
 function parseDeepwikiResults(html: string, limit: number): ProviderRawResult[] {
   const out: ProviderRawResult[] = [];
-  const pattern = /<a[^>]*class="[^\"]*result__a[^\"]*"[^>]*href="([^\"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const pattern = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
   let match = pattern.exec(html);
 
   while (match && out.length < limit) {
-    const url = resolveResultUrl(match[1] ?? "");
-    const title = cleanText(decodeHtml(stripTags(match[2] ?? "")));
+    const url = resolveResultUrl(match[1]);
+    const title = cleanText(decodeHtml(stripTags(match[2])));
     const normalized = normalizeUrl(url);
     if (!title || !normalized.includes("deepwiki.com/")) {
       match = pattern.exec(html);
@@ -335,7 +367,7 @@ function parseGithubResults(payload: GithubResponse, limit: number): ProviderRaw
 }
 
 function parseRedditResults(payload: RedditResponse, limit: number): ProviderRawResult[] {
-  const children = Array.isArray(payload.data?.children) ? payload.data?.children ?? [] : [];
+  const children = Array.isArray(payload.data?.children) ? payload.data.children : [];
   const out: ProviderRawResult[] = [];
   for (const entry of children) {
     const post = entry.data;
@@ -406,7 +438,6 @@ function mergeOutcomes(
   for (const outcome of ordered) {
     for (let index = 0; index < outcome.results.length; index += 1) {
       const row = outcome.results[index];
-      if (!row) continue;
       const normalized = normalizeUrl(row.url);
       if (!normalized) continue;
       const lexical = relevanceScore(query, row);
@@ -417,7 +448,12 @@ function mergeOutcomes(
         url: row.url,
         snippet: row.snippet,
         score,
-        reasons: [{ label: `${outcome.provider}-rank`, detail: `Provider ${outcome.provider} rank ${index + 1}` }],
+        reasons: [
+          {
+            label: `${outcome.provider}-rank`,
+            detail: `Provider ${outcome.provider} rank ${String(index + 1)}`,
+          },
+        ],
       };
 
       const existing = deduped.get(normalized);
@@ -427,22 +463,28 @@ function mergeOutcomes(
       }
 
       if (incoming.score > existing.score) {
-        incoming.reasons.push({ label: "dedupe", detail: `Duplicate URL also seen in ${existing.provider}` });
+        incoming.reasons.push({
+          label: "dedupe",
+          detail: `Duplicate URL also seen in ${existing.provider}`,
+        });
         deduped.set(normalized, incoming);
         continue;
       }
 
-      existing.reasons.push({ label: "dedupe", detail: `Duplicate URL also seen in ${incoming.provider}` });
+      existing.reasons.push({
+        label: "dedupe",
+        detail: `Duplicate URL also seen in ${incoming.provider}`,
+      });
     }
   }
 
   const ranked = [...deduped.values()].sort((a, b) => {
-      const scoreCmp = b.score - a.score;
-      if (scoreCmp !== 0) return scoreCmp;
-      const providerCmp = PROVIDER_ORDER.indexOf(a.provider) - PROVIDER_ORDER.indexOf(b.provider);
-      if (providerCmp !== 0) return providerCmp;
-      return normalizeUrl(a.url).localeCompare(normalizeUrl(b.url));
-    });
+    const scoreCmp = b.score - a.score;
+    if (scoreCmp !== 0) return scoreCmp;
+    const providerCmp = PROVIDER_ORDER.indexOf(a.provider) - PROVIDER_ORDER.indexOf(b.provider);
+    if (providerCmp !== 0) return providerCmp;
+    return normalizeUrl(a.url).localeCompare(normalizeUrl(b.url));
+  });
 
   const domainCounts = new Map<string, number>();
   const rows: ScoredResult[] = [];
@@ -461,7 +503,8 @@ function mergeOutcomes(
     }
   }
 
-  const primary_provider = rows[0]?.provider ?? ordered.find((item) => item.ok)?.provider ?? "google";
+  const primary_provider =
+    rows.length > 0 ? rows[0].provider : (ordered.find((item) => item.ok)?.provider ?? "google");
 
   return {
     primary_provider,
@@ -479,7 +522,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     provider: "google",
     run: async (fetchImpl, query, limit, signal) => {
-      const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&num=${limit}`;
+      const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&num=${String(limit)}`;
       const response = await fetchImpl(url, {
         method: "GET",
         headers: {
@@ -507,7 +550,7 @@ const PROVIDERS: ProviderDef[] = [
         signal,
       });
       if (!fallbackResponse.ok) {
-        throw new Error(`http-${response.status || fallbackResponse.status}`);
+        throw new Error(`http-${String(response.status || fallbackResponse.status)}`);
       }
       const fallbackHtml = await fallbackResponse.text();
       const fallbackParsed = parseDuckHtmlResults(fallbackHtml, limit);
@@ -555,7 +598,7 @@ const PROVIDERS: ProviderDef[] = [
         signal,
       });
       if (!response.ok) {
-        throw new Error(`http-${response.status}`);
+        throw new Error(`http-${String(response.status)}`);
       }
       const payload = (await safeJson(response)) as DuckResponse;
       return parseDuckResults(payload, limit);
@@ -564,14 +607,14 @@ const PROVIDERS: ProviderDef[] = [
   {
     provider: "wikipedia",
     run: async (fetchImpl, query, limit, signal) => {
-      const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${limit}&namespace=0&format=json&origin=*`;
+      const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${String(limit)}&namespace=0&format=json&origin=*`;
       const response = await fetchImpl(url, {
         method: "GET",
         headers: { accept: "application/json" },
         signal,
       });
       if (!response.ok) {
-        throw new Error(`http-${response.status}`);
+        throw new Error(`http-${String(response.status)}`);
       }
       const payload = await safeJson(response);
       return parseWikipediaResults(payload, limit);
@@ -580,7 +623,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     provider: "github",
     run: async (fetchImpl, query, limit, signal) => {
-      const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${limit}&sort=stars&order=desc`;
+      const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=${String(limit)}&sort=stars&order=desc`;
       const response = await fetchImpl(url, {
         method: "GET",
         headers: {
@@ -590,7 +633,7 @@ const PROVIDERS: ProviderDef[] = [
         signal,
       });
       if (!response.ok) {
-        throw new Error(`http-${response.status}`);
+        throw new Error(`http-${String(response.status)}`);
       }
       const payload = (await safeJson(response)) as GithubResponse;
       return parseGithubResults(payload, limit);
@@ -599,14 +642,14 @@ const PROVIDERS: ProviderDef[] = [
   {
     provider: "reddit",
     run: async (fetchImpl, query, limit, signal) => {
-      const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=${limit}&sort=relevance&type=link`;
+      const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=${String(limit)}&sort=relevance&type=link`;
       const response = await fetchImpl(url, {
         method: "GET",
         headers: { accept: "application/json", "user-agent": "veil-web-search" },
         signal,
       });
       if (!response.ok) {
-        throw new Error(`http-${response.status}`);
+        throw new Error(`http-${String(response.status)}`);
       }
       const payload = (await safeJson(response)) as RedditResponse;
       return parseRedditResults(payload, limit);
@@ -626,7 +669,7 @@ const PROVIDERS: ProviderDef[] = [
         signal,
       });
       if (!htmlResponse.ok) {
-        throw new Error(`http-${htmlResponse.status}`);
+        throw new Error(`http-${String(htmlResponse.status)}`);
       }
 
       const html = await htmlResponse.text();
@@ -635,7 +678,11 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
-function traceForPending(provider: WebSearchProvider, durationMs: number, warning: string): WebSearchProviderTrace {
+function traceForPending(
+  provider: WebSearchProvider,
+  durationMs: number,
+  warning: string,
+): WebSearchProviderTrace {
   return {
     provider,
     ok: false,
@@ -665,7 +712,13 @@ function traceForPending(provider: WebSearchProvider, durationMs: number, warnin
  */
 export async function webSearch(
   workspace: string,
-  options: { query: string; limit?: number; timeout_ms?: number; fetch_impl?: typeof fetch; debug?: boolean },
+  options: {
+    query: string;
+    limit?: number;
+    timeout_ms?: number;
+    fetch_impl?: typeof fetch;
+    debug?: boolean;
+  },
 ): Promise<WebSearchResponse> {
   const started = nowMs();
   const query = trimQuery(options.query);
@@ -686,12 +739,16 @@ export async function webSearch(
   }
 
   const abort = new AbortController();
-  const budgetTimer = setTimeout(() => abort.abort("timeout"), timeoutMs);
+  const budgetTimer = setTimeout(() => {
+    abort.abort("timeout");
+  }, timeoutMs);
   const fetchImpl = options.fetch_impl ?? fetch;
   let timedOut = false;
 
   try {
-    const runs = PROVIDERS.map((def, idx) => runProvider(def, fetchImpl, query, limit, abort.signal).then((outcome) => ({ idx, outcome })));
+    const runs = PROVIDERS.map((def, idx) =>
+      runProvider(def, fetchImpl, query, limit, abort.signal).then((outcome) => ({ idx, outcome })),
+    );
     const pending = new Set(runs.map((_, idx) => idx));
     const outcomes: ProviderOutcome[] = [];
 
@@ -703,20 +760,17 @@ export async function webSearch(
         break;
       }
 
-      const candidates = [...pending].map((idx) => runs[idx]!);
-      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const candidates = [...pending].map((idx) => runs[idx]);
       const timeoutSentinel = new Promise<null>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(null), remaining);
+        setTimeout(() => {
+          resolve(null);
+        }, remaining);
       });
 
       const settled = await Promise.race<{ idx: number; outcome: ProviderOutcome } | null>([
         ...candidates,
         timeoutSentinel,
       ]);
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-
       if (!settled) {
         timedOut = true;
         break;
@@ -724,7 +778,6 @@ export async function webSearch(
 
       pending.delete(settled.idx);
       outcomes.push(settled.outcome);
-
     }
 
     if (pending.size > 0 && !abort.signal.aborted) {
@@ -746,16 +799,21 @@ export async function webSearch(
     const elapsed = nowMs() - started;
     for (const idx of pending) {
       const provider = PROVIDER_ORDER[idx] ?? "google";
-      traceByProvider.set(provider, traceForPending(provider, elapsed, timedOut ? "timeout" : "cancelled"));
+      traceByProvider.set(
+        provider,
+        traceForPending(provider, elapsed, timedOut ? "timeout" : "cancelled"),
+      );
     }
 
-    const providerTrace = PROVIDER_ORDER.map((provider) =>
-      traceByProvider.get(provider) ?? traceForPending(provider, elapsed, timedOut ? "timeout" : "not-run"),
+    const providerTrace = PROVIDER_ORDER.map(
+      (provider) =>
+        traceByProvider.get(provider) ??
+        traceForPending(provider, elapsed, timedOut ? "timeout" : "not-run"),
     );
 
     const warnings = providerTrace
       .filter((trace) => !trace.ok && trace.warning)
-      .map((trace) => `${trace.provider}: ${trace.warning}`);
+      .map((trace) => `${trace.provider}: ${trace.warning ?? "unknown"}`);
 
     if (merge.detailed_results.length > 0) {
       const minimalResults: WebSearchResult[] = merge.detailed_results.map((row) => ({
@@ -793,7 +851,9 @@ export async function webSearch(
       data: null,
       error: {
         code: timedOut ? "timeout" : "provider-unavailable",
-        message: timedOut ? "Global timeout budget reached before providers returned results" : "No provider returned parseable results",
+        message: timedOut
+          ? "Global timeout budget reached before providers returned results"
+          : "No provider returned parseable results",
       },
     };
   } catch (error) {

@@ -1,11 +1,12 @@
 import { mkdir, readFile } from "node:fs/promises";
+
 import { build } from "esbuild";
 
 try {
   const pkg = JSON.parse(await readFile("package.json", "utf8"));
 
   if (!pkg.version || !/^\d+\.\d+\.\d+$/.test(pkg.version)) {
-    throw new Error(`Invalid package version: ${pkg.version || 'missing'}`);
+    throw new Error(`Invalid package version: ${pkg.version || "missing"}`);
   }
 
   await mkdir("dist", { recursive: true });

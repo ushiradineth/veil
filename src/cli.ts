@@ -1,10 +1,16 @@
-import { buildIndex, discoverIndex, getStatus, lookupIndex, shouldRefreshDiscover } from "./indexer";
-import type { BuildMode } from "./types";
 import { profiler, diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import {
+  buildIndex,
+  discoverIndex,
+  getStatus,
+  lookupIndex,
+  shouldRefreshDiscover,
+} from "./indexer";
 import { diagnosticsStatePath } from "./state-root";
+import type { BuildMode } from "./types";
 import { webSearch } from "./web-search";
 
 function getArg(name: string, fallback?: string): string | undefined {
@@ -47,7 +53,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "refresh") {
-    const mode = (getArg("--mode", "changed") as BuildMode) ?? "changed";
+    const mode = getArg("--mode", "changed") as BuildMode;
     const manifest = await buildIndex(workspace, mode, { state_root: stateRoot });
     writeOutput({ ok: true, mode, manifest });
     return;
@@ -68,15 +74,29 @@ async function main(): Promise<void> {
       await buildIndex(workspace, "changed", { state_root: stateRoot });
       status = await getStatus(workspace, { state_root: stateRoot });
     }
-    const discovered = await discoverIndex(workspace, query, { prefer_code: true, intent, state_root: stateRoot });
-    writeOutput({ status, intent: discovered.intent, files: discovered.files, symbols: discovered.symbols, chunks: discovered.chunks });
+    const discovered = await discoverIndex(workspace, query, {
+      prefer_code: true,
+      intent,
+      state_root: stateRoot,
+    });
+    writeOutput({
+      status,
+      intent: discovered.intent,
+      files: discovered.files,
+      symbols: discovered.symbols,
+      chunks: discovered.chunks,
+    });
     return;
   }
 
   if (cmd === "lookup") {
     const query = getArg("--query", "") ?? "";
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
-    const result = await lookupIndex(workspace, query, { intent, prefer_code: true, state_root: stateRoot });
+    const result = await lookupIndex(workspace, query, {
+      intent,
+      prefer_code: true,
+      state_root: stateRoot,
+    });
     writeOutput(result);
     return;
   }
@@ -120,7 +140,9 @@ async function main(): Promise<void> {
 
   if (cmd === "git-status") {
     const timeout_ms = Number(getArg("--timeout-ms", "5000") ?? "5000");
-    const result = gitStatus(workspace, { timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000 });
+    const result = gitStatus(workspace, {
+      timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000,
+    });
     writeOutput(result);
     return;
   }
@@ -172,7 +194,11 @@ async function main(): Promise<void> {
 
   if (cmd === "gh-lookup") {
     const repo = getArg("--repo", "") ?? "";
-    const kind = (getArg("--kind", "repo_context") ?? "repo_context") as "repo_context" | "issues" | "prs" | "checks";
+    const kind = (getArg("--kind", "repo_context") ?? "repo_context") as
+      | "repo_context"
+      | "issues"
+      | "prs"
+      | "checks";
     const limit = Number(getArg("--limit", "10") ?? "10");
     const timeout_ms = Number(getArg("--timeout-ms", "12000") ?? "12000");
     const result = await ghLookup(workspace, {
@@ -198,7 +224,7 @@ async function main(): Promise<void> {
   process.exitCode = 1;
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   process.stderr.write(`${String(error)}\n`);
   process.exitCode = 1;
 });

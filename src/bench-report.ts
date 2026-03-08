@@ -20,7 +20,7 @@ type ScenarioSummary = {
 type CompetitorReport = {
   id: string;
   label: string;
-  scenarios: Record<string, ScenarioSummary>;
+  scenarios: Partial<Record<string, ScenarioSummary>>;
 };
 
 type SuiteReport = {
@@ -47,7 +47,7 @@ export function toRunId(date: Date): string {
   const hh = pad2(date.getUTCHours());
   const min = pad2(date.getUTCMinutes());
   const ss = pad2(date.getUTCSeconds());
-  return `${yyyy}${mm}${dd}-${hh}${min}${ss}Z`;
+  return `${String(yyyy)}${mm}${dd}-${hh}${min}${ss}Z`;
 }
 
 function coverageRows(scenarios: Scenario[]): string[] {
@@ -64,8 +64,8 @@ function scenarioComparisonRows(report: SuiteReport): string[] {
     const cells = [scenario.id];
     for (const competitor of report.competitors) {
       const row = competitor.scenarios[scenario.id];
-      if (!row || row.status !== "ok") {
-        cells.push(row ? `${row.status}` : "missing");
+      if (row?.status !== "ok") {
+        cells.push(row?.status ?? "missing");
         continue;
       }
       cells.push(`${row.warm.p50_ms.toFixed(4)} / ${row.warm.p95_ms.toFixed(4)}`);
@@ -89,13 +89,17 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("Build or refresh index:");
   lines.push("");
   lines.push("```bash");
-  lines.push("nix run nixpkgs#bun -- run src/cli.ts refresh --workspace /path/to/repo --mode changed");
+  lines.push(
+    "nix run nixpkgs#bun -- run src/cli.ts refresh --workspace /path/to/repo --mode changed",
+  );
   lines.push("```");
   lines.push("");
   lines.push("Run benchmark suite:");
   lines.push("");
   lines.push("```bash");
-  lines.push("nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10");
+  lines.push(
+    "nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10",
+  );
   lines.push("```");
   lines.push("");
   lines.push("## Latest Run");
@@ -105,7 +109,9 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push(`- Summary markdown: \`${runDirRelative}/SUMMARY.md\``);
   lines.push(`- Generated: \`${report.generated_at}\``);
   lines.push(`- Workspace: \`${report.config.workspace}\``);
-  lines.push(`- Iterations: \`cold=${report.config.cold_iterations}\`, \`warm=${report.config.warm_iterations}\``);
+  lines.push(
+    `- Iterations: \`cold=${String(report.config.cold_iterations)}\`, \`warm=${String(report.config.warm_iterations)}\``,
+  );
   lines.push("");
   lines.push("## Scenario Coverage");
   lines.push("");
@@ -119,8 +125,12 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("");
   lines.push("Notes:");
   lines.push("");
-  lines.push("- Web and GitHub scenarios are network dependent and usually much slower than local index queries.");
-  lines.push("- Cells with `unsupported` or `error` indicate that competitor/mode could not execute that scenario.");
+  lines.push(
+    "- Web and GitHub scenarios are network dependent and usually much slower than local index queries.",
+  );
+  lines.push(
+    "- Cells with `unsupported` or `error` indicate that competitor/mode could not execute that scenario.",
+  );
   lines.push("");
 
   return `${lines.join("\n")}\n`;

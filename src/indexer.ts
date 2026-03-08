@@ -1,8 +1,14 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { spawnSync } from "node:child_process";
+
+import { TopKHeap, getLru, setLru } from "./cache";
+import { diagnostics } from "./diagnostics";
+import { mergeIncrementalRecords, sortIndexedRecords } from "./indexer/build";
+import { rankLookupResults, scoreChunk, scoreFile, scoreSymbol } from "./query";
+import { relativeStateRoot, resolveIndexDir } from "./state-root";
 import type {
   BuildMode,
   ChunkRecord,
@@ -14,11 +20,6 @@ import type {
   ResolvedQueryIntent,
   SymbolRecord,
 } from "./types";
-import { TopKHeap, getLru, setLru } from "./cache";
-import { diagnostics } from "./diagnostics";
-import { mergeIncrementalRecords, sortIndexedRecords } from "./indexer/build";
-import { rankLookupResults, scoreChunk, scoreFile, scoreSymbol } from "./query";
-import { relativeStateRoot, resolveIndexDir } from "./state-root";
 
 const SCHEMA_VERSION = "1";
 const DEFAULT_STALE_HOURS = 24;
@@ -121,9 +122,37 @@ const STOP_TOKENS = new Set([
   "without",
   "editing",
 ]);
-const DOC_HINT_TOKENS = new Set(["doc", "docs", "readme", "markdown", "guide", "explain", "documentation"]);
-const SYMBOL_HINT_TOKENS = new Set(["symbol", "symbols", "function", "class", "method", "type", "interface", "definition"]);
-const CODE_TOP_LEVEL_HINTS = new Set(["src", "lib", "app", "server", "cmd", "pkg", "modules", "hosts", "outputs", "scripts"]);
+const DOC_HINT_TOKENS = new Set([
+  "doc",
+  "docs",
+  "readme",
+  "markdown",
+  "guide",
+  "explain",
+  "documentation",
+]);
+const SYMBOL_HINT_TOKENS = new Set([
+  "symbol",
+  "symbols",
+  "function",
+  "class",
+  "method",
+  "type",
+  "interface",
+  "definition",
+]);
+const CODE_TOP_LEVEL_HINTS = new Set([
+  "src",
+  "lib",
+  "app",
+  "server",
+  "cmd",
+  "pkg",
+  "modules",
+  "hosts",
+  "outputs",
+  "scripts",
+]);
 const MAX_QUERY_PARSE_CACHE = 256;
 const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
 
@@ -162,7 +191,13 @@ function hashText(content: string): string {
 function detectLanguage(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
-  if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "javascript";
+  if (
+    lower.endsWith(".js") ||
+    lower.endsWith(".jsx") ||
+    lower.endsWith(".mjs") ||
+    lower.endsWith(".cjs")
+  )
+    return "javascript";
   if (lower.endsWith(".nix")) return "nix";
   if (lower.endsWith(".md")) return "markdown";
   if (lower.endsWith(".json")) return "json";
@@ -175,8 +210,7 @@ function detectLanguage(path: string): string {
 }
 
 function topLevel(path: string): string {
-  const [first] = path.split("/");
-  return first ?? ".";
+  return path.split("/")[0] || ".";
 }
 
 function runGit(workspace: string, args: string[]): string | null {
@@ -189,7 +223,7 @@ function runGit(workspace: string, args: string[]): string | null {
 
 function nowMs(): number {
   if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
-    return Number(Bun.nanoseconds()) / 1_000_000;
+    return Bun.nanoseconds() / 1_000_000;
   }
   return Date.now();
 }
@@ -235,7 +269,7 @@ async function listFilesFallback(workspace: string, stateRoot?: string): Promise
     const items = await readdir(abs, { withFileTypes: true });
     for (const item of items) {
       if (item.name === ".git" || item.name === "node_modules") continue;
-      if (stateRootRel && item.name === stateRootRel.split("/")[0]) continue;
+      if (item.name === stateRootRel?.split("/")[0]) continue;
       const nextAbs = join(abs, item.name);
       if (item.isDirectory()) {
         await walk(nextAbs);
@@ -255,7 +289,7 @@ async function listFilesFallback(workspace: string, stateRoot?: string): Promise
 function parseNdjson<T>(content: string): T[] {
   const result: T[] = [];
   let start = 0;
-  
+
   for (let i = 0; i <= content.length; i++) {
     if (i === content.length || content[i] === "\n") {
       if (i > start) {
@@ -271,7 +305,7 @@ function parseNdjson<T>(content: string): T[] {
       start = i + 1;
     }
   }
-  
+
   return result;
 }
 
@@ -302,9 +336,17 @@ function normalizeQuery(input: string): string {
   return normalizeText(input).replace(/\s+/g, " ").trim();
 }
 
-function resolveIntent(normalized: string, tokens: string[], requested: QueryIntent = "auto"): ResolvedQueryIntent {
+function resolveIntent(
+  normalized: string,
+  tokens: string[],
+  requested: QueryIntent = "auto",
+): ResolvedQueryIntent {
   if (requested !== "auto") return requested;
-  if (tokens.some((token) => DOC_HINT_TOKENS.has(token)) || normalized.includes("readme") || normalized.includes("docs")) {
+  if (
+    tokens.some((token) => DOC_HINT_TOKENS.has(token)) ||
+    normalized.includes("readme") ||
+    normalized.includes("docs")
+  ) {
     return "docs";
   }
   if (tokens.some((token) => SYMBOL_HINT_TOKENS.has(token))) return "symbols";
@@ -367,8 +409,10 @@ function docsPathBias(pathLower: string, basenameLower: string): number {
 function matchesLanguage(pathLower: string, languageFilter: string): boolean {
   if (!languageFilter) return true;
   if (languageFilter === "nix") return pathLower.endsWith(".nix");
-  if (languageFilter === "typescript") return pathLower.endsWith(".ts") || pathLower.endsWith(".tsx");
-  if (languageFilter === "javascript") return pathLower.endsWith(".js") || pathLower.endsWith(".jsx");
+  if (languageFilter === "typescript")
+    return pathLower.endsWith(".ts") || pathLower.endsWith(".tsx");
+  if (languageFilter === "javascript")
+    return pathLower.endsWith(".js") || pathLower.endsWith(".jsx");
   if (languageFilter === "markdown") return pathLower.endsWith(".md");
   return pathLower.endsWith(`.${languageFilter}`);
 }
@@ -472,9 +516,11 @@ function buildCacheEntry(
   const chunksBasenameLower = chunks.map((c) => normalizeText(getBasename(c.path)));
   const chunksSearch = chunks.map((c) => normalizeText(`${c.path}\n${c.content}`));
   const chunksCodeBias = chunksPathLower.map((pathLower) => codePathBias(pathLower));
-  const chunksDocsBias = chunksPathLower.map((pathLower, i) => docsPathBias(pathLower, chunksBasenameLower[i] ?? ""));
+  const chunksDocsBias = chunksPathLower.map((pathLower, i) =>
+    docsPathBias(pathLower, chunksBasenameLower[i] ?? ""),
+  );
   const symbolsLower = symbols.map((s) => normalizeText(s.name));
-  
+
   return {
     filesMtimeMs: mtimes.files,
     symbolsMtimeMs: mtimes.symbols,
@@ -498,7 +544,7 @@ function buildCacheEntry(
   };
 }
 
-function toNdjson<T>(items: T[]): string {
+function toNdjson(items: unknown[]): string {
   return items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : "");
 }
 
@@ -513,30 +559,33 @@ function extractSymbols(path: string, language: string, content: string): Symbol
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
     if (language === "typescript" || language === "javascript") {
-      let m = line.match(/^\s*export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/);
+      let m = /^\s*export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/.exec(line);
       if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = line.match(/^\s*(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/);
+      m = /^\s*(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/.exec(line);
       if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = line.match(/^\s*export\s+class\s+([A-Za-z0-9_$]+)/);
+      m = /^\s*export\s+class\s+([A-Za-z0-9_$]+)/.exec(line);
       if (m) push(i + 1, "class", m[1]);
-      m = line.match(/^\s*class\s+([A-Za-z0-9_$]+)/);
+      m = /^\s*class\s+([A-Za-z0-9_$]+)/.exec(line);
       if (m) push(i + 1, "class", m[1]);
-      m = line.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/);
+      m =
+        /^\s*export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/.exec(
+          line,
+        );
       if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = line.match(/^\s*export\s+type\s+([A-Za-z0-9_$]+)/);
+      m = /^\s*export\s+type\s+([A-Za-z0-9_$]+)/.exec(line);
       if (m) push(i + 1, "type", m[1]);
-      m = line.match(/^\s*export\s+interface\s+([A-Za-z0-9_$]+)/);
+      m = /^\s*export\s+interface\s+([A-Za-z0-9_$]+)/.exec(line);
       if (m) push(i + 1, "interface", m[1]);
     } else if (language === "nix") {
-      const m = line.match(/^\s*([A-Za-z0-9._-]+)\s*=\s*/);
+      const m = /^\s*([A-Za-z0-9._-]+)\s*=\s*/.exec(line);
       if (m) push(i + 1, "attr", m[1]);
     } else if (language === "shell") {
-      const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*\(\)\s*\{/);
+      const m = /^\s*([A-Za-z0-9_-]+)\s*\(\)\s*\{/.exec(line);
       if (m) push(i + 1, "function", m[1]);
     } else if (language === "python") {
-      let m = line.match(/^\s*def\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*:/);
+      let m = /^\s*def\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*:/.exec(line);
       if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = line.match(/^\s*class\s+([A-Za-z0-9_]+)/);
+      m = /^\s*class\s+([A-Za-z0-9_]+)/.exec(line);
       if (m) push(i + 1, "class", m[1]);
     }
   }
@@ -554,7 +603,7 @@ function makeChunks(path: string, content: string): ChunkRecord[] {
     const end = Math.min(lines.length, start + CHUNK_SIZE_LINES);
     const slice = lines.slice(start, end).join("\n");
     chunks.push({
-      id: `${path}:${start + 1}-${end}`,
+      id: `${path}:${String(start + 1)}-${String(end)}`,
       path,
       start_line: start + 1,
       end_line: end,
@@ -566,7 +615,11 @@ function makeChunks(path: string, content: string): ChunkRecord[] {
   return chunks;
 }
 
-async function readExistingIndex<T>(workspace: string, name: string, stateRoot?: string): Promise<T[]> {
+async function readExistingIndex<T>(
+  workspace: string,
+  name: string,
+  stateRoot?: string,
+): Promise<T[]> {
   const p = getIndexPath(workspace, name, stateRoot);
   if (!existsSync(p)) return [];
   try {
@@ -590,8 +643,7 @@ async function loadCachedIndex(workspace: string, stateRoot?: string): Promise<I
   const key = cacheKey(workspace, stateRoot);
   const cached = INDEX_CACHE.get(key);
   if (
-    cached &&
-    cached.filesMtimeMs === filesMtime &&
+    cached?.filesMtimeMs === filesMtime &&
     cached.symbolsMtimeMs === symbolsMtime &&
     cached.chunksMtimeMs === chunksMtime
   ) {
@@ -616,7 +668,11 @@ async function loadCachedIndex(workspace: string, stateRoot?: string): Promise<I
   return entry;
 }
 
-async function writeHumanDocs(workspace: string, files: FileRecord[], stateRoot?: string): Promise<void> {
+async function writeHumanDocs(
+  workspace: string,
+  files: FileRecord[],
+  stateRoot?: string,
+): Promise<void> {
   const byTop = new Map<string, number>();
   for (const file of files) {
     byTop.set(file.top_level, (byTop.get(file.top_level) ?? 0) + 1);
@@ -624,7 +680,7 @@ async function writeHumanDocs(workspace: string, files: FileRecord[], stateRoot?
 
   const dirsLines = ["# Directory Map", "", "Top-level directories by indexed file count:", ""];
   for (const [dir, count] of [...byTop.entries()].sort((a, b) => b[1] - a[1])) {
-    dirsLines.push(`- ${dir}: ${count}`);
+    dirsLines.push(`- ${dir}: ${String(count)}`);
   }
   dirsLines.push("");
   await writeFile(getIndexPath(workspace, "dirs.md", stateRoot), dirsLines.join("\n"), "utf-8");
@@ -639,17 +695,26 @@ async function writeHumanDocs(workspace: string, files: FileRecord[], stateRoot?
     "go.mod",
   ]);
   const entries = files
-    .filter((f) => entryCandidates.has(f.path.split("/").at(-1) ?? "") || f.path.includes("/commands/"))
+    .filter(
+      (f) => entryCandidates.has(f.path.split("/").at(-1) ?? "") || f.path.includes("/commands/"),
+    )
     .map((f) => f.path)
     .slice(0, 200);
 
   const entryLines = ["# Entrypoints", "", "High-signal files for navigation:", ""];
   for (const path of entries) entryLines.push(`- ${path}`);
   entryLines.push("");
-  await writeFile(getIndexPath(workspace, "entrypoints.md", stateRoot), entryLines.join("\n"), "utf-8");
+  await writeFile(
+    getIndexPath(workspace, "entrypoints.md", stateRoot),
+    entryLines.join("\n"),
+    "utf-8",
+  );
 }
 
-export async function getStatus(workspace: string, options: { state_root?: string } = {}): Promise<IndexStatus> {
+export async function getStatus(
+  workspace: string,
+  options: { state_root?: string } = {},
+): Promise<IndexStatus> {
   const key = cacheKey(workspace, options.state_root);
   const cached = STATUS_CACHE.get(key);
   if (cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
@@ -722,15 +787,20 @@ export function shouldRefreshDiscover(status: IndexStatus): boolean {
 /**
  * Process a single file and return its records
  */
-async function processFile(workspace: string, rel: string, stateRoot?: string): Promise<{
+async function processFile(
+  workspace: string,
+  rel: string,
+  stateRoot?: string,
+): Promise<{
   file: FileRecord | null;
   symbols: SymbolRecord[];
   chunks: ChunkRecord[];
 }> {
   const stateRootRel = relativeStateRoot(workspace, stateRoot);
-  if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`))) return { file: null, symbols: [], chunks: [] };
+  if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`)))
+    return { file: null, symbols: [], chunks: [] };
   if (rel.startsWith(".git/")) return { file: null, symbols: [], chunks: [] };
-  
+
   const abs = join(workspace, rel);
 
   let st: import("node:fs").Stats;
@@ -770,7 +840,11 @@ async function processFile(workspace: string, rel: string, stateRoot?: string): 
  * Parallel file processing with batching
  * Processes files in batches of BATCH_SIZE for 3-5x speedup on multi-core systems
  */
-async function computeForPaths(workspace: string, paths: string[], stateRoot?: string): Promise<{
+async function computeForPaths(
+  workspace: string,
+  paths: string[],
+  stateRoot?: string,
+): Promise<{
   files: FileRecord[];
   symbols: SymbolRecord[];
   chunks: ChunkRecord[];
@@ -783,7 +857,7 @@ async function computeForPaths(workspace: string, paths: string[], stateRoot?: s
   for (let i = 0; i < paths.length; i += BATCH_SIZE) {
     const batch = paths.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map((rel) => processFile(workspace, rel, stateRoot)));
-    
+
     for (const result of results) {
       if (result.file) {
         files.push(result.file);
@@ -796,12 +870,17 @@ async function computeForPaths(workspace: string, paths: string[], stateRoot?: s
   return { files, symbols, chunks };
 }
 
-export async function buildIndex(workspace: string, mode: BuildMode = "full", options: { state_root?: string } = {}): Promise<Manifest> {
+export async function buildIndex(
+  workspace: string,
+  mode: BuildMode = "full",
+  options: { state_root?: string } = {},
+): Promise<Manifest> {
   const buildStart = nowMs();
   const indexDir = getIndexDir(workspace, options.state_root);
   await mkdir(indexDir, { recursive: true });
 
-  const tracked = listTrackedFiles(workspace) ?? (await listFilesFallback(workspace, options.state_root));
+  const tracked =
+    listTrackedFiles(workspace) ?? (await listFilesFallback(workspace, options.state_root));
   const gitHead = runGit(workspace, ["rev-parse", "HEAD"]);
 
   let files: FileRecord[] = [];
@@ -827,14 +906,32 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
         if (!trackedSet.has(prevFile.path)) changedSet.add(prevFile.path);
       }
 
-      const prevFiles = await readExistingIndex<FileRecord>(workspace, "files.ndjson", options.state_root);
-      const prevSymbols = await readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson", options.state_root);
-      const prevChunks = await readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson", options.state_root);
+      const prevFiles = await readExistingIndex<FileRecord>(
+        workspace,
+        "files.ndjson",
+        options.state_root,
+      );
+      const prevSymbols = await readExistingIndex<SymbolRecord>(
+        workspace,
+        "symbols.ndjson",
+        options.state_root,
+      );
+      const prevChunks = await readExistingIndex<ChunkRecord>(
+        workspace,
+        "chunks.ndjson",
+        options.state_root,
+      );
 
       const changedPaths = [...changedSet];
       const recomputed = await computeForPaths(workspace, changedPaths, options.state_root);
 
-      const merged = mergeIncrementalRecords(prevFiles, prevSymbols, prevChunks, changedSet, recomputed);
+      const merged = mergeIncrementalRecords(
+        prevFiles,
+        prevSymbols,
+        prevChunks,
+        changedSet,
+        recomputed,
+      );
       files = merged.files;
       symbols = merged.symbols;
       chunks = merged.chunks;
@@ -843,9 +940,21 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
 
   sortIndexedRecords({ files, symbols, chunks });
 
-  await writeFile(getIndexPath(workspace, "files.ndjson", options.state_root), toNdjson(files), "utf-8");
-  await writeFile(getIndexPath(workspace, "symbols.ndjson", options.state_root), toNdjson(symbols), "utf-8");
-  await writeFile(getIndexPath(workspace, "chunks.ndjson", options.state_root), toNdjson(chunks), "utf-8");
+  await writeFile(
+    getIndexPath(workspace, "files.ndjson", options.state_root),
+    toNdjson(files),
+    "utf-8",
+  );
+  await writeFile(
+    getIndexPath(workspace, "symbols.ndjson", options.state_root),
+    toNdjson(symbols),
+    "utf-8",
+  );
+  await writeFile(
+    getIndexPath(workspace, "chunks.ndjson", options.state_root),
+    toNdjson(chunks),
+    "utf-8",
+  );
   await writeHumanDocs(workspace, files, options.state_root);
 
   const [filesMtime, symbolsMtime, chunksMtime] = await Promise.all([
@@ -873,7 +982,11 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
     chunk_count: chunks.length,
   };
 
-  await writeFile(getIndexPath(workspace, "manifest.json", options.state_root), `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  await writeFile(
+    getIndexPath(workspace, "manifest.json", options.state_root),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf-8",
+  );
   STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
   diagnostics.recordIndexBuild();
   diagnostics.recordBuildLatency(nowMs() - buildStart);
@@ -882,8 +995,12 @@ export async function buildIndex(workspace: string, mode: BuildMode = "full", op
   return manifest;
 }
 
-function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): FileRecord[] {
-  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
+function queryFilesFromCache(
+  cache: IndexCacheEntry,
+  parsed: ParsedQuery,
+  limit: number,
+): FileRecord[] {
+  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
   const cached = getLru(cache.queryFilesCache, key);
   if (cached) {
     diagnostics.recordCacheHit();
@@ -902,17 +1019,22 @@ function queryFilesFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit:
     }
     const topDir = normalizeText(topLevel(pathLower));
     if (parsed.intent === "code" && CODE_TOP_LEVEL_HINTS.has(topDir)) score += 0.6;
-    if (parsed.intent === "docs" && (pathLower.endsWith(".md") || pathLower.includes("/docs/"))) score += 1.5;
+    if (parsed.intent === "docs" && (pathLower.endsWith(".md") || pathLower.includes("/docs/")))
+      score += 1.5;
     if (score > 0.5) heap.insert(i, score);
   }
 
-  const result = heap.toSortedArray().map((index) => cache.files[index]!);
+  const result = heap.toSortedArray().map((index) => cache.files[index]);
   setLru(cache.queryFilesCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
-function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number): SymbolRecord[] {
-  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${limit}`;
+function querySymbolsFromCache(
+  cache: IndexCacheEntry,
+  parsed: ParsedQuery,
+  limit: number,
+): SymbolRecord[] {
+  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
   const cached = getLru(cache.querySymbolsCache, key);
   if (cached) {
     diagnostics.recordCacheHit();
@@ -933,7 +1055,6 @@ function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limi
 
   for (const i of candidateIndexes) {
     const symbol = cache.symbols[i];
-    if (!symbol) continue;
     const nameLower = cache.symbolsLower[i] ?? "";
     const pathLower = normalizeText(symbol.path);
     let score = nameLower.includes(parsed.normalized) ? 7 : 0;
@@ -946,12 +1067,17 @@ function querySymbolsFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limi
     if (score >= 1.5) heap.insert(i, score);
   }
 
-  const result = heap.toSortedArray().map((index) => cache.symbols[index]!);
+  const result = heap.toSortedArray().map((index) => cache.symbols[index]);
   setLru(cache.querySymbolsCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
-function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit: number, options: QueryChunksOptions): ChunkRecord[] {
+function queryChunksFromCache(
+  cache: IndexCacheEntry,
+  parsed: ParsedQuery,
+  limit: number,
+  options: QueryChunksOptions,
+): ChunkRecord[] {
   const key = [
     parsed.intent,
     parsed.normalized,
@@ -979,7 +1105,9 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     }
   }
   const candidateIndexes =
-    tokenScoreByIndex.size > 0 ? [...tokenScoreByIndex.keys()] : cache.chunks.map((_, index) => index);
+    tokenScoreByIndex.size > 0
+      ? [...tokenScoreByIndex.keys()]
+      : cache.chunks.map((_, index) => index);
 
   const topLevelHints = new Set<string>();
   for (const token of parsed.tokens) {
@@ -993,8 +1121,6 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
   const heap = new TopKHeap<number>(limit);
 
   for (const i of candidateIndexes) {
-    const chunk = cache.chunks[i];
-    if (!chunk) continue;
     const pathLower = cache.chunksPathLower[i] ?? "";
     if (pathPrefix && !pathLower.startsWith(pathPrefix)) continue;
     if (!matchesLanguage(pathLower, languageFilter)) continue;
@@ -1017,12 +1143,17 @@ function queryChunksFromCache(cache: IndexCacheEntry, parsed: ParsedQuery, limit
     if (score >= 2) heap.insert(i, score);
   }
 
-  const result = heap.toSortedArray().map((index) => cache.chunks[index]!);
+  const result = heap.toSortedArray().map((index) => cache.chunks[index]);
   setLru(cache.queryChunksCache, key, result, MAX_QUERY_CACHE_SIZE);
   return result;
 }
 
-export async function queryFiles(workspace: string, q: string, limit = 20, options: { state_root?: string } = {}): Promise<FileRecord[]> {
+export async function queryFiles(
+  workspace: string,
+  q: string,
+  limit = 20,
+  options: { state_root?: string } = {},
+): Promise<FileRecord[]> {
   const start = nowMs();
   const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(q);
@@ -1032,7 +1163,12 @@ export async function queryFiles(workspace: string, q: string, limit = 20, optio
   return out;
 }
 
-export async function querySymbols(workspace: string, q: string, limit = 20, options: { state_root?: string } = {}): Promise<SymbolRecord[]> {
+export async function querySymbols(
+  workspace: string,
+  q: string,
+  limit = 20,
+  options: { state_root?: string } = {},
+): Promise<SymbolRecord[]> {
   const start = nowMs();
   const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(q);
@@ -1061,7 +1197,12 @@ export async function discoverIndex(
   workspace: string,
   query: string,
   options: DiscoverOptions = {},
-): Promise<{ intent: ResolvedQueryIntent; files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+): Promise<{
+  intent: ResolvedQueryIntent;
+  files: FileRecord[];
+  symbols: SymbolRecord[];
+  chunks: ChunkRecord[];
+}> {
   const start = nowMs();
   const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(query, options.intent);
@@ -1071,7 +1212,8 @@ export async function discoverIndex(
 
   const routedLanguage =
     options.language ??
-    (parsed.intent === "docs" && parsed.tokens.some((token) => token === "readme" || token === "markdown")
+    (parsed.intent === "docs" &&
+    parsed.tokens.some((token) => token === "readme" || token === "markdown")
       ? "markdown"
       : undefined);
 
@@ -1161,21 +1303,18 @@ export async function lookupIndex(
 
   const response: LookupResponse = {
     intent: parsed.intent,
-    files: rankLookupResults(
-      files,
-      (item) => scoreFile(item.path, filesParsed),
-      { label: "fallback-file-match", detail: "File returned by fallback retrieval path" },
-    ),
-    symbols: rankLookupResults(
-      symbols,
-      (item) => scoreSymbol(item, symbolsParsed),
-      { label: "fallback-symbol-match", detail: "Symbol returned by fallback retrieval path" },
-    ),
-    chunks: rankLookupResults(
-      chunks,
-      (item) => scoreChunk(item, chunksParsed),
-      { label: "fallback-chunk-match", detail: "Chunk returned by fallback retrieval path" },
-    ),
+    files: rankLookupResults(files, (item) => scoreFile(item.path, filesParsed), {
+      label: "fallback-file-match",
+      detail: "File returned by fallback retrieval path",
+    }),
+    symbols: rankLookupResults(symbols, (item) => scoreSymbol(item, symbolsParsed), {
+      label: "fallback-symbol-match",
+      detail: "Symbol returned by fallback retrieval path",
+    }),
+    chunks: rankLookupResults(chunks, (item) => scoreChunk(item, chunksParsed), {
+      label: "fallback-chunk-match",
+      detail: "Chunk returned by fallback retrieval path",
+    }),
     fallback: {
       used: fallbackStage !== "none",
       stage: fallbackStage,

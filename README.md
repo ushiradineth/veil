@@ -37,23 +37,23 @@ npx -y skills add https://github.com/ushiradineth/veil/tree/main/docs --skill ve
 
 Available Veil MCP tools:
 
-|     | Tool | Description |
-| --- | --- | --- |
-| - | `status` | Index status and staleness reasons |
-| - | `refresh` | Full or changed index refresh |
-| - | `files` | File path substring lookup |
-| - | `symbols` | Symbol name lookup |
-| - | `search` | Indexed code chunk search |
-| - | `lookup` | Intent-aware contextual retrieval with explainability |
-| - | `discover` | Combined status and focused retrieval in one call |
-| - | `web_search` | No-key web search (`google`, `duckduckgo`, `wikipedia`, `github`, `reddit`, `deepwiki`) |
-| - | `fetch_url` | Markdown-first URL content fetch |
-| - | `git_status` | Branch and workspace state |
-| - | `git_log` | Commit history lookup |
-| - | `git_diff` | Uncommitted or range diff lookup |
-| - | `git_show` | Commit details and optional patch |
-| - | `gh_lookup` | GitHub issues, PRs, checks, and repo context bootstrap via `gh` |
-| - | `diagnostics` | Cache and latency diagnostics |
+|     | Tool          | Description                                                                             |
+| --- | ------------- | --------------------------------------------------------------------------------------- |
+| -   | `status`      | Index status and staleness reasons                                                      |
+| -   | `refresh`     | Full or changed index refresh                                                           |
+| -   | `files`       | File path substring lookup                                                              |
+| -   | `symbols`     | Symbol name lookup                                                                      |
+| -   | `search`      | Indexed code chunk search                                                               |
+| -   | `lookup`      | Intent-aware contextual retrieval with explainability                                   |
+| -   | `discover`    | Combined status and focused retrieval in one call                                       |
+| -   | `web_search`  | No-key web search (`google`, `duckduckgo`, `wikipedia`, `github`, `reddit`, `deepwiki`) |
+| -   | `fetch_url`   | Markdown-first URL content fetch                                                        |
+| -   | `git_status`  | Branch and workspace state                                                              |
+| -   | `git_log`     | Commit history lookup                                                                   |
+| -   | `git_diff`    | Uncommitted or range diff lookup                                                        |
+| -   | `git_show`    | Commit details and optional patch                                                       |
+| -   | `gh_lookup`   | GitHub issues, PRs, checks, and repo context bootstrap via `gh`                         |
+| -   | `diagnostics` | Cache and latency diagnostics                                                           |
 
 ## CLI Examples
 
@@ -79,6 +79,19 @@ veil cli gh-lookup --repo owner/repo --kind issues --query "is:open"
 
 # diagnostics
 veil cli diagnostics
+```
+
+## Development Commands
+
+```bash
+# lint and format
+nix run nixpkgs#bun -- run lint
+nix run nixpkgs#bun -- run lint:fix
+nix run nixpkgs#bun -- run format
+nix run nixpkgs#bun -- run format:check
+
+# tests
+nix run nixpkgs#bun -- test ./src/test.ts
 ```
 
 ## MCP Client Configuration

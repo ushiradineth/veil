@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -133,12 +133,6 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${nextTag}\n`);
           NODE
 
-      - name: Cleanup on failure
-        if: failure()
-        run: |
-          git checkout -- package.json || true
-          git clean -fd || true
-
       - name: Commit and tag locally
         env:
           TAG: ${{ steps.prep.outputs.tag }}
@@ -164,12 +158,6 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
-
-      - name: Cleanup on publish failure
-        if: failure()
-        run: |
-          git reset --hard HEAD~1 || true
-          git tag -d ${{ steps.prep.outputs.tag }} || true
 
       - name: Push commit and tag
         env:

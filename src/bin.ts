@@ -1,3 +1,8 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { runCli } from "./cli";
+import { startServer } from "./server";
+
 function usage(): string {
   return [
     "Usage: veil <server|cli> [args...]",
@@ -25,6 +30,12 @@ function route(argv: string[]): BinRoute {
 }
 
 function defaultLoad(specifier: string): Promise<unknown> {
+  if (specifier === "./server") {
+    return startServer().then(() => ({}));
+  }
+  if (specifier === "./cli") {
+    return runCli().then(() => ({}));
+  }
   return import(specifier);
 }
 
@@ -63,10 +74,21 @@ export const __internalBin = {
   runMain,
 };
 
-// Bun uses import.meta.main, Node does not define it.
-// Support both runtimes so the esbuild bundle works on Node.
-const meta = import.meta as unknown as Record<string, unknown>;
-const isMain = typeof meta.main === "boolean" ? meta.main : true;
+function isMainModule(metaUrl: string): boolean {
+  const meta = import.meta as unknown as Record<string, unknown>;
+  if (typeof meta.main === "boolean") {
+    return meta.main;
+  }
+
+  const argv1 = process.argv[1];
+  if (!argv1) {
+    return false;
+  }
+
+  return resolve(argv1) === resolve(fileURLToPath(metaUrl));
+}
+
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   void runMain();

@@ -50,6 +50,16 @@
 
 See `docs/SKILL.md` for the canonical routing order and anti-patterns.
 
+## No-Skill Defaults
+
+- Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
+- Server startup performs non-blocking index init by default (`VEIL_SERVER_AUTO_INIT=1`).
+- Query tools (`files`, `symbols`, `search`, `lookup`) can auto-refresh stale indexes by default (`VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1`).
+- Optional background maintenance loop is controlled by env vars:
+  - `VEIL_SERVER_BACKGROUND_REFRESH=1`
+  - `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS` (default `300000`)
+  - `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR` (default `4`)
+
 ## Skill Trigger (Operational)
 
 When a prompt includes words like `research`, `investigate`, `find where`, `summarize from web`, or `compare docs`, apply:

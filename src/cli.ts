@@ -1,14 +1,10 @@
+import { sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { profiler, diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
-import {
-  buildIndex,
-  discoverIndex,
-  getStatus,
-  lookupIndex,
-  shouldRefreshDiscover,
-} from "./indexer";
+import { buildIndex, discoverIndex, getStatus, initWorkspaceIndex, lookupIndex } from "./indexer";
 import { diagnosticsStatePath } from "./state-root";
 import type { BuildMode } from "./types";
 import { webSearch } from "./web-search";
@@ -31,7 +27,7 @@ function writeOutput(data: unknown): void {
   process.stdout.write(`${toToon(data)}\n`);
 }
 
-async function main(): Promise<void> {
+export async function runCli(): Promise<void> {
   const cmd = process.argv[2] ?? "status";
   const workspace = resolveWorkspace();
   const stateRoot = getArg("--state-root");
@@ -65,22 +61,33 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === "init") {
+    const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
+    const mode = (getArg("--mode", "changed") ?? "changed") as BuildMode;
+    const result = await initWorkspaceIndex(workspace, {
+      state_root: stateRoot,
+      mode,
+      refresh_if_stale: refreshIfStale,
+    });
+    writeOutput(result);
+    return;
+  }
+
   if (cmd === "discover") {
     const query = getArg("--query", "") ?? "";
     const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
     const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
-    let status = await getStatus(workspace, { state_root: stateRoot });
-    if (shouldRefreshDiscover(status) && refreshIfStale) {
-      await buildIndex(workspace, "changed", { state_root: stateRoot });
-      status = await getStatus(workspace, { state_root: stateRoot });
-    }
+    const initResult = await initWorkspaceIndex(workspace, {
+      state_root: stateRoot,
+      refresh_if_stale: refreshIfStale,
+    });
     const discovered = await discoverIndex(workspace, query, {
       prefer_code: true,
       intent,
       state_root: stateRoot,
     });
     writeOutput({
-      status,
+      status: initResult.status_after,
       intent: discovered.intent,
       files: discovered.files,
       symbols: discovered.symbols,
@@ -219,12 +226,20 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    "Usage: bun run src/cli.ts <build|refresh|status|discover|lookup|web-search|fetch-url|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--state-root <.veil|relative|/abs/path>] [--mode full|changed] [--query <text>] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n",
+    "Usage: bun run src/cli.ts <build|refresh|status|init|discover|lookup|web-search|fetch-url|diagnostics|git-status|git-log|git-diff|git-show|gh-lookup> [--workspace <path>] [--state-root <.veil|relative|/abs/path>] [--mode full|changed] [--query <text>] [--refresh-if-stale 0|1] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n",
   );
   process.exitCode = 1;
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+const meta = import.meta as unknown as Record<string, unknown>;
+const sourceSuffix = `${sep}src${sep}cli.ts`;
+const isSourceModule = fileURLToPath(import.meta.url).endsWith(sourceSuffix);
+const argvRefsSource = process.argv.some(
+  (arg) => arg.endsWith(`${sep}src${sep}cli.ts`) || arg === "src/cli.ts",
+);
+if (isSourceModule && (meta.main === true || argvRefsSource)) {
+  runCli().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

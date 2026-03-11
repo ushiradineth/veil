@@ -37,33 +37,38 @@ npx -y skills add https://github.com/ushiradineth/veil/tree/main/docs --skill ve
 
 Available Veil MCP tools:
 
-|     | Tool          | Description                                                                             |
-| --- | ------------- | --------------------------------------------------------------------------------------- |
-| -   | `status`      | Index status and staleness reasons                                                      |
-| -   | `refresh`     | Full or changed index refresh                                                           |
-| -   | `files`       | File path substring lookup                                                              |
-| -   | `symbols`     | Symbol name lookup                                                                      |
-| -   | `search`      | Indexed code chunk search                                                               |
-| -   | `lookup`      | Intent-aware contextual retrieval with explainability                                   |
-| -   | `discover`    | Combined status and focused retrieval in one call                                       |
-| -   | `web_search`  | No-key web search (`google`, `duckduckgo`, `wikipedia`, `github`, `reddit`, `deepwiki`) |
-| -   | `fetch_url`   | Markdown-first URL content fetch                                                        |
-| -   | `git_status`  | Branch and workspace state                                                              |
-| -   | `git_log`     | Commit history lookup                                                                   |
-| -   | `git_diff`    | Uncommitted or range diff lookup                                                        |
-| -   | `git_show`    | Commit details and optional patch                                                       |
-| -   | `gh_lookup`   | GitHub issues, PRs, checks, and repo context bootstrap via `gh`                         |
-| -   | `diagnostics` | Cache and latency diagnostics                                                           |
+|     | Tool                 | Description                                                                             |
+| --- | -------------------- | --------------------------------------------------------------------------------------- |
+| -   | `status`             | Index status and staleness reasons                                                      |
+| -   | `refresh`            | Full or changed index refresh                                                           |
+| -   | `files`              | File path substring lookup                                                              |
+| -   | `symbols`            | Symbol name lookup                                                                      |
+| -   | `search`             | Indexed code chunk search                                                               |
+| -   | `find_file`          | Compatibility alias for `files`                                                         |
+| -   | `find_symbol`        | Compatibility alias for `symbols`                                                       |
+| -   | `search_for_pattern` | Compatibility alias for `search`                                                        |
+| -   | `lookup`             | Intent-aware contextual retrieval with explainability                                   |
+| -   | `discover`           | Combined status and focused retrieval in one call                                       |
+| -   | `web_search`         | No-key web search (`google`, `duckduckgo`, `wikipedia`, `github`, `reddit`, `deepwiki`) |
+| -   | `fetch_url`          | Markdown-first URL content fetch                                                        |
+| -   | `git_status`         | Branch and workspace state                                                              |
+| -   | `git_log`            | Commit history lookup                                                                   |
+| -   | `git_diff`           | Uncommitted or range diff lookup                                                        |
+| -   | `git_show`           | Commit details and optional patch                                                       |
+| -   | `gh_lookup`          | GitHub issues, PRs, checks, and repo context bootstrap via `gh`                         |
+| -   | `diagnostics`        | Cache and latency diagnostics                                                           |
 
 ## CLI Examples
 
 ```bash
 # status and refresh
 veil cli status --workspace .
+veil cli init --workspace .
 veil cli refresh --workspace . --mode changed
 
 # local index retrieval
 veil cli discover --workspace . --query "find build logic"
+veil cli discover --workspace . --query "find build logic" --refresh-if-stale 1
 veil cli lookup --workspace . --query "where is parseNdjson defined"
 
 # web and fetch
@@ -92,6 +97,27 @@ nix run nixpkgs#bun -- run format:check
 
 # tests
 nix run nixpkgs#bun -- test ./src/test.ts
+```
+
+## Server Auto Init and Maintenance
+
+Veil can initialize and maintain index freshness at server startup without a skill prompt.
+You do not need to set any of these for normal usage.
+
+- `VEIL_SERVER_AUTO_INIT=1` enables startup init (default: enabled)
+- `VEIL_SERVER_INIT_TIMEOUT_MS=4000` bounds startup init time
+- `VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1` refreshes stale indexes before `files`, `symbols`, `search`, and `lookup` (default: enabled)
+- `VEIL_SERVER_BACKGROUND_REFRESH=1` enables periodic background stale checks (default: disabled)
+- `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS=300000` controls loop interval
+- `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR=4` caps refresh operations per hour
+
+Example:
+
+```bash
+VEIL_SERVER_AUTO_INIT=1 \
+VEIL_SERVER_BACKGROUND_REFRESH=1 \
+VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS=300000 \
+npx -y @ushiradineth/veil@latest server
 ```
 
 ## MCP Client Configuration

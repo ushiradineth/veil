@@ -15,12 +15,14 @@ import {
   buildIndex,
   lookupIndex,
   getStatus,
+  initWorkspaceIndex,
   queryFiles,
   querySymbols,
   queryChunks,
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
+import { __internalServer } from "./server";
 import {
   diagnosticsStatePath,
   resolveIndexDir,
@@ -1013,6 +1015,41 @@ describe("Phase 3: Cache behavior", () => {
         current_git_head: null,
       }),
     ).toBe(true);
+  });
+
+  test("initWorkspaceIndex refreshes when manifest is missing", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-missing-manifest");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "alpha.ts"), "export const alpha = 1\n");
+
+    const result = await initWorkspaceIndex(repo, { refresh_if_stale: true });
+    expect(result.refreshed).toBe(true);
+    expect(result.reason).toBe("refreshed");
+    expect(result.status_after.exists).toBe(true);
+    expect(result.status_after.reasons.includes("manifest-missing")).toBe(false);
+  });
+
+  test("initWorkspaceIndex skips dirty-only refresh", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-dirty-only");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "beta.ts"), "export const beta = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(repo, "full");
+    await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
+
+    const result = await initWorkspaceIndex(repo, { refresh_if_stale: true });
+    expect(result.refreshed).toBe(false);
+    expect(result.reason).toBe("dirty-only");
   });
 
   test("Warm query path stays within expected latency range", async () => {
@@ -2443,6 +2480,47 @@ describe("Indexer internals", () => {
     expect(file.reasons.length).toBeGreaterThan(0);
     expect(symbol.reasons.length).toBeGreaterThan(0);
     expect(chunk.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Server startup helpers", () => {
+  test("parseBooleanFlag accepts common true and false values", () => {
+    expect(__internalServer.parseBooleanFlag("1", false)).toBe(true);
+    expect(__internalServer.parseBooleanFlag("true", false)).toBe(true);
+    expect(__internalServer.parseBooleanFlag("on", false)).toBe(true);
+    expect(__internalServer.parseBooleanFlag("0", true)).toBe(false);
+    expect(__internalServer.parseBooleanFlag("false", true)).toBe(false);
+    expect(__internalServer.parseBooleanFlag("off", true)).toBe(false);
+  });
+
+  test("parseBoundedInt applies fallback and bounds", () => {
+    expect(__internalServer.parseBoundedInt(undefined, 5, 1, 10)).toBe(5);
+    expect(__internalServer.parseBoundedInt("100", 5, 1, 10)).toBe(10);
+    expect(__internalServer.parseBoundedInt("0", 5, 1, 10)).toBe(1);
+    expect(__internalServer.parseBoundedInt("6", 5, 1, 10)).toBe(6);
+  });
+
+  test("shouldRefreshForQuery respects explicit request over env default", () => {
+    expect(__internalServer.shouldRefreshForQuery(undefined, true)).toBe(true);
+    expect(__internalServer.shouldRefreshForQuery(undefined, false)).toBe(false);
+    expect(__internalServer.shouldRefreshForQuery(false, true)).toBe(false);
+    expect(__internalServer.shouldRefreshForQuery(true, false)).toBe(true);
+  });
+
+  test("canRunBackgroundRefresh enforces per-hour budget", () => {
+    const runtime = {
+      init_runs: 0,
+      init_failures: 0,
+      init_inflight: false,
+      init_last: null,
+      background_enabled: true,
+      background_interval_ms: 10_000,
+      background_max_refreshes_per_hour: 1,
+      background_window_started_ms: Date.now(),
+      background_refreshes_in_window: 1,
+    };
+    expect(__internalServer.canRunBackgroundRefresh(Date.now(), runtime)).toBe(false);
+    expect(__internalServer.canRunBackgroundRefresh(Date.now() + 3_700_000, runtime)).toBe(true);
   });
 });
 

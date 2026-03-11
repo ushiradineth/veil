@@ -20,9 +20,6 @@ try {
     outfile: "dist/bin.js",
     sourcemap: false,
     minify: false,
-    define: {
-      "process.env.VEIL_VERSION": JSON.stringify(pkg.version),
-    },
   });
 
   console.log(`Build completed successfully for version ${pkg.version}`);

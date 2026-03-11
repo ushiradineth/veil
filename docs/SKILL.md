@@ -33,6 +33,18 @@ Use this skill when an agent should prefer Veil tools over shell-first discovery
 - Do not use generic web fetch for page extraction when `fetch_url` exists.
 - Do not skip `discover` for broad local queries.
 - Prefer one precise follow-up call over many speculative calls.
+- Do not call `status` then `refresh` as a default preflight step. Veil server can auto-init and auto-refresh stale query paths.
+- Use explicit `refresh` only when user asks for reindexing, after large repo changes, or when troubleshooting stale-index behavior.
+
+## Auto-init behavior
+
+- Startup can auto-init index state via `VEIL_SERVER_AUTO_INIT=1` (default enabled).
+- Query tools can auto-refresh stale indexes via `VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1` (default enabled for `files`, `symbols`, `search`, `lookup`).
+- `discover` already performs stale-aware refresh behavior.
+- Optional background maintenance can be enabled with:
+  - `VEIL_SERVER_BACKGROUND_REFRESH=1`
+  - `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS`
+  - `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR`
 
 ## Query tips
 

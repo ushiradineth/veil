@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { diagnostics } from "./diagnostics";
@@ -7,16 +9,17 @@ import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
-  buildIndex,
   discoverIndex,
   getStatus,
+  initWorkspaceIndex,
   lookupIndex,
   queryChunks,
   queryFiles,
   querySymbols,
-  shouldRefreshDiscover,
+  buildIndex,
 } from "./indexer";
 import { diagnosticsStatePath } from "./state-root";
+import { VEIL_VERSION } from "./version";
 import { webSearch } from "./web-search";
 
 function asText(data: unknown): {
@@ -33,9 +36,176 @@ function asText(data: unknown): {
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_INIT_TIMEOUT_MS = 4_000;
+const DEFAULT_BACKGROUND_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_BACKGROUND_MAX_REFRESHES_PER_HOUR = 4;
+
+type StartupInitSnapshot = {
+  workspace: string;
+  reason: string;
+  refreshed: boolean;
+  ok: boolean;
+  started_at: string;
+  finished_at: string;
+  error: string | null;
+};
+
+type ServerRuntimeState = {
+  init_runs: number;
+  init_failures: number;
+  init_inflight: boolean;
+  init_last: StartupInitSnapshot | null;
+  background_enabled: boolean;
+  background_interval_ms: number;
+  background_max_refreshes_per_hour: number;
+  background_window_started_ms: number;
+  background_refreshes_in_window: number;
+};
+
+function parseBooleanFlag(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseBoundedInt(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (value === undefined || value.trim().length === 0) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function shouldRefreshForQuery(requested: boolean | undefined, envEnabled: boolean): boolean {
+  return requested ?? envEnabled;
+}
+
+function canRunBackgroundRefresh(now: number, runtime: ServerRuntimeState): boolean {
+  if (now - runtime.background_window_started_ms >= HOUR_MS) {
+    runtime.background_window_started_ms = now;
+    runtime.background_refreshes_in_window = 0;
+  }
+  return runtime.background_refreshes_in_window < runtime.background_max_refreshes_per_hour;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`init-timeout-${String(timeoutMs)}ms`));
+    }, timeoutMs);
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+  });
+}
+
+const DEFAULT_QUERY_AUTO_REFRESH = parseBooleanFlag(
+  process.env.VEIL_SERVER_AUTO_REFRESH_ON_QUERY,
+  true,
+);
+
+const runtime: ServerRuntimeState = {
+  init_runs: 0,
+  init_failures: 0,
+  init_inflight: false,
+  init_last: null,
+  background_enabled: parseBooleanFlag(process.env.VEIL_SERVER_BACKGROUND_REFRESH, false),
+  background_interval_ms: parseBoundedInt(
+    process.env.VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS,
+    DEFAULT_BACKGROUND_INTERVAL_MS,
+    10_000,
+    HOUR_MS,
+  ),
+  background_max_refreshes_per_hour: parseBoundedInt(
+    process.env.VEIL_SERVER_BACKGROUND_MAX_PER_HOUR,
+    DEFAULT_BACKGROUND_MAX_REFRESHES_PER_HOUR,
+    1,
+    120,
+  ),
+  background_window_started_ms: Date.now(),
+  background_refreshes_in_window: 0,
+};
+
+async function runWorkspaceInit(
+  workspace: string,
+  stateRoot: string | undefined,
+  reason: string,
+  refresh_if_stale: boolean,
+): Promise<void> {
+  if (runtime.init_inflight) return;
+  runtime.init_inflight = true;
+  runtime.init_runs += 1;
+  const startedAt = new Date().toISOString();
+
+  try {
+    diagnostics.configureStatePath(diagnosticsStatePath(workspace, stateRoot));
+    const timeoutMs = parseBoundedInt(
+      process.env.VEIL_SERVER_INIT_TIMEOUT_MS,
+      DEFAULT_INIT_TIMEOUT_MS,
+      200,
+      60_000,
+    );
+    const result = await withTimeout(
+      initWorkspaceIndex(workspace, { state_root: stateRoot, refresh_if_stale }),
+      timeoutMs,
+    );
+    if (reason === "background" && result.refreshed) {
+      runtime.background_refreshes_in_window += 1;
+    }
+    runtime.init_last = {
+      workspace,
+      reason,
+      refreshed: result.refreshed,
+      ok: true,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      error: null,
+    };
+  } catch (error: unknown) {
+    runtime.init_failures += 1;
+    runtime.init_last = {
+      workspace,
+      reason,
+      refreshed: false,
+      ok: false,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    runtime.init_inflight = false;
+  }
+}
+
+function startBackgroundMaintenance(workspace: string, stateRoot: string | undefined): void {
+  if (!runtime.background_enabled) return;
+
+  const timer = setInterval(() => {
+    const now = Date.now();
+    if (!canRunBackgroundRefresh(now, runtime)) return;
+    void runWorkspaceInit(workspace, stateRoot, "background", true);
+  }, runtime.background_interval_ms);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+}
+
 const server = new McpServer({
   name: "veil",
-  version: process.env.VEIL_VERSION ?? "0.0.0",
+  version: VEIL_VERSION,
 });
 
 server.registerTool(
@@ -82,12 +252,17 @@ server.registerTool(
       workspace: z.string().optional(),
       query: z.string(),
       limit: z.number().int().positive().max(200).optional(),
+      refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
   },
-  async ({ workspace, query, limit, state_root }) => {
+  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
     const items = await queryFiles(ws, query, limit ?? 20, { state_root });
     return asText({ items });
   },
@@ -101,12 +276,17 @@ server.registerTool(
       workspace: z.string().optional(),
       query: z.string(),
       limit: z.number().int().positive().max(200).optional(),
+      refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
   },
-  async ({ workspace, query, limit, state_root }) => {
+  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
     const items = await querySymbols(ws, query, limit ?? 20, { state_root });
     return asText({ items });
   },
@@ -124,12 +304,119 @@ server.registerTool(
       path_prefix: z.string().optional(),
       language: z.string().optional(),
       intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+      refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
   },
-  async ({ workspace, query, limit, prefer_code, path_prefix, language, intent, state_root }) => {
+  async ({
+    workspace,
+    query,
+    limit,
+    prefer_code,
+    path_prefix,
+    language,
+    intent,
+    refresh_if_stale,
+    state_root,
+  }) => {
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
+    const items = await queryChunks(ws, query, limit ?? 10, {
+      prefer_code,
+      path_prefix,
+      language,
+      intent,
+      state_root,
+    });
+    return asText({ items });
+  },
+);
+
+server.registerTool(
+  "find_file",
+  {
+    description: "Compatibility alias for file lookup by path query",
+    inputSchema: {
+      workspace: z.string().optional(),
+      query: z.string(),
+      limit: z.number().int().positive().max(200).optional(),
+      refresh_if_stale: z.boolean().optional(),
+      state_root: z.string().optional(),
+    },
+  },
+  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
+    const ws = workspace ?? process.cwd();
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
+    const items = await queryFiles(ws, query, limit ?? 20, { state_root });
+    return asText({ items });
+  },
+);
+
+server.registerTool(
+  "find_symbol",
+  {
+    description: "Compatibility alias for symbol lookup by name",
+    inputSchema: {
+      workspace: z.string().optional(),
+      query: z.string(),
+      limit: z.number().int().positive().max(200).optional(),
+      refresh_if_stale: z.boolean().optional(),
+      state_root: z.string().optional(),
+    },
+  },
+  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
+    const ws = workspace ?? process.cwd();
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
+    const items = await querySymbols(ws, query, limit ?? 20, { state_root });
+    return asText({ items });
+  },
+);
+
+server.registerTool(
+  "search_for_pattern",
+  {
+    description: "Compatibility alias for indexed code/content search",
+    inputSchema: {
+      workspace: z.string().optional(),
+      query: z.string(),
+      limit: z.number().int().positive().max(100).optional(),
+      prefer_code: z.boolean().optional(),
+      path_prefix: z.string().optional(),
+      language: z.string().optional(),
+      intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+      refresh_if_stale: z.boolean().optional(),
+      state_root: z.string().optional(),
+    },
+  },
+  async ({
+    workspace,
+    query,
+    limit,
+    prefer_code,
+    path_prefix,
+    language,
+    intent,
+    refresh_if_stale,
+    state_root,
+  }) => {
+    const ws = workspace ?? process.cwd();
+    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
     const items = await queryChunks(ws, query, limit ?? 10, {
       prefer_code,
       path_prefix,
@@ -155,6 +442,7 @@ server.registerTool(
       path_prefix: z.string().optional(),
       language: z.string().optional(),
       intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+      refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
   },
@@ -168,10 +456,15 @@ server.registerTool(
     path_prefix,
     language,
     intent,
+    refresh_if_stale,
     state_root,
   }) => {
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+    });
     const result = await lookupIndex(ws, query, {
       files_limit,
       symbols_limit,
@@ -219,11 +512,10 @@ server.registerTool(
   }) => {
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    let status = await getStatus(ws, { state_root });
-    if (shouldRefreshDiscover(status) && (refresh_if_stale ?? true)) {
-      await buildIndex(ws, "changed", { state_root });
-      status = await getStatus(ws, { state_root });
-    }
+    const initResult = await initWorkspaceIndex(ws, {
+      state_root,
+      refresh_if_stale: refresh_if_stale ?? true,
+    });
 
     const discovered = await discoverIndex(ws, query, {
       files_limit,
@@ -237,7 +529,7 @@ server.registerTool(
     });
 
     return asText({
-      status,
+      status: initResult.status_after,
       intent: discovered.intent,
       files: discovered.files,
       symbols: discovered.symbols,
@@ -393,9 +685,54 @@ server.registerTool(
     if (reset) {
       diagnostics.reset();
     }
-    return asText(data);
+    return asText({
+      ...data,
+      server_runtime: {
+        init_runs: runtime.init_runs,
+        init_failures: runtime.init_failures,
+        init_inflight: runtime.init_inflight,
+        init_last: runtime.init_last,
+        background_enabled: runtime.background_enabled,
+        background_interval_ms: runtime.background_interval_ms,
+        background_max_refreshes_per_hour: runtime.background_max_refreshes_per_hour,
+        background_window_started_ms: runtime.background_window_started_ms,
+        background_refreshes_in_window: runtime.background_refreshes_in_window,
+      },
+    });
   },
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+let started = false;
+
+export async function startServer(): Promise<void> {
+  if (started) return;
+  started = true;
+
+  const workspace = process.cwd();
+  const stateRoot = process.env.VEIL_STATE_ROOT;
+  const autoInitEnabled = parseBooleanFlag(process.env.VEIL_SERVER_AUTO_INIT, true);
+  if (autoInitEnabled) {
+    void runWorkspaceInit(workspace, stateRoot, "startup", true);
+  }
+  startBackgroundMaintenance(workspace, stateRoot);
+
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+export const __internalServer = {
+  parseBooleanFlag,
+  parseBoundedInt,
+  shouldRefreshForQuery,
+  canRunBackgroundRefresh,
+};
+
+const meta = import.meta as unknown as Record<string, unknown>;
+const sourceSuffix = `${sep}src${sep}server.ts`;
+const isSourceModule = fileURLToPath(import.meta.url).endsWith(sourceSuffix);
+const argvRefsSource = process.argv.some(
+  (arg) => arg.endsWith(`${sep}src${sep}server.ts`) || arg === "src/server.ts",
+);
+if (isSourceModule && (meta.main === true || argvRefsSource)) {
+  await startServer();
+}

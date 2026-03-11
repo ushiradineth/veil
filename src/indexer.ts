@@ -13,6 +13,7 @@ import type {
   BuildMode,
   ChunkRecord,
   FileRecord,
+  InitWorkspaceIndexResult,
   IndexStatus,
   LookupResponse,
   Manifest,
@@ -789,6 +790,68 @@ export async function getStatus(
 export function shouldRefreshDiscover(status: IndexStatus): boolean {
   if (!status.stale) return false;
   return status.reasons.some((reason) => reason !== "workspace-dirty");
+}
+
+export async function initWorkspaceIndex(
+  workspace: string,
+  options: {
+    state_root?: string;
+    mode?: BuildMode;
+    refresh_if_stale?: boolean;
+  } = {},
+): Promise<InitWorkspaceIndexResult> {
+  const statusBefore = await getStatus(workspace, { state_root: options.state_root });
+  const refreshIfStale = options.refresh_if_stale ?? true;
+  const mode = options.mode ?? "changed";
+
+  if (!refreshIfStale) {
+    return {
+      workspace,
+      refreshed: false,
+      reason: "refresh-disabled",
+      mode: null,
+      status_before: statusBefore,
+      status_after: statusBefore,
+      manifest: statusBefore.manifest,
+    };
+  }
+
+  if (!statusBefore.stale) {
+    return {
+      workspace,
+      refreshed: false,
+      reason: "fresh",
+      mode: null,
+      status_before: statusBefore,
+      status_after: statusBefore,
+      manifest: statusBefore.manifest,
+    };
+  }
+
+  if (!shouldRefreshDiscover(statusBefore)) {
+    return {
+      workspace,
+      refreshed: false,
+      reason: "dirty-only",
+      mode: null,
+      status_before: statusBefore,
+      status_after: statusBefore,
+      manifest: statusBefore.manifest,
+    };
+  }
+
+  const manifest = await buildIndex(workspace, mode, { state_root: options.state_root });
+  STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
+  const statusAfter = await getStatus(workspace, { state_root: options.state_root });
+  return {
+    workspace,
+    refreshed: true,
+    reason: "refreshed",
+    mode,
+    status_before: statusBefore,
+    status_after: statusAfter,
+    manifest,
+  };
 }
 
 /**

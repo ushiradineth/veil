@@ -74,6 +74,18 @@ export type IndexStatus = {
   current_git_head: string | null;
 };
 
+export type InitWorkspaceIndexReason = "fresh" | "dirty-only" | "refresh-disabled" | "refreshed";
+
+export type InitWorkspaceIndexResult = {
+  workspace: string;
+  refreshed: boolean;
+  reason: InitWorkspaceIndexReason;
+  mode: BuildMode | null;
+  status_before: IndexStatus;
+  status_after: IndexStatus;
+  manifest: Manifest | null;
+};
+
 export type GitToolName = "git_status" | "git_diff" | "git_log" | "git_show" | "gh_lookup";
 
 export type GitToolErrorCode =

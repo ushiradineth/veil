@@ -53,6 +53,7 @@
 - Prefer short, directive wording over narrative explanations.
 - Avoid repeating context already present in prompts, tool schemas, or command output.
 - Keep skill and onboarding artifacts compact and operational.
+- Keep tool descriptions and guidance text compact by default to reduce token overhead.
 
 ## MCP Tool Routing Policy
 
@@ -63,12 +64,9 @@ See `SKILL.md` for the canonical routing order and anti-patterns.
 - MCP tool descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
 - Default objective is native-first Veil selection across all replaceable workflows (local retrieval, git context, web/fetch, GitHub context).
 - Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
-- Server startup performs non-blocking index init by default (`VEIL_SERVER_AUTO_INIT=1`).
-- Query tools (`files`, `symbols`, `search`, `lookup`) can auto-refresh stale indexes by default (`VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1`).
-- Optional background maintenance loop is controlled by env vars:
-  - `VEIL_SERVER_BACKGROUND_REFRESH=1`
-  - `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS` (default `300000`)
-  - `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR` (default `4`)
+- Server startup performs non-blocking index init by default.
+- Query tools (`files`, `symbols`, `search`, `lookup`) auto-refresh stale indexes by default.
+- No project-specific environment variables are required for normal operation.
 
 ## Skill Trigger (Operational)
 

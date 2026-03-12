@@ -88,12 +88,9 @@ export class PerformanceDiagnostics {
     registerHook?: (event: string, handler: () => void) => void;
     exitFn?: (code: number) => void;
   }) {
-    this.persistIntervalMs =
-      options?.persistIntervalMs ?? Number(process.env.VEIL_DIAGNOSTICS_PERSIST_MS ?? "1000");
+    this.persistIntervalMs = options?.persistIntervalMs ?? 1000;
     this.statePath =
-      options?.statePath ??
-      process.env.VEIL_DIAGNOSTICS_PATH ??
-      join(resolveIndexDir(process.cwd()), "diagnostics-state.json");
+      options?.statePath ?? join(resolveIndexDir(process.cwd()), "diagnostics-state.json");
     this.registerHook =
       options?.registerHook ??
       ((event, handler) => {

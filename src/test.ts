@@ -1206,19 +1206,9 @@ describe("Phase 3: Cache behavior", () => {
     expect((result.data?.changed.untracked ?? 0) > 0).toBe(true);
   });
 
-  test("Git status supports forced Date.now fallback clock", () => {
-    const prev = process.env.VEIL_FORCE_DATE_NOW ?? "0";
-    process.env.VEIL_FORCE_DATE_NOW = prev;
-    let toggled = false;
-    process.env.VEIL_FORCE_DATE_NOW = "1";
-    try {
-      const result = gitStatus(SMALL_REPO);
-      expect(result.meta.duration_ms).toBeGreaterThanOrEqual(0);
-    } finally {
-      toggled = true;
-      process.env.VEIL_FORCE_DATE_NOW = prev;
-    }
-    expect(toggled).toBe(true);
+  test("Git status returns non-negative duration", () => {
+    const result = gitStatus(SMALL_REPO);
+    expect(result.meta.duration_ms).toBeGreaterThanOrEqual(0);
   });
 
   test("Git internal clock helper supports explicit fallback path", () => {
@@ -2552,7 +2542,7 @@ describe("Server startup helpers", () => {
     );
     expect(guidance.confidence).toBe("medium");
     expect(guidance.coverage).toBe("partial");
-    expect(guidance.recommended_query?.includes("broaden:")).toBe(true);
+    expect(guidance.recommended_query?.includes("broaden ")).toBe(true);
   });
 
   test("buildAgentGuidance returns low confidence for error responses", () => {

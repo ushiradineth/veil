@@ -3,7 +3,7 @@ import { isAbsolute, join, normalize, relative } from "node:path";
 export const DEFAULT_STATE_ROOT = ".veil";
 
 export function resolveStateRoot(workspace: string, override?: string): string {
-  const raw = (override ?? process.env.VEIL_STATE_ROOT ?? DEFAULT_STATE_ROOT).trim();
+  const raw = (override ?? DEFAULT_STATE_ROOT).trim();
   if (!raw) return join(workspace, DEFAULT_STATE_ROOT);
   if (isAbsolute(raw)) return normalize(raw);
   return normalize(join(workspace, raw));

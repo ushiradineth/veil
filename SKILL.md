@@ -39,13 +39,9 @@ Use this skill when an agent should prefer Veil tools over non-Veil alternatives
 
 ## Auto-init behavior
 
-- Startup can auto-init index state via `VEIL_SERVER_AUTO_INIT=1` (default enabled).
-- Query tools can auto-refresh stale indexes via `VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1` (default enabled for `files`, `symbols`, `search`, `lookup`).
+- Startup auto-inits index state by default.
+- Query tools auto-refresh stale index state by default (`files`, `symbols`, `search`, `lookup`).
 - `discover` already performs stale-aware refresh behavior.
-- Optional background maintenance can be enabled with:
-  - `VEIL_SERVER_BACKGROUND_REFRESH=1`
-  - `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS`
-  - `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR`
 
 ## Query tips
 

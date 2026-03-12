@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
+import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
@@ -2827,10 +2828,22 @@ describe("Benchmark report generation", () => {
       generated_at: "2026-03-07T12:00:00.000Z",
       config: {
         workspace: "/tmp/repo",
+        profile: "smoke",
+        agents: ["codex", "claude"],
+        mcp_modes: ["veil", "serena", "none"],
         cold_iterations: 1,
         warm_iterations: 1,
         output_dir: "/tmp/repo/benchmarks/results/20260307-120000Z",
         competitors: ["codex-none"],
+        max_runtime_ms: 600000,
+        max_cell_runtime_ms: 20000,
+        preflight: {
+          "codex-none": {
+            ready: true,
+            mode_control: "prompt_only",
+            reason: "mode wiring not exposed by codex CLI",
+          },
+        },
       },
       scenarios: [
         {
@@ -2861,5 +2874,35 @@ describe("Benchmark report generation", () => {
     expect(md.includes("benchmarks/results/20260307-120000Z/results.json")).toBe(true);
     expect(md.includes("| status-bootstrap | 10.0000 / 12.0000 |")).toBe(true);
     expect(md.includes("Native Choice Signals")).toBe(true);
+    expect(md.includes("- Profile: `smoke`")).toBe(true);
+    expect(md.includes("- Agents: `codex,claude`")).toBe(true);
+    expect(md.includes("Runtime budget")).toBe(true);
+    expect(md.includes("Cell budget")).toBe(true);
+    expect(md.includes("| codex (none) | yes | prompt_only |")).toBe(true);
+  });
+});
+
+describe("Bench suite planning helpers", () => {
+  test("Agent parsing excludes unsupported competitors", () => {
+    const parsed = __internalBenchSuite.parseAgentIds(["codex", "opencode", "claude"]);
+    expect(parsed).toEqual(["codex", "claude"]);
+  });
+
+  test("Smoke profile uses reduced scenario surface", () => {
+    const smoke = __internalBenchSuite.scenariosForProfile("smoke");
+    const full = __internalBenchSuite.scenariosForProfile("full");
+    expect(smoke.length).toBeGreaterThan(0);
+    expect(full.length).toBeGreaterThan(smoke.length);
+    expect(smoke.every((scenario) => scenario.kind !== "gh_lookup")).toBe(true);
+  });
+
+  test("Timeout errors map to unsupported classification", () => {
+    const mapped = __internalBenchSuite.mapTimeoutToUnsupported("codex", {
+      status: "error",
+      text: "",
+      reason: "ETIMEDOUT after 1000ms",
+    });
+    expect(mapped.status).toBe("unsupported");
+    expect(mapped.reason).toBe("codex timeout");
   });
 });

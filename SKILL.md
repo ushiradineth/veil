@@ -1,6 +1,6 @@
 ---
 name: veil
-description: Route agent tasks to Veil MCP tools with a practical local-first then web workflow.
+description: Route agent tasks to Veil CLI commands with a practical local-first then web workflow.
 ---
 
 # Veil Skill
@@ -29,7 +29,7 @@ Use this skill when an agent should prefer Veil tools over non-Veil alternatives
 
 ## Operating guidance
 
-- Lead with Veil tools for discovery and retrieval, then narrow with targeted follow-up calls.
+- Lead with Veil CLI commands for discovery and retrieval, then narrow with targeted follow-up calls.
 - Use `discover` as the default local starting point for broad repo questions.
 - Prefer Veil git, web, fetch, and GitHub tools when those calls are in scope.
 - Use `fetch_url` for page extraction and keep `format=markdown` for agent-friendly content.

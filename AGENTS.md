@@ -5,7 +5,6 @@
 - Install deps: `nix run nixpkgs#bun -- install`
 - Run tests: `nix run nixpkgs#bun -- test ./src/test.ts`
 - Run coverage: `nix run nixpkgs#bun -- test --coverage ./src/test.ts`
-- Start MCP server: `nix run nixpkgs#bun -- run src/server.ts`
 - CLI status: `nix run nixpkgs#bun -- run src/cli.ts status`
 - Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --cold 1 --warm 10 --out benchmarks/results/latest`
 - Build npm package bundle: `node scripts/build-package.mjs`
@@ -19,9 +18,8 @@
 
 ## Project Structure
 
-- `src/server.ts`: MCP tool registration and request handling.
-- `src/cli.ts`: CLI mirror of MCP capabilities.
-- `src/bin.ts`: npm package entrypoint router (`server` / `cli` subcommands).
+- `src/cli.ts`: primary CLI command surface.
+- `src/bin.ts`: npm package entrypoint router (`cli` subcommand).
 - `src/indexer.ts`: indexing and local code retrieval core.
 - `src/indexer/build.ts`: incremental merge and record sorting helpers.
 - `src/query.ts`: lookup scoring and ranking helpers.
@@ -43,7 +41,7 @@
 
 - TypeScript with explicit response contracts in `src/types.ts`.
 - Keep outputs token-lean and deterministic.
-- MCP/CLI text output must stay TOON-formatted.
+- CLI text output must stay TOON-formatted.
 - Avoid ad hoc shell parsing when a typed utility exists.
 
 ## Token Sensitivity
@@ -55,16 +53,15 @@
 - Keep skill and onboarding artifacts compact and operational.
 - Keep tool descriptions and guidance text compact by default to reduce token overhead.
 
-## MCP Tool Routing Policy
+## CLI Routing Policy
 
 See `SKILL.md` for the canonical routing order and anti-patterns.
 
 ## No-Skill Defaults
 
-- MCP tool descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
+- CLI command descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
 - Default objective is native-first Veil selection across all replaceable workflows (local retrieval, git context, web/fetch, GitHub context).
 - Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
-- Server startup performs non-blocking index init by default.
 - Query tools (`files`, `symbols`, `search`, `lookup`) auto-refresh stale indexes by default.
 - No project-specific environment variables are required for normal operation.
 
@@ -90,7 +87,7 @@ Use `SKILL.md` as the canonical reusable skill prompt.
 
 ### Always
 
-- Prefer Veil MCP/CLI tools over shell equivalents for supported intents.
+- Prefer Veil CLI tools over shell equivalents for supported intents.
 - Keep benchmark and docs claims backed by fresh artifacts.
 - Preserve TOON output formatting for agent-facing responses.
 

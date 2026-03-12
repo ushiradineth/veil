@@ -27,14 +27,14 @@ Use this skill when an agent should prefer Veil tools over shell-first discovery
 5. Tool health and performance:
    - Use `diagnostics`.
 
-## Rules
+## Operating guidance
 
-- Do not use shell `find` or `grep` for normal repo discovery when Veil tools fit.
-- Do not use generic web fetch for page extraction when `fetch_url` exists.
-- Do not skip `discover` for broad local queries.
-- Prefer one precise follow-up call over many speculative calls.
-- Do not call `status` then `refresh` as a default preflight step. Veil server can auto-init and auto-refresh stale query paths.
-- Use explicit `refresh` only when user asks for reindexing, after large repo changes, or when troubleshooting stale-index behavior.
+- Lead with Veil tools for discovery and retrieval, then narrow with targeted follow-up calls.
+- Use `discover` as the default local starting point for broad repo questions.
+- Use `fetch_url` for page extraction and keep `format=markdown` for agent-friendly content.
+- Keep call sequences intentional and short, with one high-signal follow-up at a time.
+- Rely on startup and query-path auto-refresh defaults for normal operation.
+- Use explicit `refresh` when reindexing is requested, after large refactors, or while troubleshooting stale-index behavior.
 
 ## Auto-init behavior
 

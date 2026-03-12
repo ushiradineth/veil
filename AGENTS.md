@@ -48,10 +48,11 @@
 
 ## MCP Tool Routing Policy
 
-See `docs/SKILL.md` for the canonical routing order and anti-patterns.
+See `SKILL.md` for the canonical routing order and anti-patterns.
 
 ## No-Skill Defaults
 
+- MCP tool descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
 - Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
 - Server startup performs non-blocking index init by default (`VEIL_SERVER_AUTO_INIT=1`).
 - Query tools (`files`, `symbols`, `search`, `lookup`) can auto-refresh stale indexes by default (`VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1`).
@@ -69,7 +70,7 @@ When a prompt includes words like `research`, `investigate`, `find where`, `summ
 3. `fetch_url` for top URLs
 4. Return concise synthesis with source URLs
 
-Use `docs/SKILL.md` as the canonical reusable skill prompt.
+Use `SKILL.md` as the canonical reusable skill prompt.
 
 ## Git Workflow
 

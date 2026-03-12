@@ -88,3 +88,30 @@ Run A/B strategy benchmarks (Veil MCP vs Veil CLI+skill) with competitor cells:
 ```bash
 nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --agents veil,firecrawl --strategies mcp_transport,cli_skill --profile smoke --cold 1 --warm 1
 ```
+
+## Release
+
+Releases follow a trunk-gated PR promotion flow.
+
+1. Dispatch the `Release` workflow from `main` with a bump type (`patch`, `minor`, `major`).
+   This creates a `release/vX.Y.Z` branch and opens a PR to `main`.
+2. CI runs on the PR. Merge when checks pass.
+3. Merging triggers the `Publish` workflow which tags, publishes to npm, creates a GitHub release,
+   and updates the Homebrew formula in the tap repository.
+
+Required GitHub secrets:
+
+| Secret                      | Purpose                                        |
+| --------------------------- | ---------------------------------------------- |
+| `NPM_TOKEN`                 | Publish to npm registry                        |
+| `RELEASE_PR_TOKEN`          | PAT to open release PR so CI triggers on it    |
+| `HOMEBREW_TAP_GITHUB_TOKEN` | PAT with write access to the Homebrew tap repo |
+
+Optional repository variables:
+
+| Variable                | Default                     | Purpose                  |
+| ----------------------- | --------------------------- | ------------------------ |
+| `HOMEBREW_TAP_REPO`     | `ushiradineth/homebrew-tap` | Tap owner/repo           |
+| `HOMEBREW_FORMULA_PATH` | `Formula/veil.rb`           | Formula file path in tap |
+
+Branch protection on `main` should require the `CI / test` check context before merge.

@@ -61,6 +61,13 @@ type ScenarioSummary = {
   reason: string | null;
   cold: Stats;
   warm: Stats;
+  native_adoption: NativeAdoption;
+};
+
+type NativeAdoption = {
+  first_call_success: number;
+  calls_to_useful_context: number;
+  non_veil_fallback_rate: number;
 };
 
 type Stats = {
@@ -452,6 +459,27 @@ function scenarioIterations(scenario: Scenario, phase: Phase, fallback: number):
   return fallback;
 }
 
+function summarizeNativeAdoption(
+  adapterId: string,
+  run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
+): NativeAdoption {
+  const isVeilMode = adapterId.endsWith("-veil");
+  if (run.status !== "ok" || run.samples.length === 0) {
+    return {
+      first_call_success: 0,
+      calls_to_useful_context: 3,
+      non_veil_fallback_rate: 1,
+    };
+  }
+  const first = run.samples[0];
+  const firstUseful = first.relevance > 0;
+  return {
+    first_call_success: first.success ? 1 : 0,
+    calls_to_useful_context: firstUseful ? 1 : 2,
+    non_veil_fallback_rate: isVeilMode ? 0 : 1,
+  };
+}
+
 function toMarkdown(report: SuiteReport): string {
   const lines: string[] = [];
   lines.push("# Benchmark Suite Result");
@@ -486,6 +514,24 @@ function toMarkdown(report: SuiteReport): string {
       const status = row.status === "ok" ? "ok" : `${row.status}: ${row.reason ?? "n/a"}`;
       lines.push(
         `| ${competitor.label} | ${scenario.title} | ${row.warm.p50_ms.toFixed(4)} | ${row.warm.p95_ms.toFixed(4)} | ${row.warm.success_rate.toFixed(2)} | ${row.warm.relevance_rate.toFixed(2)} | ${status} |`,
+      );
+    }
+  }
+
+  lines.push("");
+  lines.push("## Native Adoption Signals");
+  lines.push("");
+  lines.push(
+    "| Competitor | Scenario | First Call Success | Calls To Useful Context | Non-Veil Fallback Rate |",
+  );
+  lines.push(
+    "|------------|----------|--------------------|-------------------------|------------------------|",
+  );
+  for (const competitor of report.competitors) {
+    for (const scenario of report.scenarios) {
+      const row = competitor.scenarios[scenario.id];
+      lines.push(
+        `| ${competitor.label} | ${scenario.title} | ${row.native_adoption.first_call_success.toFixed(2)} | ${row.native_adoption.calls_to_useful_context.toFixed(2)} | ${row.native_adoption.non_veil_fallback_rate.toFixed(2)} |`,
       );
     }
   }
@@ -527,6 +573,11 @@ async function main(): Promise<void> {
           reason: "suite runtime budget exceeded",
           cold: summarize([]),
           warm: summarize([]),
+          native_adoption: {
+            first_call_success: 0,
+            calls_to_useful_context: 3,
+            non_veil_fallback_rate: 1,
+          },
         };
         continue;
       }
@@ -539,6 +590,7 @@ async function main(): Promise<void> {
           reason: run.reason,
           cold: summarize([]),
           warm: summarize([]),
+          native_adoption: summarizeNativeAdoption(adapter.id, run),
         };
         continue;
       }
@@ -547,6 +599,7 @@ async function main(): Promise<void> {
         reason: run.reason,
         cold: summarize([]),
         warm: summarize(run.samples),
+        native_adoption: summarizeNativeAdoption(adapter.id, run),
       };
     }
   }

@@ -1,9 +1,10 @@
 {
-  "agents": ["codex", "claude"],
-  "strategies": ["mcp_baseline", "cli_skill"],
+  "agents": ["codex", "claude", "firecrawl"],
+  "strategies": ["mcp_transport", "cli_skill"],
   "notes": [
     "This file documents the normalized benchmark matrix contract.",
     "Each agent/strategy cell must run the same scenario prompt and query against the same workspace.",
-    "Current bench-suite defaults already follow this matrix."
+    "Current bench-suite defaults include optional firecrawl competitor cells.",
+    "firecrawl MCP rows can remain unsupported when MCP transport wiring or API credentials are unavailable."
   ]
 }

@@ -6,20 +6,21 @@
 - Run tests: `nix run nixpkgs#bun -- test ./src/test.ts`
 - Run coverage: `nix run nixpkgs#bun -- test --coverage ./src/test.ts`
 - CLI status: `nix run nixpkgs#bun -- run src/cli.ts status`
-- Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --cold 1 --warm 10 --out benchmarks/results/latest`
+- Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --profile smoke --cold 1 --warm 1 --strategies mcp_transport,cli_skill`
 - Build npm package bundle: `node scripts/build-package.mjs`
 - Dry-run npm package tarball: `npm pack --dry-run`
 
 ## Testing
 
 - Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.
-- For performance or benchmark changes, run at least one fresh suite and update `benchmarks/results/latest/*`.
-- Keep benchmark tables in `BENCHMARKS.md` aligned with `benchmarks/results/latest/results.json`.
+- For performance or benchmark changes, run at least one fresh suite and update the newest `benchmarks/results/<run-id>/*` artifacts.
+- Keep benchmark tables in `BENCHMARKS.md` aligned with the newest `benchmarks/results/<run-id>/results.json`.
 
 ## Project Structure
 
 - `src/cli.ts`: primary CLI command surface.
-- `src/bin.ts`: npm package entrypoint router (`cli` subcommand).
+- `src/bin.ts`: npm package entrypoint router (top-level CLI + optional `mcp` namespace).
+- `src/server.ts`: optional MCP stdio server runtime (`veil mcp server`).
 - `src/indexer.ts`: indexing and local code retrieval core.
 - `src/indexer/build.ts`: incremental merge and record sorting helpers.
 - `src/query.ts`: lookup scoring and ranking helpers.

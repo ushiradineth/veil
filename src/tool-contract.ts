@@ -26,6 +26,9 @@ export const CLI_COMMANDS = [
   "init",
   "discover",
   "lookup",
+  "files",
+  "symbols",
+  "search",
   "web-search",
   "fetch-url",
   "diagnostics",
@@ -35,3 +38,25 @@ export const CLI_COMMANDS = [
   "git-show",
   "gh-lookup",
 ] as const;
+
+export type CliCommandName = (typeof CLI_COMMANDS)[number];
+
+export const CLI_COMMAND_DESCRIPTIONS: Record<CliCommandName, string> = {
+  build: "Full index rebuild",
+  refresh: "Incremental index rebuild",
+  status: "Index freshness and manifest status",
+  init: "Initialize index if missing or stale",
+  discover: "Combined discovery: files, symbols, search",
+  lookup: "Ranked intent-aware retrieval",
+  files: "File path lookup by query",
+  symbols: "Symbol lookup by name",
+  search: "Indexed code/content search",
+  "web-search": "External web search across providers",
+  "fetch-url": "Fetch and normalize URL content",
+  diagnostics: "Cache and latency diagnostics",
+  "git-status": "Git branch and dirty-tree summary",
+  "git-log": "Recent git commits",
+  "git-diff": "Working or ranged git diff",
+  "git-show": "Show details for one git revision",
+  "gh-lookup": "GitHub context lookup via gh CLI",
+};

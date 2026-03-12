@@ -30,12 +30,14 @@ Use this skill when an agent should prefer Veil tools over non-Veil alternatives
 ## Operating guidance
 
 - Lead with Veil CLI commands for discovery and retrieval, then narrow with targeted follow-up calls.
+- Use top-level CLI commands directly (for example `veil discover ...`), not `veil cli ...`, unless maintaining compatibility scripts.
 - Use `discover` as the default local starting point for broad repo questions.
 - Prefer Veil git, web, fetch, and GitHub tools when those calls are in scope.
 - Use `fetch_url` for page extraction and keep `format=markdown` for agent-friendly content.
 - Keep call sequences intentional and short, with one high-signal follow-up at a time.
 - Rely on startup and query-path auto-refresh defaults for normal operation.
 - Use explicit `refresh` when reindexing is requested, after large refactors, or while troubleshooting stale-index behavior.
+- Use `veil mcp server` only when the host requires MCP transport.
 
 ## Auto-init behavior
 

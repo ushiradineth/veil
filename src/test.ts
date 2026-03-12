@@ -9,6 +9,7 @@ import { buildAgentGuidance } from "./agent-guidance";
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
+import { __internalCli } from "./cli";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
@@ -2520,17 +2521,38 @@ describe("Agent guidance helpers", () => {
 });
 
 describe("Profiler utilities", () => {
-  test("Bin route maps cli command", () => {
-    expect(__internalBin.route(["bun", "src/bin.ts", "cli", "status"])).toEqual({
+  test("Bin route maps top-level cli commands only", () => {
+    expect(__internalBin.route(["bun", "src/bin.ts", "status"])).toEqual({
       type: "cli",
       argv: ["bun", "src/bin.ts", "status"],
     });
-    expect(__internalBin.route(["bun", "src/bin.ts"])).toEqual({ type: "usage" });
+    expect(__internalBin.route(["bun", "src/bin.ts", "cli", "status"])).toEqual({
+      type: "usage",
+    });
+  });
+
+  test("Bin route maps help tokens", () => {
+    expect(__internalBin.route(["bun", "src/bin.ts"])).toEqual({ type: "help" });
+    expect(__internalBin.route(["bun", "src/bin.ts", "help"])).toEqual({ type: "help" });
+    expect(__internalBin.route(["bun", "src/bin.ts", "--help"])).toEqual({ type: "help" });
+    expect(__internalBin.route(["bun", "src/bin.ts", "-h"])).toEqual({ type: "help" });
+  });
+
+  test("Bin route maps mcp namespace", () => {
+    expect(__internalBin.route(["bun", "src/bin.ts", "mcp", "server"])).toEqual({
+      type: "mcp_server",
+    });
+    expect(__internalBin.route(["bun", "src/bin.ts", "mcp"])).toEqual({
+      type: "mcp_usage",
+      ok: true,
+    });
   });
 
   test("Bin usage text includes entrypoint commands", () => {
     const text = __internalBin.usage();
-    expect(text.includes("veil cli")).toBe(true);
+    expect(text.includes("Commands")).toBe(true);
+    expect(text.includes("veil status")).toBe(true);
+    expect(text.includes("veil mcp server")).toBe(true);
   });
 
   test("Bin default loader imports module specifier", async () => {
@@ -2538,33 +2560,30 @@ describe("Profiler utilities", () => {
     expect(typeof mod).toBe("object");
   });
 
-  test("Bin main usage path sets exitCode", async () => {
+  test("Bin main help path writes usage to stdout", async () => {
     const originalArgv = process.argv;
-    const originalExitCode = process.exitCode;
     const writes: string[] = [];
-    const originalWrite = process.stderr.write.bind(process.stderr);
+    const originalWrite = process.stdout.write.bind(process.stdout);
     process.argv = ["bun", "src/bin.ts"];
-    process.stderr.write = ((chunk: string | Uint8Array) => {
+    process.stdout.write = ((chunk: string | Uint8Array) => {
       writes.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write;
+    }) as typeof process.stdout.write;
 
     try {
-      process.exitCode = 0;
       await __internalBin.main();
     } finally {
       process.argv = originalArgv;
-      process.stderr.write = originalWrite;
-      process.exitCode = originalExitCode;
+      process.stdout.write = originalWrite;
     }
 
-    expect(writes.join(" ")).toContain("Usage: veil");
+    expect(writes.join(" ")).toContain("Usage:");
   });
 
   test("Bin main cli path rewrites argv and loads cli module", async () => {
     const originalArgv = process.argv;
     const loaded: string[] = [];
-    process.argv = ["bun", "src/bin.ts", "cli", "status"];
+    process.argv = ["bun", "src/bin.ts", "status"];
 
     try {
       await __internalBin.main((specifier: string) => {
@@ -2577,6 +2596,23 @@ describe("Profiler utilities", () => {
     }
 
     expect(loaded).toEqual(["./cli"]);
+  });
+
+  test("Bin main mcp path loads server module", async () => {
+    const originalArgv = process.argv;
+    const loaded: string[] = [];
+    process.argv = ["bun", "src/bin.ts", "mcp", "server"];
+
+    try {
+      await __internalBin.main((specifier: string) => {
+        loaded.push(specifier);
+        return Promise.resolve({});
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(loaded).toEqual(["./server"]);
   });
 
   test("Bin runMain catches thrown errors", async () => {
@@ -2610,7 +2646,7 @@ describe("Profiler utilities", () => {
     try {
       process.exitCode = 0;
       await __internalBin.runMain();
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBe(0);
     } finally {
       process.argv = originalArgv;
       process.exitCode = originalExitCode;
@@ -2618,6 +2654,20 @@ describe("Profiler utilities", () => {
     }
   });
 
+  test("CLI help text includes key command groups", () => {
+    const text = __internalCli.cliHelp();
+    expect(text.includes("Commands:")).toBe(true);
+    expect(text.includes("status")).toBe(true);
+    expect(text.includes("discover --workspace")).toBe(true);
+  });
+
+  test("CLI command help includes usage and examples", () => {
+    const text = __internalCli.commandHelp("status");
+    expect(text.includes("Command:")).toBe(true);
+    expect(text.includes("Description:")).toBe(true);
+    expect(text.includes("Usage:")).toBe(true);
+    expect(text.includes("veil status --workspace")).toBe(true);
+  });
   test("State root helpers handle absolute and relative overrides", () => {
     const workspace = join(TEMP_TEST_DIR, "state-root-workspace");
     const absRoot = "/tmp/veil-state-root";
@@ -2773,7 +2823,7 @@ describe("Benchmark report generation", () => {
         workspace: "/tmp/repo",
         profile: "smoke",
         agents: ["codex", "claude"],
-        strategies: ["mcp_baseline", "cli_skill"],
+        strategies: ["mcp_transport", "cli_skill"],
         cold_iterations: 1,
         warm_iterations: 1,
         output_dir: "/tmp/repo/benchmarks/results/20260307-120000Z",
@@ -2804,7 +2854,7 @@ describe("Benchmark report generation", () => {
               status: "ok",
               reason: null,
               ab_signal: {
-                schema_overhead_tokens: 12000,
+                schema_overhead_tokens: 400,
                 first_useful_action_ms: 10,
                 fallback_rate: 1,
               },
@@ -2825,7 +2875,7 @@ describe("Benchmark report generation", () => {
     expect(md.includes("A/B Signals")).toBe(true);
     expect(md.includes("- Profile: `smoke`")).toBe(true);
     expect(md.includes("- Agents: `codex,claude`")).toBe(true);
-    expect(md.includes("- Strategies: `mcp_baseline,cli_skill`")).toBe(true);
+    expect(md.includes("- Strategies: `mcp_transport,cli_skill`")).toBe(true);
     expect(md.includes("Runtime budget")).toBe(true);
     expect(md.includes("Cell budget")).toBe(true);
     expect(md.includes("| codex (none) | yes | prompt_only |")).toBe(true);
@@ -2834,8 +2884,8 @@ describe("Benchmark report generation", () => {
 
 describe("Bench suite planning helpers", () => {
   test("Agent parsing excludes unsupported competitors", () => {
-    const parsed = __internalBenchSuite.parseAgentIds(["codex", "opencode", "claude"]);
-    expect(parsed).toEqual(["codex", "claude"]);
+    const parsed = __internalBenchSuite.parseAgentIds(["codex", "opencode", "claude", "firecrawl"]);
+    expect(parsed).toEqual(["codex", "claude", "firecrawl"]);
   });
 
   test("Smoke profile uses reduced scenario surface", () => {
@@ -2848,7 +2898,7 @@ describe("Bench suite planning helpers", () => {
 
   test("Strategy parsing supports defaults and legacy aliases", () => {
     const parsed = __internalBenchSuite.parseStrategies(["veil", "none", "cli_skill"]);
-    expect(parsed).toEqual(["mcp_baseline", "cli_skill"]);
+    expect(parsed).toEqual(["mcp_transport", "cli_skill"]);
   });
 
   test("Timeout errors map to unsupported classification", () => {

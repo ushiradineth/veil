@@ -24,7 +24,7 @@ npm i -g @ushiradineth/veil
 Or run without install:
 
 ```bash
-npx -y @ushiradineth/veil@latest cli status --workspace .
+npx -y @ushiradineth/veil@latest status --workspace .
 ```
 
 ## Install Skill
@@ -37,28 +37,32 @@ npx -y skills add https://github.com/ushiradineth/veil/tree/main --skill veil
 
 ```bash
 # status and refresh
-veil cli status --workspace .
-veil cli init --workspace .
-veil cli refresh --workspace . --mode changed
+veil status --workspace .
+veil init --workspace .
+veil refresh --workspace . --mode changed
 
 # local index retrieval
-veil cli discover --workspace . --query "find build logic"
-veil cli lookup --workspace . --query "where is parseNdjson defined"
-veil cli search --workspace . --query "pnpm install"
+veil discover --workspace . --query "find build logic"
+veil lookup --workspace . --query "where is parseNdjson defined"
+veil search --workspace . --query "pnpm install"
 
 # web and fetch
-veil cli web-search --query "typescript language server" --limit 5
-veil cli fetch-url --url https://www.iana.org/domains/reserved --format markdown
+veil web-search --query "typescript language server" --limit 5
+veil fetch-url --url https://www.iana.org/domains/reserved --format markdown
 
 # git and github context
-veil cli git-status --workspace .
-veil cli git-log --workspace . --limit 10
-veil cli git-diff --workspace .
-veil cli git-show --workspace . --rev HEAD
-veil cli gh-lookup --repo ushiradineth/veil --kind repo_context
+veil git-status --workspace .
+veil git-log --workspace . --limit 10
+veil git-diff --workspace .
+veil git-show --workspace . --rev HEAD
+veil gh-lookup --repo ushiradineth/veil --kind repo_context
 
 # diagnostics
-veil cli diagnostics
+veil diagnostics
+
+# optional MCP server
+veil mcp server
+
 ```
 
 ## Commands
@@ -79,8 +83,8 @@ nix run nixpkgs#bun -- test ./src/test.ts
 
 ## Benchmark A/B
 
-Run A/B strategy benchmarks (MCP baseline prompt strategy vs CLI+skill strategy):
+Run A/B strategy benchmarks (Veil MCP vs Veil CLI+skill) with competitor cells:
 
 ```bash
-nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --strategies mcp_baseline,cli_skill --profile smoke --cold 1 --warm 1
+nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --agents veil,firecrawl --strategies mcp_transport,cli_skill --profile smoke --cold 1 --warm 1
 ```

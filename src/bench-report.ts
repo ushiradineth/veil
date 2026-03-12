@@ -15,6 +15,11 @@ type ScenarioSummary = {
   status: "ok" | "unsupported" | "error";
   reason: string | null;
   warm: Stats;
+  native_adoption?: {
+    first_call_success: number;
+    calls_to_useful_context: number;
+    non_veil_fallback_rate: number;
+  };
 };
 
 type CompetitorReport = {
@@ -76,6 +81,31 @@ function scenarioComparisonRows(report: SuiteReport): string[] {
   return lines;
 }
 
+function nativeAdoptionRows(report: SuiteReport): string[] {
+  const lines: string[] = [];
+  const headers = ["Scenario", ...report.competitors.map((competitor) => competitor.label)];
+  lines.push(`| ${headers.join(" | ")} |`);
+  lines.push(`| ${headers.map(() => "---").join(" | ")} |`);
+
+  for (const scenario of report.scenarios) {
+    const cells = [scenario.id];
+    for (const competitor of report.competitors) {
+      const row = competitor.scenarios[scenario.id];
+      const native = row?.native_adoption;
+      if (!native) {
+        cells.push("missing");
+        continue;
+      }
+      cells.push(
+        `${native.first_call_success.toFixed(2)} / ${native.calls_to_useful_context.toFixed(2)} / ${native.non_veil_fallback_rate.toFixed(2)}`,
+      );
+    }
+    lines.push(`| ${cells.join(" | ")} |`);
+  }
+
+  return lines;
+}
+
 export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): string {
   const runDirRelative = relative(repoRoot, resolve(report.config.output_dir)).replace(/\\/g, "/");
   const lines: string[] = [];
@@ -122,6 +152,12 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("## Warm Latency Comparison (p50 / p95 ms)");
   lines.push("");
   lines.push(...scenarioComparisonRows(report));
+  lines.push("");
+  lines.push(
+    "## Native Choice Signals (first_call_success / calls_to_useful_context / non_veil_fallback_rate)",
+  );
+  lines.push("");
+  lines.push(...nativeAdoptionRows(report));
   lines.push("");
   lines.push("Notes:");
   lines.push("");

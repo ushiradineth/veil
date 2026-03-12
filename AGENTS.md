@@ -46,6 +46,14 @@
 - MCP/CLI text output must stay TOON-formatted.
 - Avoid ad hoc shell parsing when a typed utility exists.
 
+## Token Sensitivity
+
+- This project is for agents. Optimize for low token usage.
+- Be as descriptive as needed for correct execution, then stop.
+- Prefer short, directive wording over narrative explanations.
+- Avoid repeating context already present in prompts, tool schemas, or command output.
+- Keep skill and onboarding artifacts compact and operational.
+
 ## MCP Tool Routing Policy
 
 See `SKILL.md` for the canonical routing order and anti-patterns.

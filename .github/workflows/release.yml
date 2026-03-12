@@ -15,35 +15,33 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-dispatch
   cancel-in-progress: false
 
 jobs:
-  release:
+  release-pr:
+    name: Create release PR
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     permissions:
       contents: write
-      id-token: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.1.0"
+          # Use a PAT so the created PR triggers CI.
+          # Falls back to GITHUB_TOKEN if RELEASE_PR_TOKEN is not set,
+          # but CI may not trigger on the resulting PR in that case.
+          token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: https://registry.npmjs.org
 
       - name: Validate branch
         env:
@@ -51,32 +49,11 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-            echo "Release must run from $DEFAULT_BRANCH, got $REF_NAME"
+            echo "Release must be dispatched from $DEFAULT_BRANCH, got $REF_NAME"
             exit 1
           fi
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test ./src/test.ts
-
-      - name: Build publish artifacts
-        run: bun run build:package
-
-      - name: Smoke test Node bundle
-        run: |
-          output=$(node dist/bin.js 2>&1 || true)
-          if ! echo "${output}" | grep -q "Usage:"; then
-            echo "Smoke test failed: bundle did not produce usage output"
-            echo "Got: ${output}"
-            exit 1
-          fi
-
-      - name: Verify package tarball
-        run: npm pack --dry-run
-
-      - name: Validate tag availability
+      - name: Validate latest tag
         id: validate_tag
         run: |
           latestTag=$(git describe --tags --abbrev=0 2>/dev/null || true)
@@ -133,66 +110,50 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${nextTag}\n`);
           NODE
 
-      - name: Commit and tag locally
+      - name: Commit version bump on release branch
         env:
           TAG: ${{ steps.prep.outputs.tag }}
           VERSION: ${{ steps.prep.outputs.version }}
         run: |
-          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
-            echo "Tag ${TAG} already exists on origin"
-            exit 1
-          fi
-
-          if git rev-parse "${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists locally"
-            exit 1
-          fi
+          BRANCH="release/${TAG}"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "${BRANCH}"
           git add package.json
           git commit -m "chore(release): bump version to ${VERSION}"
-          git tag "${TAG}"
+          git push origin "${BRANCH}" --force-with-lease
 
-      - name: Publish to npm
+      - name: Open or update release PR
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
-
-      - name: Push commit and tag
-        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.prep.outputs.tag }}
+          VERSION: ${{ steps.prep.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git push origin HEAD
-          git push origin "${TAG}"
+          BRANCH="release/${TAG}"
+          TITLE="chore(release): ${TAG}"
+          BODY="Automated release bump to \`${VERSION}\`.
 
-      - name: Prepare release notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.prep.outputs.tag }}
-        run: |
-          notes=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body 2>/dev/null || true)
+          Merging this PR to \`${DEFAULT_BRANCH}\` will trigger the publish workflow which:
+          - Creates and pushes tag \`${TAG}\`
+          - Publishes \`@ushiradineth/veil@${VERSION}\` to npm
+          - Creates a GitHub release with generated notes
+          - Submits a Homebrew formula update to the tap repository
 
-          if [ -z "$(printf '%s' "${notes}" | grep -E '^[[:space:]]*[-*] ' || true)" ]; then
-            latest_tag=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
-            if [ -n "${latest_tag}" ]; then
-              range="${latest_tag}..${TAG}"
-            else
-              range="${TAG}"
-            fi
-            log=$(git log "${range}" --pretty=format:"- %s" | grep -v "^- chore(release):" || true)
-            if [ -z "${log}" ]; then
-              log="- Release ${TAG}"
-            fi
-            printf -v notes '## What'\''s Changed\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s' "${log}" "${GITHUB_REPOSITORY}" "${latest_tag:-v0.0.0}" "${TAG}"
+          **Required secrets before merging:** \`NPM_TOKEN\`, \`HOMEBREW_TAP_GITHUB_TOKEN\`"
+
+          existing=$(gh pr list --head "${BRANCH}" --base "${DEFAULT_BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing PR #${existing}"
+            gh pr edit "${existing}" --title "${TITLE}" --body "${BODY}"
+          else
+            echo "Creating new release PR"
+            gh pr create \
+              --head "${BRANCH}" \
+              --base "${DEFAULT_BRANCH}" \
+              --title "${TITLE}" \
+              --body "${BODY}"
           fi
-
-          npm_link="**npm**: [\`@ushiradineth/veil@${TAG#v}\`](https://www.npmjs.com/package/@ushiradineth/veil/v/${TAG#v})"
-          printf '%s\n\n%s\n' "${notes}" "${npm_link}" > release-notes.md
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.prep.outputs.tag }}
-        run: |
-          gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md --verify-tag

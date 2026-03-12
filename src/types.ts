@@ -66,6 +66,14 @@ export type LookupResponse = {
   fallback: LookupFallback;
 };
 
+export type AgentGuidance = {
+  next_calls: string[];
+  confidence: "high" | "medium" | "low";
+  coverage: "full" | "partial" | "none";
+  missing_context?: string[];
+  recommended_query?: string;
+};
+
 export type IndexStatus = {
   exists: boolean;
   stale: boolean;

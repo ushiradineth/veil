@@ -2525,12 +2525,44 @@ describe("Server startup helpers", () => {
 
   test("tool descriptions are intent-first and expose compatibility aliases", () => {
     const descriptions = __internalServer.toolDescriptions;
-    expect(descriptions.discover.includes("broad discovery")).toBe(true);
-    expect(descriptions.lookup.includes("natural-language")).toBe(true);
-    expect(descriptions.find_file.includes("Compatibility alias")).toBe(true);
-    expect(descriptions.find_symbol.includes("Compatibility alias")).toBe(true);
-    expect(descriptions.search_for_pattern.includes("Compatibility alias")).toBe(true);
+    expect(descriptions.discover.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.lookup.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.find_file.includes("`files` behavior")).toBe(true);
+    expect(descriptions.find_symbol.includes("`symbols` behavior")).toBe(true);
+    expect(descriptions.search_for_pattern.includes("`search` behavior")).toBe(true);
     expect(descriptions.gh_lookup.includes("GitHub")).toBe(true);
+  });
+
+  test("buildAgentGuidance returns high confidence for successful results", () => {
+    const guidance = __internalServer.buildAgentGuidance("discover", {
+      files: [{ item: { path: "src/a.ts" }, score: 1 }],
+      symbols: [],
+      chunks: [],
+    });
+    expect(guidance.confidence).toBe("high");
+    expect(guidance.coverage).toBe("full");
+    expect(guidance.next_calls.length).toBeGreaterThan(0);
+  });
+
+  test("buildAgentGuidance returns recovery hints for empty lookup", () => {
+    const guidance = __internalServer.buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "build index" },
+    );
+    expect(guidance.confidence).toBe("medium");
+    expect(guidance.coverage).toBe("partial");
+    expect(guidance.recommended_query?.includes("broaden:")).toBe(true);
+  });
+
+  test("buildAgentGuidance returns low confidence for error responses", () => {
+    const guidance = __internalServer.buildAgentGuidance("git_status", {
+      meta: { ok: false },
+      error: { code: "command-failed" },
+    });
+    expect(guidance.confidence).toBe("low");
+    expect(guidance.coverage).toBe("none");
+    expect((guidance.missing_context ?? []).length).toBeGreaterThan(0);
   });
 });
 
@@ -2838,5 +2870,6 @@ describe("Benchmark report generation", () => {
     const md = toBenchmarksMarkdown(report as never, "/tmp/repo");
     expect(md.includes("benchmarks/results/20260307-120000Z/results.json")).toBe(true);
     expect(md.includes("| status-bootstrap | 10.0000 / 12.0000 |")).toBe(true);
+    expect(md.includes("Native Choice Signals")).toBe(true);
   });
 });

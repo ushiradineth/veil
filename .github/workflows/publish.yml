@@ -1,0 +1,163 @@
+name: Publish
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-main
+  cancel-in-progress: false
+
+jobs:
+  check-release-commit:
+    name: Check for release bump commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect release bump
+        id: check
+        run: |
+          subject=$(git log -1 --format='%s')
+          echo "Commit subject: ${subject}"
+
+          if echo "${subject}" | grep -qE '^chore\(release\): bump version to [0-9]+\.[0-9]+\.[0-9]+$'; then
+            version=$(echo "${subject}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=${version}" >> $GITHUB_OUTPUT
+            echo "tag=v${version}" >> $GITHUB_OUTPUT
+            echo "Detected release bump to ${version}"
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "Not a release bump commit, skipping publish"
+          fi
+
+  publish:
+    name: Publish release
+    needs: check-release-commit
+    if: needs.check-release-commit.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test ./src/test.ts
+
+      - name: Build publish artifacts
+        run: bun run build:package
+
+      - name: Smoke test Node bundle
+        run: |
+          output=$(node dist/bin.js 2>&1 || true)
+          if ! echo "${output}" | grep -q "Usage:"; then
+            echo "Smoke test failed: bundle did not produce usage output"
+            echo "Got: ${output}"
+            exit 1
+          fi
+
+      - name: Verify package tarball
+        run: npm pack --dry-run
+
+      - name: Validate tag availability
+        env:
+          TAG: ${{ needs.check-release-commit.outputs.tag }}
+        run: |
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
+            echo "Tag ${TAG} already exists on origin, skipping publish"
+            exit 1
+          fi
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists locally"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ needs.check-release-commit.outputs.tag }}
+          VERSION: ${{ needs.check-release-commit.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Prepare release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-release-commit.outputs.tag }}
+        run: |
+          notes=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body 2>/dev/null || true)
+
+          if [ -z "$(printf '%s' "${notes}" | grep -E '^[[:space:]]*[-*] ' || true)" ]; then
+            latest_tag=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+            if [ -n "${latest_tag}" ]; then
+              range="${latest_tag}..${TAG}"
+            else
+              range="${TAG}"
+            fi
+            log=$(git log "${range}" --pretty=format:"- %s" | grep -v "^- chore(release):" || true)
+            if [ -z "${log}" ]; then
+              log="- Release ${TAG}"
+            fi
+            printf -v notes '## What'\''s Changed\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s' "${log}" "${GITHUB_REPOSITORY}" "${latest_tag:-v0.0.0}" "${TAG}"
+          fi
+
+          npm_link="**npm**: [\`@ushiradineth/veil@${TAG#v}\`](https://www.npmjs.com/package/@ushiradineth/veil/v/${TAG#v})"
+          printf '%s\n\n%s\n' "${notes}" "${npm_link}" > release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-release-commit.outputs.tag }}
+        run: |
+          gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md --verify-tag
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          TAG: ${{ needs.check-release-commit.outputs.tag }}
+          VERSION: ${{ needs.check-release-commit.outputs.version }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set, skipping Homebrew update"
+            exit 0
+          fi
+          node scripts/update-homebrew-formula.mjs

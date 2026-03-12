@@ -9,6 +9,8 @@
 - Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --profile smoke --cold 1 --warm 1 --strategies mcp_transport,cli_skill`
 - Build npm package bundle: `node scripts/build-package.mjs`
 - Dry-run npm package tarball: `npm pack --dry-run`
+- Validate workflow YAML: `ruby -e 'require "yaml"; %w[ci release publish].each { |n| YAML.load_file(".github/workflows/#{n}.yml") }; puts "ok"'`
+- Validate brew script syntax: `node --check scripts/update-homebrew-formula.mjs`
 
 ## Lockfiles
 
@@ -82,6 +84,14 @@ When a prompt includes words like `research`, `investigate`, `find where`, `summ
 4. Return concise synthesis with source URLs
 
 Use `SKILL.md` as the canonical reusable skill prompt.
+
+## Release Workflow
+
+- Dispatch `Release` workflow from `main` with a bump type to create a `release/vX.Y.Z` PR.
+- Merge the PR after CI passes; the `Publish` workflow handles tag, npm, GitHub release, and brew update.
+- Required secrets: `NPM_TOKEN`, `RELEASE_PR_TOKEN`, `HOMEBREW_TAP_GITHUB_TOKEN`.
+- Branch protection on `main` must require the `CI / test` check context.
+- See `README.md` for full secret and variable reference.
 
 ## Git Workflow
 

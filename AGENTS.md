@@ -10,6 +10,12 @@
 - Build npm package bundle: `node scripts/build-package.mjs`
 - Dry-run npm package tarball: `npm pack --dry-run`
 
+## Lockfiles
+
+- Keep both `bun.lock` and `package-lock.json` in sync.
+- `bun.lock` is the primary local dev lockfile for Bun commands.
+- `package-lock.json` is required for npm-based CI checks, including `npm audit`.
+
 ## Testing
 
 - Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.

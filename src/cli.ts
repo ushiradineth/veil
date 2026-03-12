@@ -2,13 +2,22 @@ import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { withAgentGuidance } from "./agent-guidance";
+import { CLI_COMMAND_REGISTRY } from "./cli-contract";
 import { profiler, diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
-import { buildIndex, discoverIndex, getStatus, initWorkspaceIndex, lookupIndex } from "./indexer";
+import {
+  buildIndex,
+  discoverIndex,
+  getStatus,
+  initWorkspaceIndex,
+  lookupIndex,
+  queryChunks,
+  queryFiles,
+  querySymbols,
+} from "./indexer";
 import { diagnosticsStatePath } from "./state-root";
-import { CLI_COMMANDS } from "./tool-contract";
 import type { BuildMode } from "./types";
 import { webSearch } from "./web-search";
 
@@ -22,16 +31,97 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(name);
 }
 
+function isHelpToken(value: string | undefined): boolean {
+  if (!value) return false;
+  return value === "help" || value === "--help" || value === "-h";
+}
+
+function commandHelpLines(): string[] {
+  return CLI_COMMAND_REGISTRY.map((entry) => {
+    return "  " + entry.name.padEnd(36) + " " + entry.description;
+  });
+}
+
+function defaultExamples(): string[] {
+  const selected = ["status", "init", "discover", "lookup", "files", "symbols", "search"] as const;
+  const byName = new Map(CLI_COMMAND_REGISTRY.map((entry) => [entry.name, entry]));
+  const examples: string[] = [];
+  for (const name of selected) {
+    const entry = byName.get(name);
+    const sample = entry?.examples[0];
+    if (sample) {
+      examples.push("  " + sample);
+    }
+  }
+  examples.push('  veil web-search --query "typescript language server" --limit 5');
+  examples.push("  veil fetch-url --url https://www.iana.org/domains/reserved --format markdown");
+  examples.push("  veil gh-lookup --repo ushiradineth/veil --kind repo_context");
+  examples.push("  veil mcp server");
+  return examples;
+}
+
+function cliHelp(): string {
+  return [
+    "Veil CLI",
+    "",
+    "Usage:",
+    "  veil <command> [options]",
+    "",
+    "Commands:",
+    ...commandHelpLines(),
+    "",
+    "Global options:",
+    "  --workspace <path>                    Workspace root (default: cwd)",
+    "  --state-root <path>                   Override .veil state root",
+    "  --profile                             Enable profiling report",
+    "",
+    "Examples:",
+    ...defaultExamples(),
+  ].join("\n");
+}
+
+function commandHelp(cmd: string): string {
+  const spec = CLI_COMMAND_REGISTRY.find((entry) => entry.name === cmd);
+  if (!spec) {
+    return cliHelp();
+  }
+  return [
+    "Veil CLI",
+    "",
+    "Command:",
+    `  ${spec.name}`,
+    "",
+    "Description:",
+    `  ${spec.description}`,
+    "",
+    "Usage:",
+    `  ${spec.usage}`,
+    "",
+    "Examples:",
+    ...spec.examples.map((example) => `  ${example}`),
+  ].join("\n");
+}
+
 function resolveWorkspace(): string {
   return getArg("--workspace") ?? process.cwd();
 }
 
 function writeOutput(data: unknown): void {
-  process.stdout.write(`${toToon(data)}\n`);
+  process.stdout.write(toToon(data) + "\n");
 }
 
 export async function runCli(): Promise<void> {
-  const cmd = process.argv[2] ?? "status";
+  const cmd = process.argv[2];
+  if (!cmd || isHelpToken(cmd)) {
+    process.stdout.write(cliHelp() + "\n");
+    return;
+  }
+
+  if (hasFlag("--help") || hasFlag("-h")) {
+    process.stdout.write(commandHelp(cmd) + "\n");
+    return;
+  }
+
   const workspace = resolveWorkspace();
   const stateRoot = getArg("--state-root");
   diagnostics.configureStatePath(diagnosticsStatePath(workspace, stateRoot));
@@ -102,6 +192,49 @@ export async function runCli(): Promise<void> {
         state_root: stateRoot,
       });
       writeOutput(withAgentGuidance("lookup", result, { query }));
+    },
+    files: async () => {
+      const query = getArg("--query", "") ?? "";
+      const limit = Number(getArg("--limit", "20") ?? "20");
+      const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
+      await initWorkspaceIndex(workspace, {
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await queryFiles(workspace, query, Number.isFinite(limit) ? limit : 20, {
+        state_root: stateRoot,
+      });
+      writeOutput(withAgentGuidance("files", { items }, { query }));
+    },
+    symbols: async () => {
+      const query = getArg("--query", "") ?? "";
+      const limit = Number(getArg("--limit", "20") ?? "20");
+      const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
+      await initWorkspaceIndex(workspace, {
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await querySymbols(workspace, query, Number.isFinite(limit) ? limit : 20, {
+        state_root: stateRoot,
+      });
+      writeOutput(withAgentGuidance("symbols", { items }, { query }));
+    },
+    search: async () => {
+      const query = getArg("--query", "") ?? "";
+      const limit = Number(getArg("--limit", "10") ?? "10");
+      const refreshIfStale = (getArg("--refresh-if-stale", "1") ?? "1") !== "0";
+      const preferCode = (getArg("--prefer-code", "1") ?? "1") !== "0";
+      const intent = (getArg("--intent", "auto") ?? "auto") as "auto" | "code" | "docs" | "symbols";
+      await initWorkspaceIndex(workspace, {
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await queryChunks(workspace, query, Number.isFinite(limit) ? limit : 10, {
+        prefer_code: preferCode,
+        intent,
+        state_root: stateRoot,
+      });
+      writeOutput(withAgentGuidance("search", { items }, { query }));
     },
     "web-search": async () => {
       const query = getArg("--query", "") ?? "";
@@ -213,21 +346,25 @@ export async function runCli(): Promise<void> {
     console.error("\n" + profiler.report());
   }
 
-  process.stderr.write(
-    `Usage: bun run src/cli.ts <${CLI_COMMANDS.join("|")}> [--workspace <path>] [--state-root <.veil|relative|/abs/path>] [--mode full|changed] [--query <text>] [--refresh-if-stale 0|1] [--profile]\nOutput format: TOON\nweb-search providers: google, duckduckgo, wikipedia, github, reddit, deepwiki\nweb-search debug: --debug 1\nfetch-url: --url <https://...> [--format markdown|text|html] [--timeout-ms 8000] [--max-bytes 200000]\n`,
-  );
+  process.stderr.write(cliHelp() + "\n");
   process.exitCode = 1;
 }
 
+export const __internalCli = {
+  cliHelp,
+  commandHelp,
+  isHelpToken,
+};
+
 const meta = import.meta as unknown as Record<string, unknown>;
-const sourceSuffix = `${sep}src${sep}cli.ts`;
+const sourceSuffix = sep + "src" + sep + "cli.ts";
 const isSourceModule = fileURLToPath(import.meta.url).endsWith(sourceSuffix);
 const argvRefsSource = process.argv.some(
-  (arg) => arg.endsWith(`${sep}src${sep}cli.ts`) || arg === "src/cli.ts",
+  (arg) => arg.endsWith(sep + "src" + sep + "cli.ts") || arg === "src/cli.ts",
 );
 if (isSourceModule && (meta.main === true || argvRefsSource)) {
   runCli().catch((error: unknown) => {
-    process.stderr.write(`${String(error)}\n`);
+    process.stderr.write(String(error) + "\n");
     process.exitCode = 1;
   });
 }

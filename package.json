@@ -25,8 +25,6 @@
     "LICENSE"
   ],
   "scripts": {
-    "mcp": "bun run src/server.ts",
-    "server": "bun run src/bin.ts server",
     "cli": "bun run src/bin.ts cli",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "npm run build:package",
@@ -46,7 +44,6 @@
     "bench:suite": "bun run src/bench-suite.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.18.0",
     "@toon-format/toon": "^2.1.0",
     "node-html-markdown": "^2.0.0",
     "zod": "^3.24.1"

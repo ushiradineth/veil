@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
+import { buildAgentGuidance } from "./agent-guidance";
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
@@ -23,13 +24,13 @@ import {
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
-import { __internalServer } from "./server";
 import {
   diagnosticsStatePath,
   resolveIndexDir,
   resolveStateRoot,
   relativeStateRoot,
 } from "./state-root";
+import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { webSearch } from "./web-search";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
@@ -2474,48 +2475,9 @@ describe("Indexer internals", () => {
   });
 });
 
-describe("Server startup helpers", () => {
-  test("parseBooleanFlag accepts common true and false values", () => {
-    expect(__internalServer.parseBooleanFlag("1", false)).toBe(true);
-    expect(__internalServer.parseBooleanFlag("true", false)).toBe(true);
-    expect(__internalServer.parseBooleanFlag("on", false)).toBe(true);
-    expect(__internalServer.parseBooleanFlag("0", true)).toBe(false);
-    expect(__internalServer.parseBooleanFlag("false", true)).toBe(false);
-    expect(__internalServer.parseBooleanFlag("off", true)).toBe(false);
-  });
-
-  test("parseBoundedInt applies fallback and bounds", () => {
-    expect(__internalServer.parseBoundedInt(undefined, 5, 1, 10)).toBe(5);
-    expect(__internalServer.parseBoundedInt("100", 5, 1, 10)).toBe(10);
-    expect(__internalServer.parseBoundedInt("0", 5, 1, 10)).toBe(1);
-    expect(__internalServer.parseBoundedInt("6", 5, 1, 10)).toBe(6);
-  });
-
-  test("shouldRefreshForQuery respects explicit request over env default", () => {
-    expect(__internalServer.shouldRefreshForQuery(undefined, true)).toBe(true);
-    expect(__internalServer.shouldRefreshForQuery(undefined, false)).toBe(false);
-    expect(__internalServer.shouldRefreshForQuery(false, true)).toBe(false);
-    expect(__internalServer.shouldRefreshForQuery(true, false)).toBe(true);
-  });
-
-  test("canRunBackgroundRefresh enforces per-hour budget", () => {
-    const runtime = {
-      init_runs: 0,
-      init_failures: 0,
-      init_inflight: false,
-      init_last: null,
-      background_enabled: true,
-      background_interval_ms: 10_000,
-      background_max_refreshes_per_hour: 1,
-      background_window_started_ms: Date.now(),
-      background_refreshes_in_window: 1,
-    };
-    expect(__internalServer.canRunBackgroundRefresh(Date.now(), runtime)).toBe(false);
-    expect(__internalServer.canRunBackgroundRefresh(Date.now() + 3_700_000, runtime)).toBe(true);
-  });
-
+describe("Agent guidance helpers", () => {
   test("tool descriptions are intent-first and expose compatibility aliases", () => {
-    const descriptions = __internalServer.toolDescriptions;
+    const descriptions = TOOL_DESCRIPTIONS;
     expect(descriptions.discover.startsWith("Use when you need")).toBe(true);
     expect(descriptions.lookup.startsWith("Use when you need")).toBe(true);
     expect(descriptions.find_file.includes("`files` behavior")).toBe(true);
@@ -2525,7 +2487,7 @@ describe("Server startup helpers", () => {
   });
 
   test("buildAgentGuidance returns high confidence for successful results", () => {
-    const guidance = __internalServer.buildAgentGuidance("discover", {
+    const guidance = buildAgentGuidance("discover", {
       files: [{ item: { path: "src/a.ts" }, score: 1 }],
       symbols: [],
       chunks: [],
@@ -2536,7 +2498,7 @@ describe("Server startup helpers", () => {
   });
 
   test("buildAgentGuidance returns recovery hints for empty lookup", () => {
-    const guidance = __internalServer.buildAgentGuidance(
+    const guidance = buildAgentGuidance(
       "lookup",
       { files: [], symbols: [], chunks: [] },
       { query: "build index" },
@@ -2547,7 +2509,7 @@ describe("Server startup helpers", () => {
   });
 
   test("buildAgentGuidance returns low confidence for error responses", () => {
-    const guidance = __internalServer.buildAgentGuidance("git_status", {
+    const guidance = buildAgentGuidance("git_status", {
       meta: { ok: false },
       error: { code: "command-failed" },
     });
@@ -2558,8 +2520,7 @@ describe("Server startup helpers", () => {
 });
 
 describe("Profiler utilities", () => {
-  test("Bin route maps server and cli commands", () => {
-    expect(__internalBin.route(["bun", "src/bin.ts", "server"])).toEqual({ type: "server" });
+  test("Bin route maps cli command", () => {
     expect(__internalBin.route(["bun", "src/bin.ts", "cli", "status"])).toEqual({
       type: "cli",
       argv: ["bun", "src/bin.ts", "status"],
@@ -2569,7 +2530,6 @@ describe("Profiler utilities", () => {
 
   test("Bin usage text includes entrypoint commands", () => {
     const text = __internalBin.usage();
-    expect(text.includes("veil server")).toBe(true);
     expect(text.includes("veil cli")).toBe(true);
   });
 
@@ -2599,23 +2559,6 @@ describe("Profiler utilities", () => {
     }
 
     expect(writes.join(" ")).toContain("Usage: veil");
-  });
-
-  test("Bin main server path loads server module", async () => {
-    const originalArgv = process.argv;
-    const loaded: string[] = [];
-    process.argv = ["bun", "src/bin.ts", "server"];
-
-    try {
-      await __internalBin.main((specifier: string) => {
-        loaded.push(specifier);
-        return Promise.resolve({});
-      });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect(loaded).toEqual(["./server"]);
   });
 
   test("Bin main cli path rewrites argv and loads cli module", async () => {
@@ -2830,7 +2773,7 @@ describe("Benchmark report generation", () => {
         workspace: "/tmp/repo",
         profile: "smoke",
         agents: ["codex", "claude"],
-        mcp_modes: ["veil", "serena", "none"],
+        strategies: ["mcp_baseline", "cli_skill"],
         cold_iterations: 1,
         warm_iterations: 1,
         output_dir: "/tmp/repo/benchmarks/results/20260307-120000Z",
@@ -2860,6 +2803,11 @@ describe("Benchmark report generation", () => {
             "status-bootstrap": {
               status: "ok",
               reason: null,
+              ab_signal: {
+                schema_overhead_tokens: 12000,
+                first_useful_action_ms: 10,
+                fallback_rate: 1,
+              },
               warm: {
                 p50_ms: 10,
                 p95_ms: 12,
@@ -2874,8 +2822,10 @@ describe("Benchmark report generation", () => {
     expect(md.includes("benchmarks/results/20260307-120000Z/results.json")).toBe(true);
     expect(md.includes("| status-bootstrap | 10.0000 / 12.0000 |")).toBe(true);
     expect(md.includes("Native Choice Signals")).toBe(true);
+    expect(md.includes("A/B Signals")).toBe(true);
     expect(md.includes("- Profile: `smoke`")).toBe(true);
     expect(md.includes("- Agents: `codex,claude`")).toBe(true);
+    expect(md.includes("- Strategies: `mcp_baseline,cli_skill`")).toBe(true);
     expect(md.includes("Runtime budget")).toBe(true);
     expect(md.includes("Cell budget")).toBe(true);
     expect(md.includes("| codex (none) | yes | prompt_only |")).toBe(true);
@@ -2894,6 +2844,11 @@ describe("Bench suite planning helpers", () => {
     expect(smoke.length).toBeGreaterThan(0);
     expect(full.length).toBeGreaterThan(smoke.length);
     expect(smoke.every((scenario) => scenario.kind !== "gh_lookup")).toBe(true);
+  });
+
+  test("Strategy parsing supports defaults and legacy aliases", () => {
+    const parsed = __internalBenchSuite.parseStrategies(["veil", "none", "cli_skill"]);
+    expect(parsed).toEqual(["mcp_baseline", "cli_skill"]);
   });
 
   test("Timeout errors map to unsupported classification", () => {

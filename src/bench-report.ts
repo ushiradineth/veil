@@ -15,6 +15,11 @@ type ScenarioSummary = {
   status: "ok" | "unsupported" | "error";
   reason: string | null;
   warm: Stats;
+  ab_signal?: {
+    schema_overhead_tokens: number;
+    first_useful_action_ms: number;
+    fallback_rate: number;
+  };
   native_adoption?: {
     first_call_success: number;
     calls_to_useful_context: number;
@@ -34,7 +39,7 @@ type SuiteReport = {
     workspace: string;
     profile?: "smoke" | "full";
     agents?: string[];
-    mcp_modes?: string[];
+    strategies?: string[];
     cold_iterations: number;
     warm_iterations: number;
     output_dir: string;
@@ -159,8 +164,8 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   if (Array.isArray(report.config.agents)) {
     lines.push(`- Agents: \`${report.config.agents.join(",")}\``);
   }
-  if (Array.isArray(report.config.mcp_modes)) {
-    lines.push(`- Modes: \`${report.config.mcp_modes.join(",")}\``);
+  if (Array.isArray(report.config.strategies)) {
+    lines.push(`- Strategies: \`${report.config.strategies.join(",")}\``);
   }
   lines.push(
     `- Iterations: \`cold=${String(report.config.cold_iterations)}\`, \`warm=${String(report.config.warm_iterations)}\``,
@@ -174,13 +179,17 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("");
   lines.push("## Scenario Coverage");
   lines.push("");
-  lines.push("| MCP Tool | Scenario ID |");
+  lines.push("| Tool Family | Scenario ID |");
   lines.push("| --- | --- |");
   lines.push(...coverageRows(report.scenarios));
   lines.push("");
   lines.push("## Warm Latency Comparison (p50 / p95 ms)");
   lines.push("");
   lines.push(...scenarioComparisonRows(report));
+  lines.push("");
+  lines.push("## A/B Signals (schema_overhead_tokens / first_useful_action_ms / fallback_rate)");
+  lines.push("");
+  lines.push(...abSignalRows(report));
   if (report.config.preflight) {
     lines.push("");
     lines.push("## Preflight");
@@ -189,9 +198,9 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
     lines.push("| --- | --- | --- | --- |");
     for (const competitor of report.competitors) {
       const pre = report.config.preflight[competitor.id];
-      const ready = pre?.ready ? "yes" : "no";
-      const mode = pre?.mode_control ?? "prompt_only";
-      const reason = pre?.reason ?? "";
+      const ready = pre.ready ? "yes" : "no";
+      const mode = pre.mode_control;
+      const reason = pre.reason ?? "";
       lines.push(`| ${competitor.label} | ${ready} | ${mode} | ${reason} |`);
     }
   }
@@ -213,4 +222,29 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("");
 
   return `${lines.join("\n")}\n`;
+}
+
+function abSignalRows(report: SuiteReport): string[] {
+  const lines: string[] = [];
+  const headers = ["Scenario", ...report.competitors.map((competitor) => competitor.label)];
+  lines.push(`| ${headers.join(" | ")} |`);
+  lines.push(`| ${headers.map(() => "---").join(" | ")} |`);
+
+  for (const scenario of report.scenarios) {
+    const cells = [scenario.id];
+    for (const competitor of report.competitors) {
+      const row = competitor.scenarios[scenario.id];
+      const signal = row?.ab_signal;
+      if (!signal) {
+        cells.push("missing");
+        continue;
+      }
+      cells.push(
+        `${signal.schema_overhead_tokens.toFixed(0)} / ${signal.first_useful_action_ms.toFixed(4)} / ${signal.fallback_rate.toFixed(2)}`,
+      );
+    }
+    lines.push(`| ${cells.join(" | ")} |`);
+  }
+
+  return lines;
 }

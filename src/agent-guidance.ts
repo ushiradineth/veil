@@ -63,57 +63,57 @@ function countResults(payload: RecordLike): number {
 function nextCalls(tool: GuidanceTool): string[] {
   switch (tool) {
     case "discover":
-      return ["lookup", "search", "symbols"];
+      return ["lookup", "search"];
     case "lookup":
-      return ["discover", "search", "symbols"];
+      return ["discover", "search"];
     case "files":
     case "find_file":
-      return ["search", "lookup", "symbols"];
+      return ["search", "lookup"];
     case "symbols":
     case "find_symbol":
-      return ["lookup", "search", "files"];
+      return ["lookup", "search"];
     case "search":
     case "search_for_pattern":
-      return ["lookup", "files", "symbols"];
+      return ["lookup", "files"];
     case "web_search":
-      return ["fetch_url", "discover", "lookup"];
+      return ["fetch_url", "discover"];
     case "fetch_url":
-      return ["web_search", "discover", "lookup"];
+      return ["web_search", "discover"];
     case "git_status":
-      return ["git_diff", "git_log", "discover"];
+      return ["git_diff", "git_log"];
     case "git_log":
-      return ["git_show", "git_diff", "discover"];
+      return ["git_show", "git_diff"];
     case "git_diff":
-      return ["git_show", "git_status", "discover"];
+      return ["git_show", "git_status"];
     case "git_show":
-      return ["git_log", "git_diff", "discover"];
+      return ["git_log", "git_diff"];
     case "gh_lookup":
-      return ["discover", "lookup", "git_log"];
+      return ["discover", "lookup"];
     case "status":
-      return ["discover", "lookup", "files"];
+      return ["discover", "lookup"];
     case "refresh":
-      return ["discover", "lookup", "search"];
+      return ["discover", "lookup"];
     case "diagnostics":
-      return ["status", "discover", "lookup"];
+      return ["status", "discover"];
     default:
-      return ["discover", "lookup", "search"];
+      return ["discover", "lookup"];
   }
 }
 
 function defaultMissingContext(tool: GuidanceTool): string[] {
   switch (tool) {
     case "web_search":
-      return ["No web hits in current provider window"];
+      return ["No web hits"];
     case "fetch_url":
-      return ["No content extracted from current URL response"];
+      return ["No URL content"];
     case "git_status":
     case "git_log":
     case "git_diff":
     case "git_show":
     case "gh_lookup":
-      return ["Repository context call returned no actionable payload"];
+      return ["No git/github context"];
     default:
-      return ["No indexed matches for current query"];
+      return ["No indexed matches"];
   }
 }
 
@@ -138,7 +138,7 @@ function hasStructuralPayload(tool: GuidanceTool, payload: RecordLike): boolean 
 function recommendQuery(query: string | undefined): string | undefined {
   if (!query || query.trim().length === 0) return undefined;
   const normalized = query.trim().replace(/\s+/g, " ");
-  return `broaden: ${normalized}`;
+  return `broaden ${normalized}`;
 }
 
 export function buildAgentGuidance(

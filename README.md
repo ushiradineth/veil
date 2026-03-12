@@ -31,6 +31,79 @@ Add Veil to your MCP client config:
 
 Install the Veil skill (optional, improves agent tool routing):
 
+## MCP Client Configuration
+
+<details>
+  <summary>Codex</summary>
+  Follow the <a href="https://developers.openai.com/codex/mcp/#configure-with-the-cli">configure MCP guide</a>
+  using the standard config from above. You can also install Veil using the Codex CLI:
+
+```bash
+codex mcp add veil -- npx -y @ushiradineth/veil@latest server
+```
+
+</details>
+
+<details>
+  <summary>Claude Code</summary>
+
+Install via CLI:
+
+```bash
+claude mcp add --scope user veil -- npx -y @ushiradineth/veil@latest server
+```
+
+See the <a href="https://code.claude.com/docs/en/mcp">Claude Code MCP guide</a> for more details.
+
+</details>
+
+<details>
+  <summary>OpenCode</summary>
+
+Add the following configuration to your `opencode.json` file. If you do not have one, create it at `~/.config/opencode/opencode.json` (<a href="https://opencode.ai/docs/mcp-servers">guide</a>):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "veil": {
+      "type": "local",
+      "command": ["npx", "-y", "@ushiradineth/veil@latest", "server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+  <summary>Cursor</summary>
+
+Click to install:
+
+[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install in Cursor">](https://cursor.com/en/install-mcp?name=veil&config=eyJjb21tYW5kIjoibnB4IC15IEB1c2hpcmFkaW5ldGgvdmVpbEBsYXRlc3Qgc2VydmVyIn0%3D)
+
+Or install manually in `Cursor Settings` -> `MCP` -> `New MCP Server` with:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "npx",
+      "args": ["-y", "@ushiradineth/veil@latest", "server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+  <summary>Windsurf</summary>
+  Follow the <a href="https://docs.windsurf.com/windsurf/cascade/mcp#mcp-config-json">configure MCP guide</a>
+  using the standard config from above.
+</details>
+
 ```bash
 npx -y skills add https://github.com/ushiradineth/veil/tree/main --skill veil
 ```
@@ -107,97 +180,3 @@ nix run nixpkgs#bun -- run format:check
 # tests
 nix run nixpkgs#bun -- test ./src/test.ts
 ```
-
-## Server Auto Init and Maintenance
-
-Veil can initialize and maintain index freshness at server startup without a skill prompt.
-You do not need to set any of these for normal usage.
-
-- `VEIL_SERVER_AUTO_INIT=1` enables startup init (default: enabled)
-- `VEIL_SERVER_INIT_TIMEOUT_MS=4000` bounds startup init time
-- `VEIL_SERVER_AUTO_REFRESH_ON_QUERY=1` refreshes stale indexes before `files`, `symbols`, `search`, and `lookup` (default: enabled)
-- `VEIL_SERVER_BACKGROUND_REFRESH=1` enables periodic background stale checks (default: disabled)
-- `VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS=300000` controls loop interval
-- `VEIL_SERVER_BACKGROUND_MAX_PER_HOUR=4` caps refresh operations per hour
-
-Example:
-
-```bash
-VEIL_SERVER_AUTO_INIT=1 \
-VEIL_SERVER_BACKGROUND_REFRESH=1 \
-VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS=300000 \
-npx -y @ushiradineth/veil@latest server
-```
-
-## MCP Client Configuration
-
-<details>
-  <summary>Codex</summary>
-  Follow the <a href="https://developers.openai.com/codex/mcp/#configure-with-the-cli">configure MCP guide</a>
-  using the standard config from above. You can also install Veil using the Codex CLI:
-
-```bash
-codex mcp add veil -- npx -y @ushiradineth/veil@latest server
-```
-
-</details>
-
-<details>
-  <summary>Claude Code</summary>
-
-Install via CLI:
-
-```bash
-claude mcp add --scope user veil -- npx -y @ushiradineth/veil@latest server
-```
-
-See the <a href="https://code.claude.com/docs/en/mcp">Claude Code MCP guide</a> for more details.
-
-</details>
-
-<details>
-  <summary>OpenCode</summary>
-
-Add the following configuration to your `opencode.json` file. If you do not have one, create it at `~/.config/opencode/opencode.json` (<a href="https://opencode.ai/docs/mcp-servers">guide</a>):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "veil": {
-      "type": "local",
-      "command": ["npx", "-y", "@ushiradineth/veil@latest", "server"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-  <summary>Cursor</summary>
-
-Click to install:
-
-[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install in Cursor">](https://cursor.com/en/install-mcp?name=veil&config=eyJjb21tYW5kIjoibnB4IC15IEB1c2hpcmFkaW5ldGgvdmVpbEBsYXRlc3Qgc2VydmVyIn0%3D)
-
-Or install manually in `Cursor Settings` -> `MCP` -> `New MCP Server` with:
-
-```json
-{
-  "mcpServers": {
-    "veil": {
-      "command": "npx",
-      "args": ["-y", "@ushiradineth/veil@latest", "server"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-  <summary>Windsurf</summary>
-  Follow the <a href="https://docs.windsurf.com/windsurf/cascade/mcp#mcp-config-json">configure MCP guide</a>
-  using the standard config from above.
-</details>

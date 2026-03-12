@@ -21,6 +21,7 @@ import {
   buildIndex,
 } from "./indexer";
 import { diagnosticsStatePath } from "./state-root";
+import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { VEIL_VERSION } from "./version";
 import { webSearch } from "./web-search";
 
@@ -114,29 +115,16 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-const DEFAULT_QUERY_AUTO_REFRESH = parseBooleanFlag(
-  process.env.VEIL_SERVER_AUTO_REFRESH_ON_QUERY,
-  true,
-);
+const DEFAULT_QUERY_AUTO_REFRESH = true;
 
 const runtime: ServerRuntimeState = {
   init_runs: 0,
   init_failures: 0,
   init_inflight: false,
   init_last: null,
-  background_enabled: parseBooleanFlag(process.env.VEIL_SERVER_BACKGROUND_REFRESH, false),
-  background_interval_ms: parseBoundedInt(
-    process.env.VEIL_SERVER_BACKGROUND_REFRESH_INTERVAL_MS,
-    DEFAULT_BACKGROUND_INTERVAL_MS,
-    10_000,
-    HOUR_MS,
-  ),
-  background_max_refreshes_per_hour: parseBoundedInt(
-    process.env.VEIL_SERVER_BACKGROUND_MAX_PER_HOUR,
-    DEFAULT_BACKGROUND_MAX_REFRESHES_PER_HOUR,
-    1,
-    120,
-  ),
+  background_enabled: false,
+  background_interval_ms: DEFAULT_BACKGROUND_INTERVAL_MS,
+  background_max_refreshes_per_hour: DEFAULT_BACKGROUND_MAX_REFRESHES_PER_HOUR,
   background_window_started_ms: Date.now(),
   background_refreshes_in_window: 0,
 };
@@ -154,12 +142,7 @@ async function runWorkspaceInit(
 
   try {
     diagnostics.configureStatePath(diagnosticsStatePath(workspace, stateRoot));
-    const timeoutMs = parseBoundedInt(
-      process.env.VEIL_SERVER_INIT_TIMEOUT_MS,
-      DEFAULT_INIT_TIMEOUT_MS,
-      200,
-      60_000,
-    );
+    const timeoutMs = DEFAULT_INIT_TIMEOUT_MS;
     const result = await withTimeout(
       initWorkspaceIndex(workspace, { state_root: stateRoot, refresh_if_stale }),
       timeoutMs,
@@ -210,39 +193,26 @@ const server = new McpServer({
   version: VEIL_VERSION,
 });
 
-const TOOL_DESCRIPTIONS = {
-  status:
-    "Use when you need to check index freshness before code retrieval (status, stale, manifest).",
-  refresh: "Use when you need to rebuild index state after repo changes (full, changed, reindex).",
-  files: "Use when you need file path matches for names or directories (find file, path, locate).",
-  symbols: "Use when you need symbol-name matches across code (function, class, type, constant).",
-  search:
-    "Use when you need indexed keyword search in code or docs (search code, find pattern, snippet).",
-  find_file:
-    "Use when you need `files` behavior via compatibility naming (find_file, file lookup, path match).",
-  find_symbol:
-    "Use when you need `symbols` behavior via compatibility naming (find_symbol, symbol lookup).",
-  search_for_pattern:
-    "Use when you need `search` behavior via compatibility naming (search_for_pattern, keyword search).",
-  lookup:
-    "Use when you need a natural-language answer with ranked context (where is, how does, explain code).",
-  discover:
-    "Use when you need one broad first call across status, files, symbols, and chunks (start here).",
-  web_search:
-    "Use when you need external web sources and docs (search web, research docs, compare references).",
-  fetch_url:
-    "Use when you need markdown-first page content from a URL (read page, fetch docs, extract content).",
-  git_status:
-    "Use when you need branch and dirty-tree context (git status, ahead behind, tracked changes).",
-  git_log:
-    "Use when you need commit history context (git log, recent commits, author or grep filter).",
-  git_diff: "Use when you need unstaged, staged, or ranged diff content (git diff, changed lines).",
-  git_show: "Use when you need commit detail for one revision (git show, commit patch, metadata).",
-  gh_lookup:
-    "Use when you need GitHub issues, PRs, checks, or repo bootstrap context (gh, repo_context).",
-  diagnostics:
-    "Use when you need Veil performance and cache telemetry (diagnostics, latency, runtime counters).",
-} as const;
+type QueryInitArgs = {
+  workspace?: string;
+  state_root?: string;
+  refresh_if_stale?: boolean;
+};
+
+function resolveWorkspaceWithDiagnostics(workspace?: string, stateRoot?: string): string {
+  const ws = workspace ?? process.cwd();
+  diagnostics.configureStatePath(diagnosticsStatePath(ws, stateRoot));
+  return ws;
+}
+
+async function initQueryWorkspace(args: QueryInitArgs): Promise<string> {
+  const ws = resolveWorkspaceWithDiagnostics(args.workspace, args.state_root);
+  await initWorkspaceIndex(ws, {
+    state_root: args.state_root,
+    refresh_if_stale: shouldRefreshForQuery(args.refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
+  });
+  return ws;
+}
 
 server.registerTool(
   "status",
@@ -254,8 +224,7 @@ server.registerTool(
     },
   },
   async ({ workspace, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const ws = resolveWorkspaceWithDiagnostics(workspace, state_root);
     const status = await getStatus(ws, { state_root });
     return asText(withAgentGuidance("status", status));
   },
@@ -272,9 +241,8 @@ server.registerTool(
     },
   },
   async ({ workspace, mode, state_root }) => {
-    const ws = workspace ?? process.cwd();
+    const ws = resolveWorkspaceWithDiagnostics(workspace, state_root);
     const selectedMode = mode ?? "changed";
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     const manifest = await buildIndex(ws, selectedMode, { state_root });
     return asText(withAgentGuidance("refresh", { ok: true, mode: selectedMode, manifest }));
   },
@@ -293,12 +261,7 @@ server.registerTool(
     },
   },
   async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await queryFiles(ws, query, limit ?? 20, { state_root });
     return asText(withAgentGuidance("files", { items }, { query }));
   },
@@ -317,12 +280,7 @@ server.registerTool(
     },
   },
   async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await querySymbols(ws, query, limit ?? 20, { state_root });
     return asText(withAgentGuidance("symbols", { items }, { query }));
   },
@@ -355,12 +313,7 @@ server.registerTool(
     refresh_if_stale,
     state_root,
   }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await queryChunks(ws, query, limit ?? 10, {
       prefer_code,
       path_prefix,
@@ -385,12 +338,7 @@ server.registerTool(
     },
   },
   async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await queryFiles(ws, query, limit ?? 20, { state_root });
     return asText(withAgentGuidance("find_file", { items }, { query }));
   },
@@ -409,12 +357,7 @@ server.registerTool(
     },
   },
   async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await querySymbols(ws, query, limit ?? 20, { state_root });
     return asText(withAgentGuidance("find_symbol", { items }, { query }));
   },
@@ -447,12 +390,7 @@ server.registerTool(
     refresh_if_stale,
     state_root,
   }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const items = await queryChunks(ws, query, limit ?? 10, {
       prefer_code,
       path_prefix,
@@ -495,12 +433,7 @@ server.registerTool(
     refresh_if_stale,
     state_root,
   }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
-    await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
-    });
+    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
     const result = await lookupIndex(ws, query, {
       files_limit,
       symbols_limit,
@@ -546,8 +479,7 @@ server.registerTool(
     intent,
     state_root,
   }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const ws = resolveWorkspaceWithDiagnostics(workspace, state_root);
     const initResult = await initWorkspaceIndex(ws, {
       state_root,
       refresh_if_stale: refresh_if_stale ?? true,
@@ -721,8 +653,7 @@ server.registerTool(
     },
   },
   async ({ workspace, repo, kind, query, limit, timeout_ms, temp_root, state_root }) => {
-    const ws = workspace ?? process.cwd();
-    diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
+    const ws = resolveWorkspaceWithDiagnostics(workspace, state_root);
     return asText(
       withAgentGuidance(
         "gh_lookup",
@@ -772,11 +703,8 @@ export async function startServer(): Promise<void> {
   started = true;
 
   const workspace = process.cwd();
-  const stateRoot = process.env.VEIL_STATE_ROOT;
-  const autoInitEnabled = parseBooleanFlag(process.env.VEIL_SERVER_AUTO_INIT, true);
-  if (autoInitEnabled) {
-    void runWorkspaceInit(workspace, stateRoot, "startup", true);
-  }
+  const stateRoot = undefined;
+  void runWorkspaceInit(workspace, stateRoot, "startup", true);
   startBackgroundMaintenance(workspace, stateRoot);
 
   const transport = new StdioServerTransport();

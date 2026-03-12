@@ -37,9 +37,6 @@ const DEFAULT_MAX_BYTES = 64_000;
 const MAX_BYTES_CAP = 500_000;
 
 function nowMs(bunRef?: { nanoseconds?: () => number }): number {
-  if (process.env.VEIL_FORCE_DATE_NOW === "1") {
-    return Date.now();
-  }
   const runtimeBun = bunRef ?? (globalThis as { Bun?: { nanoseconds?: () => number } }).Bun;
   if (runtimeBun && typeof runtimeBun.nanoseconds === "function") {
     return runtimeBun.nanoseconds() / 1_000_000;

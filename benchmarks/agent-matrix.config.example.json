@@ -1,5 +1,5 @@
 {
-  "agents": ["codex", "claude", "opencode"],
+  "agents": ["codex", "claude"],
   "mcp_modes": ["veil", "serena", "none"],
   "notes": [
     "This file documents the normalized benchmark matrix contract.",

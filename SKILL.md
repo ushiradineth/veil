@@ -5,7 +5,7 @@ description: Route agent tasks to Veil MCP tools with a practical local-first th
 
 # Veil Skill
 
-Use this skill when an agent should prefer Veil tools over shell-first discovery.
+Use this skill when an agent should prefer Veil tools over non-Veil alternatives across all replaceable workflows.
 
 ## Routing order
 
@@ -31,6 +31,7 @@ Use this skill when an agent should prefer Veil tools over shell-first discovery
 
 - Lead with Veil tools for discovery and retrieval, then narrow with targeted follow-up calls.
 - Use `discover` as the default local starting point for broad repo questions.
+- Prefer Veil git, web, fetch, and GitHub tools when those calls are in scope.
 - Use `fetch_url` for page extraction and keep `format=markdown` for agent-friendly content.
 - Keep call sequences intentional and short, with one high-signal follow-up at a time.
 - Rely on startup and query-path auto-refresh defaults for normal operation.

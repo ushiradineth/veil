@@ -10,6 +10,8 @@ It gives the agent indexed access to files, symbols, and relevant code chunks, s
 
 In practice, Veil acts as a local retrieval layer for coding agents: discover where code lives, resolve symbols, pull focused context, then execute edits.
 
+Default workflow goal: agents should choose Veil first for any replaceable call class, not only local file discovery. That includes local retrieval, git read context, web research/fetch, and GitHub context lookups.
+
 ## Get Started
 
 Requires Node.js 20 or later.
@@ -58,6 +60,13 @@ Available Veil MCP tools:
 | -   | `gh_lookup`          | GitHub issues, PRs, checks, and repo context bootstrap via `gh`                         |
 | -   | `diagnostics`        | Cache and latency diagnostics                                                           |
 
+## Native-First Routing
+
+- Start broad local work with `discover`, then narrow with `lookup`, `search`, `files`, or `symbols`.
+- Use Veil git tools (`git_status`, `git_log`, `git_diff`, `git_show`) instead of shell git reads when possible.
+- Use `web_search` and `fetch_url` for external docs lookup instead of ad hoc web fallbacks.
+- Use `gh_lookup` for GitHub metadata and repo bootstrap context.
+
 ## CLI Examples
 
 ```bash
@@ -73,14 +82,14 @@ veil cli lookup --workspace . --query "where is parseNdjson defined"
 
 # web and fetch
 veil cli web-search --query "typescript language server" --limit 5
-veil cli fetch-url --url https://example.com --format markdown
+veil cli fetch-url --url https://www.iana.org/domains/reserved --format markdown
 
 # git and github context
 veil cli git-status --workspace .
 veil cli git-log --workspace . --limit 10
 veil cli git-diff --workspace .
 veil cli git-show --workspace . --rev HEAD
-veil cli gh-lookup --repo owner/repo --kind issues --query "is:open"
+veil cli gh-lookup --repo ushiradineth/veil --kind repo_context
 
 # diagnostics
 veil cli diagnostics

@@ -208,10 +208,37 @@ const server = new McpServer({
   version: VEIL_VERSION,
 });
 
+const TOOL_DESCRIPTIONS = {
+  status: "Check index freshness, staleness reasons, and manifest metadata",
+  refresh: "Rebuild the index (full or changed) when explicit reindexing is needed",
+  files: "Find matching files by path terms, filename fragments, or directory names",
+  symbols: "Find symbols by name across functions, classes, types, and constants",
+  search: "Search indexed code and docs text for keyword matches with contextual snippets",
+  find_file: "Compatibility alias for file path lookup by partial path or filename terms",
+  find_symbol: "Compatibility alias for symbol-name lookup across indexed code",
+  search_for_pattern:
+    "Compatibility alias for indexed search across code and docs using keyword patterns",
+  lookup:
+    "Answer natural-language codebase questions with ranked files, symbols, chunks, and explainability",
+  discover:
+    "Run one broad discovery call that returns status plus top files, symbols, and code chunks",
+  web_search:
+    "Search the public web across multiple providers for external docs, references, and context",
+  fetch_url: "Fetch a URL and return markdown-first content for agent-friendly reading",
+  git_status: "Read branch tracking state and whether the workspace is clean or dirty",
+  git_log: "Read commit history with optional author, date, and grep filtering",
+  git_diff: "Read unstaged, staged, or ranged diffs with optional path filtering",
+  git_show: "Read commit metadata and optional patch content for a specific revision",
+  gh_lookup:
+    "Read GitHub issues, pull requests, checks, or bootstrap repository context via gh CLI",
+  diagnostics:
+    "Read performance diagnostics, cache stats, latency histograms, and server runtime counters",
+} as const;
+
 server.registerTool(
   "status",
   {
-    description: "Return current index status and staleness reasons",
+    description: TOOL_DESCRIPTIONS.status,
     inputSchema: {
       workspace: z.string().optional(),
       state_root: z.string().optional(),
@@ -228,7 +255,7 @@ server.registerTool(
 server.registerTool(
   "refresh",
   {
-    description: "Build or refresh the index in .veil/index",
+    description: TOOL_DESCRIPTIONS.refresh,
     inputSchema: {
       workspace: z.string().optional(),
       mode: z.enum(["full", "changed"]).optional(),
@@ -247,7 +274,7 @@ server.registerTool(
 server.registerTool(
   "files",
   {
-    description: "Find files by substring path query",
+    description: TOOL_DESCRIPTIONS.files,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -271,7 +298,7 @@ server.registerTool(
 server.registerTool(
   "symbols",
   {
-    description: "Find symbols by name",
+    description: TOOL_DESCRIPTIONS.symbols,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -295,7 +322,7 @@ server.registerTool(
 server.registerTool(
   "search",
   {
-    description: "Search indexed code chunks by keyword",
+    description: TOOL_DESCRIPTIONS.search,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -339,7 +366,7 @@ server.registerTool(
 server.registerTool(
   "find_file",
   {
-    description: "Compatibility alias for file lookup by path query",
+    description: TOOL_DESCRIPTIONS.find_file,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -363,7 +390,7 @@ server.registerTool(
 server.registerTool(
   "find_symbol",
   {
-    description: "Compatibility alias for symbol lookup by name",
+    description: TOOL_DESCRIPTIONS.find_symbol,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -387,7 +414,7 @@ server.registerTool(
 server.registerTool(
   "search_for_pattern",
   {
-    description: "Compatibility alias for indexed code/content search",
+    description: TOOL_DESCRIPTIONS.search_for_pattern,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -431,7 +458,7 @@ server.registerTool(
 server.registerTool(
   "lookup",
   {
-    description: "Intent-aware contextual lookup with explainable ranking and fallback metadata",
+    description: TOOL_DESCRIPTIONS.lookup,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -482,7 +509,7 @@ server.registerTool(
 server.registerTool(
   "discover",
   {
-    description: "Status check plus focused files/symbols/search in one call",
+    description: TOOL_DESCRIPTIONS.discover,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -541,8 +568,7 @@ server.registerTool(
 server.registerTool(
   "web_search",
   {
-    description:
-      "Fast web search across google, duckduckgo, wikipedia, github, reddit, and deepwiki",
+    description: TOOL_DESCRIPTIONS.web_search,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -560,7 +586,7 @@ server.registerTool(
 server.registerTool(
   "fetch_url",
   {
-    description: "Fetch URL content with markdown-first negotiation",
+    description: TOOL_DESCRIPTIONS.fetch_url,
     inputSchema: {
       url: z.string(),
       format: z.enum(["markdown", "text", "html"]).optional(),
@@ -576,7 +602,7 @@ server.registerTool(
 server.registerTool(
   "git_status",
   {
-    description: "Inspect git branch and dirty workspace state",
+    description: TOOL_DESCRIPTIONS.git_status,
     inputSchema: {
       workspace: z.string().optional(),
       timeout_ms: z.number().int().positive().max(10000).optional(),
@@ -591,7 +617,7 @@ server.registerTool(
 server.registerTool(
   "git_log",
   {
-    description: "Look up git commit log entries with filters",
+    description: TOOL_DESCRIPTIONS.git_log,
     inputSchema: {
       workspace: z.string().optional(),
       limit: z.number().int().positive().max(200).optional(),
@@ -610,7 +636,7 @@ server.registerTool(
 server.registerTool(
   "git_diff",
   {
-    description: "Look up uncommitted or ranged git diff output",
+    description: TOOL_DESCRIPTIONS.git_diff,
     inputSchema: {
       workspace: z.string().optional(),
       staged: z.boolean().optional(),
@@ -631,7 +657,7 @@ server.registerTool(
 server.registerTool(
   "git_show",
   {
-    description: "Look up details for a specific commit",
+    description: TOOL_DESCRIPTIONS.git_show,
     inputSchema: {
       workspace: z.string().optional(),
       rev: z.string(),
@@ -650,7 +676,7 @@ server.registerTool(
 server.registerTool(
   "gh_lookup",
   {
-    description: "Optionally look up GitHub issues, PRs, or checks via gh CLI",
+    description: TOOL_DESCRIPTIONS.gh_lookup,
     inputSchema: {
       workspace: z.string().optional(),
       repo: z.string(),
@@ -674,8 +700,7 @@ server.registerTool(
 server.registerTool(
   "diagnostics",
   {
-    description:
-      "Get performance diagnostics including cache stats, latency histograms, and memory usage",
+    description: TOOL_DESCRIPTIONS.diagnostics,
     inputSchema: {
       reset: z.boolean().optional(),
     },
@@ -725,6 +750,7 @@ export const __internalServer = {
   parseBoundedInt,
   shouldRefreshForQuery,
   canRunBackgroundRefresh,
+  toolDescriptions: TOOL_DESCRIPTIONS,
 };
 
 const meta = import.meta as unknown as Record<string, unknown>;

@@ -1,9 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { buildAgentGuidance, withAgentGuidance } from "./agent-guidance";
 import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
@@ -209,30 +211,37 @@ const server = new McpServer({
 });
 
 const TOOL_DESCRIPTIONS = {
-  status: "Check index freshness, staleness reasons, and manifest metadata",
-  refresh: "Rebuild the index (full or changed) when explicit reindexing is needed",
-  files: "Find matching files by path terms, filename fragments, or directory names",
-  symbols: "Find symbols by name across functions, classes, types, and constants",
-  search: "Search indexed code and docs text for keyword matches with contextual snippets",
-  find_file: "Compatibility alias for file path lookup by partial path or filename terms",
-  find_symbol: "Compatibility alias for symbol-name lookup across indexed code",
+  status:
+    "Use when you need to check index freshness before code retrieval (status, stale, manifest).",
+  refresh: "Use when you need to rebuild index state after repo changes (full, changed, reindex).",
+  files: "Use when you need file path matches for names or directories (find file, path, locate).",
+  symbols: "Use when you need symbol-name matches across code (function, class, type, constant).",
+  search:
+    "Use when you need indexed keyword search in code or docs (search code, find pattern, snippet).",
+  find_file:
+    "Use when you need `files` behavior via compatibility naming (find_file, file lookup, path match).",
+  find_symbol:
+    "Use when you need `symbols` behavior via compatibility naming (find_symbol, symbol lookup).",
   search_for_pattern:
-    "Compatibility alias for indexed search across code and docs using keyword patterns",
+    "Use when you need `search` behavior via compatibility naming (search_for_pattern, keyword search).",
   lookup:
-    "Answer natural-language codebase questions with ranked files, symbols, chunks, and explainability",
+    "Use when you need a natural-language answer with ranked context (where is, how does, explain code).",
   discover:
-    "Run one broad discovery call that returns status plus top files, symbols, and code chunks",
+    "Use when you need one broad first call across status, files, symbols, and chunks (start here).",
   web_search:
-    "Search the public web across multiple providers for external docs, references, and context",
-  fetch_url: "Fetch a URL and return markdown-first content for agent-friendly reading",
-  git_status: "Read branch tracking state and whether the workspace is clean or dirty",
-  git_log: "Read commit history with optional author, date, and grep filtering",
-  git_diff: "Read unstaged, staged, or ranged diffs with optional path filtering",
-  git_show: "Read commit metadata and optional patch content for a specific revision",
+    "Use when you need external web sources and docs (search web, research docs, compare references).",
+  fetch_url:
+    "Use when you need markdown-first page content from a URL (read page, fetch docs, extract content).",
+  git_status:
+    "Use when you need branch and dirty-tree context (git status, ahead behind, tracked changes).",
+  git_log:
+    "Use when you need commit history context (git log, recent commits, author or grep filter).",
+  git_diff: "Use when you need unstaged, staged, or ranged diff content (git diff, changed lines).",
+  git_show: "Use when you need commit detail for one revision (git show, commit patch, metadata).",
   gh_lookup:
-    "Read GitHub issues, pull requests, checks, or bootstrap repository context via gh CLI",
+    "Use when you need GitHub issues, PRs, checks, or repo bootstrap context (gh, repo_context).",
   diagnostics:
-    "Read performance diagnostics, cache stats, latency histograms, and server runtime counters",
+    "Use when you need Veil performance and cache telemetry (diagnostics, latency, runtime counters).",
 } as const;
 
 server.registerTool(
@@ -248,7 +257,7 @@ server.registerTool(
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     const status = await getStatus(ws, { state_root });
-    return asText(status);
+    return asText(withAgentGuidance("status", status));
   },
 );
 
@@ -267,7 +276,7 @@ server.registerTool(
     const selectedMode = mode ?? "changed";
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     const manifest = await buildIndex(ws, selectedMode, { state_root });
-    return asText({ ok: true, mode: selectedMode, manifest });
+    return asText(withAgentGuidance("refresh", { ok: true, mode: selectedMode, manifest }));
   },
 );
 
@@ -291,7 +300,7 @@ server.registerTool(
       refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
     });
     const items = await queryFiles(ws, query, limit ?? 20, { state_root });
-    return asText({ items });
+    return asText(withAgentGuidance("files", { items }, { query }));
   },
 );
 
@@ -315,7 +324,7 @@ server.registerTool(
       refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
     });
     const items = await querySymbols(ws, query, limit ?? 20, { state_root });
-    return asText({ items });
+    return asText(withAgentGuidance("symbols", { items }, { query }));
   },
 );
 
@@ -359,7 +368,7 @@ server.registerTool(
       intent,
       state_root,
     });
-    return asText({ items });
+    return asText(withAgentGuidance("search", { items }, { query }));
   },
 );
 
@@ -383,7 +392,7 @@ server.registerTool(
       refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
     });
     const items = await queryFiles(ws, query, limit ?? 20, { state_root });
-    return asText({ items });
+    return asText(withAgentGuidance("find_file", { items }, { query }));
   },
 );
 
@@ -407,7 +416,7 @@ server.registerTool(
       refresh_if_stale: shouldRefreshForQuery(refresh_if_stale, DEFAULT_QUERY_AUTO_REFRESH),
     });
     const items = await querySymbols(ws, query, limit ?? 20, { state_root });
-    return asText({ items });
+    return asText(withAgentGuidance("find_symbol", { items }, { query }));
   },
 );
 
@@ -451,7 +460,7 @@ server.registerTool(
       intent,
       state_root,
     });
-    return asText({ items });
+    return asText(withAgentGuidance("search_for_pattern", { items }, { query }));
   },
 );
 
@@ -502,7 +511,7 @@ server.registerTool(
       intent,
       state_root,
     });
-    return asText(result);
+    return asText(withAgentGuidance("lookup", result, { query }));
   },
 );
 
@@ -555,13 +564,19 @@ server.registerTool(
       state_root,
     });
 
-    return asText({
-      status: initResult.status_after,
-      intent: discovered.intent,
-      files: discovered.files,
-      symbols: discovered.symbols,
-      chunks: discovered.chunks,
-    });
+    return asText(
+      withAgentGuidance(
+        "discover",
+        {
+          status: initResult.status_after,
+          intent: discovered.intent,
+          files: discovered.files,
+          symbols: discovered.symbols,
+          chunks: discovered.chunks,
+        },
+        { query },
+      ),
+    );
   },
 );
 
@@ -579,7 +594,11 @@ server.registerTool(
   },
   async ({ workspace, query, limit, timeout_ms, debug }) => {
     const ws = workspace ?? process.cwd();
-    return asText(await webSearch(ws, { query, limit, timeout_ms, debug }));
+    return asText(
+      withAgentGuidance("web_search", await webSearch(ws, { query, limit, timeout_ms, debug }), {
+        query,
+      }),
+    );
   },
 );
 
@@ -595,7 +614,11 @@ server.registerTool(
     },
   },
   async ({ url, format, timeout_ms, max_bytes }) => {
-    return asText(await fetchUrl({ url, format, timeout_ms, max_bytes }));
+    return asText(
+      withAgentGuidance("fetch_url", await fetchUrl({ url, format, timeout_ms, max_bytes }), {
+        query: url,
+      }),
+    );
   },
 );
 
@@ -610,7 +633,7 @@ server.registerTool(
   },
   ({ workspace, timeout_ms }) => {
     const ws = workspace ?? process.cwd();
-    return asText(gitStatus(ws, { timeout_ms }));
+    return asText(withAgentGuidance("git_status", gitStatus(ws, { timeout_ms })));
   },
 );
 
@@ -629,7 +652,9 @@ server.registerTool(
   },
   ({ workspace, limit, since, author, grep, timeout_ms }) => {
     const ws = workspace ?? process.cwd();
-    return asText(gitLog(ws, { limit, since, author, grep, timeout_ms }));
+    return asText(
+      withAgentGuidance("git_log", gitLog(ws, { limit, since, author, grep, timeout_ms })),
+    );
   },
 );
 
@@ -650,7 +675,12 @@ server.registerTool(
   },
   ({ workspace, staged, path, base, head, name_only, timeout_ms, max_bytes }) => {
     const ws = workspace ?? process.cwd();
-    return asText(gitDiff(ws, { staged, path, base, head, name_only, timeout_ms, max_bytes }));
+    return asText(
+      withAgentGuidance(
+        "git_diff",
+        gitDiff(ws, { staged, path, base, head, name_only, timeout_ms, max_bytes }),
+      ),
+    );
   },
 );
 
@@ -669,7 +699,9 @@ server.registerTool(
   },
   ({ workspace, rev, path, patch, timeout_ms, max_bytes }) => {
     const ws = workspace ?? process.cwd();
-    return asText(gitShow(ws, { rev, path, patch, timeout_ms, max_bytes }));
+    return asText(
+      withAgentGuidance("git_show", gitShow(ws, { rev, path, patch, timeout_ms, max_bytes })),
+    );
   },
 );
 
@@ -692,7 +724,11 @@ server.registerTool(
     const ws = workspace ?? process.cwd();
     diagnostics.configureStatePath(diagnosticsStatePath(ws, state_root));
     return asText(
-      await ghLookup(ws, { repo, kind, query, limit, timeout_ms, temp_root, state_root }),
+      withAgentGuidance(
+        "gh_lookup",
+        await ghLookup(ws, { repo, kind, query, limit, timeout_ms, temp_root, state_root }),
+        { query: query ?? repo },
+      ),
     );
   },
 );
@@ -710,20 +746,22 @@ server.registerTool(
     if (reset) {
       diagnostics.reset();
     }
-    return asText({
-      ...data,
-      server_runtime: {
-        init_runs: runtime.init_runs,
-        init_failures: runtime.init_failures,
-        init_inflight: runtime.init_inflight,
-        init_last: runtime.init_last,
-        background_enabled: runtime.background_enabled,
-        background_interval_ms: runtime.background_interval_ms,
-        background_max_refreshes_per_hour: runtime.background_max_refreshes_per_hour,
-        background_window_started_ms: runtime.background_window_started_ms,
-        background_refreshes_in_window: runtime.background_refreshes_in_window,
-      },
-    });
+    return asText(
+      withAgentGuidance("diagnostics", {
+        ...data,
+        server_runtime: {
+          init_runs: runtime.init_runs,
+          init_failures: runtime.init_failures,
+          init_inflight: runtime.init_inflight,
+          init_last: runtime.init_last,
+          background_enabled: runtime.background_enabled,
+          background_interval_ms: runtime.background_interval_ms,
+          background_max_refreshes_per_hour: runtime.background_max_refreshes_per_hour,
+          background_window_started_ms: runtime.background_window_started_ms,
+          background_refreshes_in_window: runtime.background_refreshes_in_window,
+        },
+      }),
+    );
   },
 );
 
@@ -750,6 +788,7 @@ export const __internalServer = {
   parseBoundedInt,
   shouldRefreshForQuery,
   canRunBackgroundRefresh,
+  buildAgentGuidance,
   toolDescriptions: TOOL_DESCRIPTIONS,
 };
 

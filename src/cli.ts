@@ -1,5 +1,7 @@
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { withAgentGuidance } from "./agent-guidance";
 import { profiler, diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
@@ -51,13 +53,13 @@ export async function runCli(): Promise<void> {
   if (cmd === "refresh") {
     const mode = getArg("--mode", "changed") as BuildMode;
     const manifest = await buildIndex(workspace, mode, { state_root: stateRoot });
-    writeOutput({ ok: true, mode, manifest });
+    writeOutput(withAgentGuidance("refresh", { ok: true, mode, manifest }));
     return;
   }
 
   if (cmd === "status") {
     const status = await getStatus(workspace, { state_root: stateRoot });
-    writeOutput(status);
+    writeOutput(withAgentGuidance("status", status));
     return;
   }
 
@@ -86,13 +88,19 @@ export async function runCli(): Promise<void> {
       intent,
       state_root: stateRoot,
     });
-    writeOutput({
-      status: initResult.status_after,
-      intent: discovered.intent,
-      files: discovered.files,
-      symbols: discovered.symbols,
-      chunks: discovered.chunks,
-    });
+    writeOutput(
+      withAgentGuidance(
+        "discover",
+        {
+          status: initResult.status_after,
+          intent: discovered.intent,
+          files: discovered.files,
+          symbols: discovered.symbols,
+          chunks: discovered.chunks,
+        },
+        { query },
+      ),
+    );
     return;
   }
 
@@ -104,7 +112,7 @@ export async function runCli(): Promise<void> {
       prefer_code: true,
       state_root: stateRoot,
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("lookup", result, { query }));
     return;
   }
 
@@ -119,7 +127,7 @@ export async function runCli(): Promise<void> {
       timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000,
       debug,
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("web_search", result, { query }));
     return;
   }
 
@@ -135,13 +143,13 @@ export async function runCli(): Promise<void> {
       timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 8000,
       max_bytes: Number.isFinite(max_bytes) ? max_bytes : 200000,
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("fetch_url", result, { query: url }));
     return;
   }
 
   if (cmd === "diagnostics") {
     const data = diagnostics.getDiagnostics();
-    writeOutput(data);
+    writeOutput(withAgentGuidance("diagnostics", data));
     return;
   }
 
@@ -150,7 +158,7 @@ export async function runCli(): Promise<void> {
     const result = gitStatus(workspace, {
       timeout_ms: Number.isFinite(timeout_ms) ? timeout_ms : 5000,
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("git_status", result));
     return;
   }
 
@@ -164,7 +172,7 @@ export async function runCli(): Promise<void> {
       author: getArg("--author"),
       grep: getArg("--grep"),
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("git_log", result));
     return;
   }
 
@@ -180,7 +188,7 @@ export async function runCli(): Promise<void> {
       base: getArg("--base"),
       head: getArg("--head"),
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("git_diff", result));
     return;
   }
 
@@ -195,7 +203,7 @@ export async function runCli(): Promise<void> {
       path: getArg("--path"),
       patch: (getArg("--patch", "1") ?? "1") !== "0",
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("git_show", result));
     return;
   }
 
@@ -217,7 +225,7 @@ export async function runCli(): Promise<void> {
       state_root: stateRoot,
       temp_root: getArg("--temp-root"),
     });
-    writeOutput(result);
+    writeOutput(withAgentGuidance("gh_lookup", result, { query: getArg("--query") ?? repo }));
     return;
   }
 

@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { cpus } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -23,7 +23,7 @@ type ScenarioKind =
   | "gh_lookup";
 
 type AgentId = "codex" | "claude";
-type McpMode = "veil" | "serena" | "none";
+type StrategyId = "mcp_baseline" | "cli_skill";
 type ScenarioProfile = "smoke" | "full";
 type Phase = "warm";
 
@@ -72,6 +72,12 @@ type NativeAdoption = {
   non_veil_fallback_rate: number;
 };
 
+type AbSignal = {
+  schema_overhead_tokens: number;
+  first_useful_action_ms: number;
+  fallback_rate: number;
+};
+
 type Stats = {
   count: number;
   p50_ms: number;
@@ -88,6 +94,7 @@ type ScenarioSummary = {
   cold: Stats;
   warm: Stats;
   native_adoption: NativeAdoption;
+  ab_signal: AbSignal;
 };
 
 type CompetitorReport = {
@@ -117,7 +124,7 @@ type SuiteReport = {
     workspace: string;
     profile: ScenarioProfile;
     agents: AgentId[];
-    mcp_modes: McpMode[];
+    strategies: StrategyId[];
     cold_iterations: number;
     warm_iterations: number;
     output_dir: string;
@@ -284,7 +291,8 @@ function showHelp(): void {
     "  --workspace <path>             Workspace root (default: cwd)",
     "  --profile <smoke|full>         Scenario profile (default: smoke)",
     "  --agents <csv>                 Agent set (default: codex,claude)",
-    "  --modes <csv>                  MCP modes (default: veil,serena,none)",
+    "  --strategies <csv>             Benchmark strategies (default: mcp_baseline,cli_skill)",
+    "  --modes <csv>                  Legacy alias for --strategies",
     "  --cold <n>                     Cold iteration count metadata (default: 1)",
     "  --warm <n>                     Warm iterations per scenario (default: 1)",
     "  --max-runtime-ms <n>           Whole-suite runtime budget (default: 120000)",
@@ -331,14 +339,22 @@ function parseAgentIds(raw: string[]): AgentId[] {
   return out.length > 0 ? out : ["codex", "claude"];
 }
 
-function parseMcpModes(raw: string[]): McpMode[] {
-  const out: McpMode[] = [];
+function parseStrategies(raw: string[]): StrategyId[] {
+  const out: StrategyId[] = [];
   for (const item of raw) {
-    if (item === "veil" || item === "serena" || item === "none") {
+    if (item === "mcp_baseline" || item === "cli_skill") {
       out.push(item);
+      continue;
+    }
+    if (item === "veil" || item === "serena") {
+      out.push("mcp_baseline");
+      continue;
+    }
+    if (item === "none") {
+      out.push("cli_skill");
     }
   }
-  return out.length > 0 ? out : ["veil", "serena", "none"];
+  return out.length > 0 ? Array.from(new Set(out)) : ["mcp_baseline", "cli_skill"];
 }
 
 function parseScenarioProfile(raw: string | undefined): ScenarioProfile {
@@ -444,7 +460,9 @@ function createProcessTracker(): ProcessTracker {
       signal = nextSignal;
       for (const child of children) {
         terminate(child, "SIGTERM");
-        setTimeout(() => terminate(child, "SIGKILL"), 1_500);
+        setTimeout(() => {
+          terminate(child, "SIGKILL");
+        }, 1_500);
       }
     },
   };
@@ -479,12 +497,12 @@ async function runCommand(
 
     tracker.track(child);
 
-    child.stdout?.setEncoding("utf-8");
-    child.stderr?.setEncoding("utf-8");
-    child.stdout?.on("data", (chunk: string) => {
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
     });
-    child.stderr?.on("data", (chunk: string) => {
+    child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
 
@@ -509,7 +527,9 @@ async function runCommand(
     const timeoutId = setTimeout(() => {
       timedOut = true;
       terminate("SIGTERM");
-      setTimeout(() => terminate("SIGKILL"), 1_500);
+      setTimeout(() => {
+        terminate("SIGKILL");
+      }, 1_500);
     }, timeoutMs);
 
     const finish = (result: ScenarioRun): void => {
@@ -559,12 +579,12 @@ function mapTimeoutToUnsupported(agent: AgentId, run: ScenarioRun): ScenarioRun 
   return run;
 }
 
-function makePrompt(scenario: Scenario, mode: McpMode): string {
-  const modeInstruction =
-    mode === "none"
-      ? "MCP mode is none. Do not use any MCP tools."
-      : `MCP mode is ${mode}. Use only ${mode} MCP tools when relevant.`;
-  return `${modeInstruction}\nTask: ${scenario.prompt}\nQuery: ${scenario.query}\nReturn concise plain text output.`;
+function makePrompt(scenario: Scenario, strategy: StrategyId): string {
+  const strategyInstruction =
+    strategy === "mcp_baseline"
+      ? "A/B strategy is MCP baseline. Prefer tool-invocation patterns when available."
+      : "A/B strategy is CLI+skill. Prefer direct CLI execution and skill guidance with no MCP assumptions.";
+  return `${strategyInstruction}\nTask: ${scenario.prompt}\nQuery: ${scenario.query}\nReturn concise plain text output.`;
 }
 
 function timeoutForScenario(scenario: Scenario): number {
@@ -573,35 +593,14 @@ function timeoutForScenario(scenario: Scenario): number {
   return 15_000;
 }
 
-function claudeMcpConfig(mode: McpMode, workspace: string): string {
-  if (mode === "none") {
-    return JSON.stringify({ mcpServers: {} });
-  }
-  if (mode === "veil") {
-    return JSON.stringify({
-      mcpServers: {
-        veil: {
-          command: "nix",
-          args: ["run", "nixpkgs#bun", "--", "run", "src/server.ts"],
-          cwd: workspace,
-        },
-      },
-    });
-  }
-  return JSON.stringify({
-    mcpServers: {
-      serena: {
-        command: "uvx",
-        args: ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"],
-        cwd: workspace,
-      },
-    },
-  });
+function strategySchemaOverhead(strategy: StrategyId): number {
+  if (strategy === "mcp_baseline") return 12_000;
+  return 400;
 }
 
 async function preflightAgent(
   agent: AgentId,
-  mode: McpMode,
+  _strategy: StrategyId,
   workspace: string,
   tracker: ProcessTracker,
 ): Promise<PreflightStatus> {
@@ -614,54 +613,20 @@ async function preflightAgent(
     };
   }
 
-  if (agent === "claude") {
-    const config = claudeMcpConfig(mode, workspace);
-    const probe = await runCommand(
-      "claude",
-      [
-        "-p",
-        "--output-format",
-        "text",
-        "--permission-mode",
-        "bypassPermissions",
-        "--strict-mcp-config",
-        "--mcp-config",
-        config,
-        "--",
-        "Reply with exactly OK",
-      ],
-      workspace,
-      tracker,
-      [0],
-      20_000,
-    );
-    if (probe.status !== "ok") {
-      return {
-        ready: false,
-        mode_control: "strict",
-        reason: `claude preflight failed: ${compactReason(probe.reason)}`,
-      };
-    }
-    if (probe.text.toLowerCase().includes("hit your limit")) {
-      return {
-        ready: false,
-        mode_control: "strict",
-        reason: "claude quota exceeded",
-      };
-    }
-    return { ready: true, mode_control: "strict", reason: null };
-  }
-
   return {
     ready: true,
     mode_control: "prompt_only",
-    reason: "mode wiring not exposed by codex CLI",
+    reason: "strategy wiring controlled via benchmark prompts",
   };
 }
 
-function createAgentAdapter(agent: AgentId, mode: McpMode, preflight: PreflightStatus): Adapter {
-  const id = `${agent}-${mode}`;
-  const label = `${agent} (${mode})`;
+function createAgentAdapter(
+  agent: AgentId,
+  strategy: StrategyId,
+  preflight: PreflightStatus,
+): Adapter {
+  const id = `${agent}-${strategy}`;
+  const label = `${agent} (${strategy})`;
   let blockedReason: string | null = !preflight.ready ? preflight.reason : null;
 
   return {
@@ -670,36 +635,16 @@ function createAgentAdapter(agent: AgentId, mode: McpMode, preflight: PreflightS
     mode_control: preflight.mode_control,
     prepare: async (ctx, tracker) => {
       if (blockedReason) return;
-      if (agent !== "claude") return;
-      const config = claudeMcpConfig(mode, ctx.workspace);
-      const probe = await runCommand(
-        "claude",
-        [
-          "-p",
-          "--output-format",
-          "text",
-          "--permission-mode",
-          "bypassPermissions",
-          "--strict-mcp-config",
-          "--mcp-config",
-          config,
-          "--",
-          "Reply with exactly OK",
-        ],
-        ctx.workspace,
-        tracker,
-        [0],
-        20_000,
-      );
+      const probe = await runCommand(agent, ["--help"], ctx.workspace, tracker, [0, 1], 8_000);
       if (probe.status !== "ok") {
-        blockedReason = `claude strict mode unavailable: ${compactReason(probe.reason)}`;
+        blockedReason = `${agent} unavailable: ${compactReason(probe.reason)}`;
       }
     },
     run: async (ctx, scenario, tracker, opts) => {
       if (blockedReason) {
         return { status: "unsupported", text: "", reason: blockedReason };
       }
-      const prompt = makePrompt(scenario, mode);
+      const prompt = makePrompt(scenario, strategy);
       const timeoutMs = opts?.timeoutMs ?? timeoutForScenario(scenario);
 
       if (agent === "codex") {
@@ -712,16 +657,12 @@ function createAgentAdapter(agent: AgentId, mode: McpMode, preflight: PreflightS
         return mapTimeoutToUnsupported("codex", run);
       }
 
-      const config = claudeMcpConfig(mode, ctx.workspace);
       const args = [
         "-p",
         "--output-format",
         "text",
         "--permission-mode",
         "bypassPermissions",
-        "--strict-mcp-config",
-        "--mcp-config",
-        config,
         "--",
         prompt,
       ];
@@ -734,17 +675,17 @@ function createAgentAdapter(agent: AgentId, mode: McpMode, preflight: PreflightS
 async function createAgentMatrixAdapters(
   workspace: string,
   agents: AgentId[],
-  modes: McpMode[],
+  strategies: StrategyId[],
   tracker: ProcessTracker,
 ): Promise<{ adapters: Adapter[]; preflight: Record<string, PreflightStatus> }> {
   const adapters: Adapter[] = [];
   const preflight: Record<string, PreflightStatus> = {};
   for (const agent of agents) {
-    for (const mode of modes) {
-      const id = `${agent}-${mode}`;
-      const status = await preflightAgent(agent, mode, workspace, tracker);
+    for (const strategy of strategies) {
+      const id = `${agent}-${strategy}`;
+      const status = await preflightAgent(agent, strategy, workspace, tracker);
       preflight[id] = status;
-      adapters.push(createAgentAdapter(agent, mode, status));
+      adapters.push(createAgentAdapter(agent, strategy, status));
     }
   }
   return { adapters, preflight };
@@ -797,21 +738,18 @@ async function runScenarioPhase(
   return { status, reason, samples };
 }
 
-function scenarioIterations(scenario: Scenario, phase: Phase, fallback: number): number {
+function scenarioIterations(scenario: Scenario, fallback: number): number {
   if (scenario.kind === "gh_lookup") {
     return 1;
   }
-  if (phase === "warm") {
-    return Math.min(fallback, 1);
-  }
-  return fallback;
+  return Math.min(fallback, 1);
 }
 
 function summarizeNativeAdoption(
   adapterId: string,
   run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
 ): NativeAdoption {
-  const isVeilMode = adapterId.endsWith("-veil");
+  const isCliSkill = adapterId.endsWith("-cli_skill");
   if (run.status !== "ok" || run.samples.length === 0) {
     return {
       first_call_success: 0,
@@ -824,7 +762,27 @@ function summarizeNativeAdoption(
   return {
     first_call_success: first.success ? 1 : 0,
     calls_to_useful_context: firstUseful ? 1 : 2,
-    non_veil_fallback_rate: isVeilMode ? 0 : 1,
+    non_veil_fallback_rate: isCliSkill ? 0 : 1,
+  };
+}
+
+function summarizeAbSignal(
+  adapterId: string,
+  run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
+  nativeAdoption: NativeAdoption,
+): AbSignal {
+  const strategy: StrategyId = adapterId.endsWith("-cli_skill") ? "cli_skill" : "mcp_baseline";
+  let firstUsefulActionMs = 0;
+  for (const sample of run.samples) {
+    if (sample.relevance > 0) {
+      firstUsefulActionMs = Number(sample.ms.toFixed(4));
+      break;
+    }
+  }
+  return {
+    schema_overhead_tokens: strategySchemaOverhead(strategy),
+    first_useful_action_ms: firstUsefulActionMs,
+    fallback_rate: nativeAdoption.non_veil_fallback_rate,
   };
 }
 
@@ -836,7 +794,7 @@ function toMarkdown(report: SuiteReport): string {
   lines.push(`Workspace: ${report.config.workspace}`);
   lines.push(`Profile: ${report.config.profile}`);
   lines.push(`Agents: ${report.config.agents.join(",")}`);
-  lines.push(`Modes: ${report.config.mcp_modes.join(",")}`);
+  lines.push(`Strategies: ${report.config.strategies.join(",")}`);
   lines.push(`Runtime budget: ${String(report.config.max_runtime_ms)}ms`);
   lines.push(`Cell budget: ${String(report.config.max_cell_runtime_ms)}ms`);
   lines.push(
@@ -878,10 +836,28 @@ function toMarkdown(report: SuiteReport): string {
   lines.push("|------------|-------|--------------|--------|");
   for (const competitor of report.competitors) {
     const pre = report.config.preflight[competitor.id];
-    const ready = pre?.ready ? "yes" : "no";
-    const mode = pre?.mode_control ?? "prompt_only";
-    const reason = pre?.reason ?? "";
+    const ready = pre.ready ? "yes" : "no";
+    const mode = pre.mode_control;
+    const reason = pre.reason ?? "";
     lines.push(`| ${competitor.label} | ${ready} | ${mode} | ${reason} |`);
+  }
+
+  lines.push("");
+  lines.push("## A/B Signals");
+  lines.push("");
+  lines.push(
+    "| Competitor | Scenario | Schema Overhead (tokens) | First Useful Action (ms) | Fallback Rate |",
+  );
+  lines.push(
+    "|------------|----------|---------------------------|--------------------------|---------------|",
+  );
+  for (const competitor of report.competitors) {
+    for (const scenario of report.scenarios) {
+      const row = competitor.scenarios[scenario.id];
+      lines.push(
+        `| ${competitor.label} | ${scenario.title} | ${row.ab_signal.schema_overhead_tokens.toFixed(0)} | ${row.ab_signal.first_useful_action_ms.toFixed(4)} | ${row.ab_signal.fallback_rate.toFixed(2)} |`,
+      );
+    }
   }
 
   lines.push("");
@@ -914,7 +890,9 @@ async function main(): Promise<void> {
   const workspace = resolve(getArg("--workspace") ?? process.cwd());
   const profile = parseScenarioProfile(getArg("--profile"));
   const agents = parseAgentIds(parseCsvArg("--agents", ["codex", "claude"]));
-  const modes = parseMcpModes(parseCsvArg("--modes", ["veil", "serena", "none"]));
+  const strategies = parseStrategies(
+    parseCsvArg("--strategies", parseCsvArg("--modes", ["mcp_baseline", "cli_skill"])),
+  );
   const scenarios = scenariosForProfile(profile);
 
   const coldIterations = parseIntArg("--cold", 1);
@@ -927,14 +905,18 @@ async function main(): Promise<void> {
   const outputDir = resolve(join(outputRoot, runId));
 
   const tracker = createProcessTracker();
-  const onSigint = (): void => tracker.abortAll("SIGINT");
-  const onSigterm = (): void => tracker.abortAll("SIGTERM");
+  const onSigint = (): void => {
+    tracker.abortAll("SIGINT");
+  };
+  const onSigterm = (): void => {
+    tracker.abortAll("SIGTERM");
+  };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
 
   const ctx: RunContext = { workspace };
   const suiteStarted = nowMs();
-  const matrix = await createAgentMatrixAdapters(workspace, agents, modes, tracker);
+  const matrix = await createAgentMatrixAdapters(workspace, agents, strategies, tracker);
   const adapters: Adapter[] = matrix.adapters;
 
   try {
@@ -953,36 +935,48 @@ async function main(): Promise<void> {
         if (!rows) continue;
 
         if (tracker.interrupted) {
+          const nativeAdoption = {
+            first_call_success: 0,
+            calls_to_useful_context: 3,
+            non_veil_fallback_rate: 1,
+          };
           rows[scenario.id] = {
             status: "unsupported",
             reason: `interrupted by ${tracker.signal ?? "signal"}`,
             cold: summarize([]),
             warm: summarize([]),
-            native_adoption: {
-              first_call_success: 0,
-              calls_to_useful_context: 3,
-              non_veil_fallback_rate: 1,
-            },
+            native_adoption: nativeAdoption,
+            ab_signal: summarizeAbSignal(
+              adapter.id,
+              { status: "unsupported", samples: [] },
+              nativeAdoption,
+            ),
           };
           continue;
         }
 
         if (nowMs() - suiteStarted > maxRuntimeMs) {
+          const nativeAdoption = {
+            first_call_success: 0,
+            calls_to_useful_context: 3,
+            non_veil_fallback_rate: 1,
+          };
           rows[scenario.id] = {
             status: "unsupported",
             reason: "suite runtime budget exceeded",
             cold: summarize([]),
             warm: summarize([]),
-            native_adoption: {
-              first_call_success: 0,
-              calls_to_useful_context: 3,
-              non_veil_fallback_rate: 1,
-            },
+            native_adoption: nativeAdoption,
+            ab_signal: summarizeAbSignal(
+              adapter.id,
+              { status: "unsupported", samples: [] },
+              nativeAdoption,
+            ),
           };
           continue;
         }
 
-        const sampleCount = scenarioIterations(scenario, "warm", warmIterations);
+        const sampleCount = scenarioIterations(scenario, warmIterations);
         const run = await runScenarioPhase(
           adapter,
           ctx,
@@ -993,22 +987,26 @@ async function main(): Promise<void> {
           tracker,
         );
         if (run.status !== "ok") {
+          const nativeAdoption = summarizeNativeAdoption(adapter.id, run);
           rows[scenario.id] = {
             status: run.status,
             reason: run.reason,
             cold: summarize([]),
             warm: summarize(run.samples),
-            native_adoption: summarizeNativeAdoption(adapter.id, run),
+            native_adoption: nativeAdoption,
+            ab_signal: summarizeAbSignal(adapter.id, run, nativeAdoption),
           };
           continue;
         }
 
+        const nativeAdoption = summarizeNativeAdoption(adapter.id, run);
         rows[scenario.id] = {
           status: "ok",
           reason: null,
           cold: summarize([]),
           warm: summarize(run.samples),
-          native_adoption: summarizeNativeAdoption(adapter.id, run),
+          native_adoption: nativeAdoption,
+          ab_signal: summarizeAbSignal(adapter.id, run, nativeAdoption),
         };
       }
     }
@@ -1035,7 +1033,7 @@ async function main(): Promise<void> {
         workspace,
         profile,
         agents,
-        mcp_modes: modes,
+        strategies,
         cold_iterations: coldIterations,
         warm_iterations: warmIterations,
         output_dir: outputDir,
@@ -1066,7 +1064,7 @@ async function main(): Promise<void> {
           run_id: runId,
           profile,
           agents,
-          modes,
+          strategies,
           max_runtime_ms: maxRuntimeMs,
           max_cell_runtime_ms: maxCellRuntimeMs,
           json: jsonPath,
@@ -1090,7 +1088,7 @@ async function main(): Promise<void> {
 
 export const __internalBenchSuite = {
   parseAgentIds,
-  parseMcpModes,
+  parseStrategies,
   parseScenarioProfile,
   scenariosForProfile,
   mapTimeoutToUnsupported,

@@ -2,25 +2,21 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runCli } from "./cli";
-import { startServer } from "./server";
 
 function usage(): string {
   return [
-    "Usage: veil <server|cli> [args...]",
-    "  veil server               Start MCP stdio server",
+    "Usage: veil <cli> [args...]",
     "  veil cli <command...>     Run existing Veil CLI commands",
     "Examples:",
-    "  veil server",
     "  veil cli status",
     '  veil cli discover --query "homebrew pnpm"',
   ].join("\n");
 }
 
-type BinRoute = { type: "server" } | { type: "cli"; argv: string[] } | { type: "usage" };
+type BinRoute = { type: "cli"; argv: string[] } | { type: "usage" };
 
 function route(argv: string[]): BinRoute {
   const cmd = argv[2];
-  if (cmd === "server") return { type: "server" };
   if (cmd === "cli") {
     return {
       type: "cli",
@@ -31,9 +27,6 @@ function route(argv: string[]): BinRoute {
 }
 
 function defaultLoad(specifier: string): Promise<unknown> {
-  if (specifier === "./server") {
-    return startServer().then(() => ({}));
-  }
   if (specifier === "./cli") {
     return runCli().then(() => ({}));
   }
@@ -42,11 +35,6 @@ function defaultLoad(specifier: string): Promise<unknown> {
 
 async function main(load: (specifier: string) => Promise<unknown> = defaultLoad): Promise<void> {
   const selected = route(process.argv);
-
-  if (selected.type === "server") {
-    await load("./server");
-    return;
-  }
 
   if (selected.type === "cli") {
     process.argv = selected.argv;

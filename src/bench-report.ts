@@ -32,10 +32,23 @@ type SuiteReport = {
   generated_at: string;
   config: {
     workspace: string;
+    profile?: "smoke" | "full";
+    agents?: string[];
+    mcp_modes?: string[];
     cold_iterations: number;
     warm_iterations: number;
     output_dir: string;
     competitors: string[];
+    max_runtime_ms?: number;
+    max_cell_runtime_ms?: number;
+    preflight?: Record<
+      string,
+      {
+        ready: boolean;
+        mode_control: "strict" | "prompt_only";
+        reason: string | null;
+      }
+    >;
   };
   scenarios: Scenario[];
   competitors: CompetitorReport[];
@@ -70,7 +83,8 @@ function scenarioComparisonRows(report: SuiteReport): string[] {
     for (const competitor of report.competitors) {
       const row = competitor.scenarios[scenario.id];
       if (row?.status !== "ok") {
-        cells.push(row?.status ?? "missing");
+        const label = row ? `${row.status}${row.reason ? `: ${row.reason}` : ""}` : "missing";
+        cells.push(label.length <= 60 ? label : `${label.slice(0, 57)}...`);
         continue;
       }
       cells.push(`${row.warm.p50_ms.toFixed(4)} / ${row.warm.p95_ms.toFixed(4)}`);
@@ -128,7 +142,7 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("");
   lines.push("```bash");
   lines.push(
-    "nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --cold 1 --warm 10",
+    "nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profile smoke --cold 1 --warm 1",
   );
   lines.push("```");
   lines.push("");
@@ -139,9 +153,24 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push(`- Summary markdown: \`${runDirRelative}/SUMMARY.md\``);
   lines.push(`- Generated: \`${report.generated_at}\``);
   lines.push(`- Workspace: \`${report.config.workspace}\``);
+  if (report.config.profile) {
+    lines.push(`- Profile: \`${report.config.profile}\``);
+  }
+  if (Array.isArray(report.config.agents)) {
+    lines.push(`- Agents: \`${report.config.agents.join(",")}\``);
+  }
+  if (Array.isArray(report.config.mcp_modes)) {
+    lines.push(`- Modes: \`${report.config.mcp_modes.join(",")}\``);
+  }
   lines.push(
     `- Iterations: \`cold=${String(report.config.cold_iterations)}\`, \`warm=${String(report.config.warm_iterations)}\``,
   );
+  if (typeof report.config.max_runtime_ms === "number") {
+    lines.push(`- Runtime budget: \`${String(report.config.max_runtime_ms)}ms\``);
+  }
+  if (typeof report.config.max_cell_runtime_ms === "number") {
+    lines.push(`- Cell budget: \`${String(report.config.max_cell_runtime_ms)}ms\``);
+  }
   lines.push("");
   lines.push("## Scenario Coverage");
   lines.push("");
@@ -152,6 +181,20 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("## Warm Latency Comparison (p50 / p95 ms)");
   lines.push("");
   lines.push(...scenarioComparisonRows(report));
+  if (report.config.preflight) {
+    lines.push("");
+    lines.push("## Preflight");
+    lines.push("");
+    lines.push("| Competitor | Ready | Mode Control | Reason |");
+    lines.push("| --- | --- | --- | --- |");
+    for (const competitor of report.competitors) {
+      const pre = report.config.preflight[competitor.id];
+      const ready = pre?.ready ? "yes" : "no";
+      const mode = pre?.mode_control ?? "prompt_only";
+      const reason = pre?.reason ?? "";
+      lines.push(`| ${competitor.label} | ${ready} | ${mode} | ${reason} |`);
+    }
+  }
   lines.push("");
   lines.push(
     "## Native Choice Signals (first_call_success / calls_to_useful_context / non_veil_fallback_rate)",

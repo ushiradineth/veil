@@ -2522,6 +2522,16 @@ describe("Server startup helpers", () => {
     expect(__internalServer.canRunBackgroundRefresh(Date.now(), runtime)).toBe(false);
     expect(__internalServer.canRunBackgroundRefresh(Date.now() + 3_700_000, runtime)).toBe(true);
   });
+
+  test("tool descriptions are intent-first and expose compatibility aliases", () => {
+    const descriptions = __internalServer.toolDescriptions;
+    expect(descriptions.discover.includes("broad discovery")).toBe(true);
+    expect(descriptions.lookup.includes("natural-language")).toBe(true);
+    expect(descriptions.find_file.includes("Compatibility alias")).toBe(true);
+    expect(descriptions.find_symbol.includes("Compatibility alias")).toBe(true);
+    expect(descriptions.search_for_pattern.includes("Compatibility alias")).toBe(true);
+    expect(descriptions.gh_lookup.includes("GitHub")).toBe(true);
+  });
 });
 
 describe("Profiler utilities", () => {

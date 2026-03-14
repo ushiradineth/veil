@@ -144,7 +144,7 @@ jobs:
           ## Installation
 
           - Homebrew: `brew tap ushiradineth/homebrew https://github.com/ushiradineth/homebrew && brew install veil`
-          - Nix: `nix run github:ushiradineth/veil`
+          - npm: `npm i -g @ushiradineth/veil`
           EOF
           )
 
@@ -160,8 +160,8 @@ jobs:
       - name: Update Homebrew formula
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
-          HOMEBREW_FORMULA_PATH: ${{ vars.HOMEBREW_FORMULA_PATH }}
+          HOMEBREW_TAP_REPO: ushiradineth/homebrew
+          HOMEBREW_FORMULA_PATH: Formula/veil.rb
           TAG: ${{ needs.check-release-commit.outputs.tag }}
           VERSION: ${{ needs.check-release-commit.outputs.version }}
         run: |

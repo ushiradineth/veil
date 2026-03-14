@@ -140,8 +140,15 @@ jobs:
             printf -v notes '## What'\''s Changed\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s' "${log}" "${GITHUB_REPOSITORY}" "${latest_tag:-v0.0.0}" "${TAG}"
           fi
 
-          npm_link="**npm**: [\`@ushiradineth/veil@${TAG#v}\`](https://www.npmjs.com/package/@ushiradineth/veil/v/${TAG#v})"
-          printf '%s\n\n%s\n' "${notes}" "${npm_link}" > release-notes.md
+          install_block=$(cat <<'EOF'
+          ## Installation
+
+          - Homebrew: `brew tap ushiradineth/homebrew https://github.com/ushiradineth/homebrew && brew install veil`
+          - Nix: `nix run github:ushiradineth/veil`
+          EOF
+          )
+
+          printf '%s\n\n%s\n' "${notes}" "${install_block}" > release-notes.md
 
       - name: Create GitHub release
         env:
@@ -153,6 +160,8 @@ jobs:
       - name: Update Homebrew formula
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          HOMEBREW_FORMULA_PATH: ${{ vars.HOMEBREW_FORMULA_PATH }}
           TAG: ${{ needs.check-release-commit.outputs.tag }}
           VERSION: ${{ needs.check-release-commit.outputs.version }}
         run: |

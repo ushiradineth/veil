@@ -7,14 +7,14 @@
  *   VERSION                    - Release version without prefix, e.g. 0.2.0
  *
  * Optional environment variables:
- *   HOMEBREW_TAP_REPO          - owner/repo of the tap (default: ushiradineth/homebrew-tap)
+ *   HOMEBREW_TAP_REPO          - owner/repo of the tap (default: ushiradineth/homebrew)
  *   HOMEBREW_FORMULA_PATH      - path to formula file in tap repo (default: Formula/veil.rb)
  */
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
-const TAP_REPO = process.env.HOMEBREW_TAP_REPO ?? "ushiradineth/homebrew-tap";
+const TAP_REPO = process.env.HOMEBREW_TAP_REPO ?? "ushiradineth/homebrew";
 const FORMULA_PATH = process.env.HOMEBREW_FORMULA_PATH ?? "Formula/veil.rb";
 const TOKEN = process.env.HOMEBREW_TAP_GITHUB_TOKEN;
 const TAG = process.env.TAG;
@@ -60,7 +60,8 @@ async function computeSha256(url) {
 }
 
 function buildFormula(version, tarballUrl, sha256) {
-  return `class Veil < Formula
+  return `# This file is managed by veil release automation. DO NOT EDIT.
+class Veil < Formula
   desc "Fast CLI and skill for local code retrieval and agent context workflows"
   homepage "https://github.com/ushiradineth/veil"
   url "${tarballUrl}"

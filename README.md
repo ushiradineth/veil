@@ -17,6 +17,23 @@ Veil is built for agent workflows that need fast, token-lean context before edit
 
 Requires Node.js 20 or later.
 
+### Homebrew
+
+```bash
+brew tap ushiradineth/homebrew https://github.com/ushiradineth/homebrew
+brew install veil
+```
+
+### Nix
+
+Run without installing:
+
+```bash
+nix run github:ushiradineth/veil
+```
+
+### npm
+
 ```bash
 npm i -g @ushiradineth/veil
 ```
@@ -109,9 +126,9 @@ Required GitHub secrets:
 
 Optional repository variables:
 
-| Variable                | Default                     | Purpose                  |
-| ----------------------- | --------------------------- | ------------------------ |
-| `HOMEBREW_TAP_REPO`     | `ushiradineth/homebrew-tap` | Tap owner/repo           |
-| `HOMEBREW_FORMULA_PATH` | `Formula/veil.rb`           | Formula file path in tap |
+| Variable                | Default                 | Purpose                  |
+| ----------------------- | ----------------------- | ------------------------ |
+| `HOMEBREW_TAP_REPO`     | `ushiradineth/homebrew` | Tap owner/repo           |
+| `HOMEBREW_FORMULA_PATH` | `Formula/veil.rb`       | Formula file path in tap |
 
 Branch protection on `main` should require the `CI / test` check context before merge.

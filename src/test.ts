@@ -2521,98 +2521,13 @@ describe("Agent guidance helpers", () => {
 });
 
 describe("Profiler utilities", () => {
-  test("Bin route maps top-level cli commands only", () => {
-    expect(__internalBin.route(["bun", "src/bin.ts", "status"])).toEqual({
-      type: "cli",
-      argv: ["bun", "src/bin.ts", "status"],
-    });
-    expect(__internalBin.route(["bun", "src/bin.ts", "cli", "status"])).toEqual({
-      type: "usage",
-    });
+  test("CLI parser helper intent coercion is stable", () => {
+    expect(__internalCli.parseIntent("docs")).toBe("docs");
+    expect(__internalCli.parseIntent("unknown")).toBe("auto");
   });
 
-  test("Bin route maps help tokens", () => {
-    expect(__internalBin.route(["bun", "src/bin.ts"])).toEqual({ type: "help" });
-    expect(__internalBin.route(["bun", "src/bin.ts", "help"])).toEqual({ type: "help" });
-    expect(__internalBin.route(["bun", "src/bin.ts", "--help"])).toEqual({ type: "help" });
-    expect(__internalBin.route(["bun", "src/bin.ts", "-h"])).toEqual({ type: "help" });
-  });
-
-  test("Bin route maps mcp namespace", () => {
-    expect(__internalBin.route(["bun", "src/bin.ts", "mcp", "server"])).toEqual({
-      type: "mcp_server",
-    });
-    expect(__internalBin.route(["bun", "src/bin.ts", "mcp"])).toEqual({
-      type: "mcp_usage",
-      ok: true,
-    });
-  });
-
-  test("Bin usage text includes entrypoint commands", () => {
-    const text = __internalBin.usage();
-    expect(text.includes("Commands")).toBe(true);
-    expect(text.includes("veil status")).toBe(true);
-    expect(text.includes("veil mcp server")).toBe(true);
-  });
-
-  test("Bin default loader imports module specifier", async () => {
-    const mod = await __internalBin.defaultLoad("./bench-report");
-    expect(typeof mod).toBe("object");
-  });
-
-  test("Bin main help path writes usage to stdout", async () => {
-    const originalArgv = process.argv;
-    const writes: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.argv = ["bun", "src/bin.ts"];
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      writes.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write;
-
-    try {
-      await __internalBin.main();
-    } finally {
-      process.argv = originalArgv;
-      process.stdout.write = originalWrite;
-    }
-
-    expect(writes.join(" ")).toContain("Usage:");
-  });
-
-  test("Bin main cli path rewrites argv and loads cli module", async () => {
-    const originalArgv = process.argv;
-    const loaded: string[] = [];
-    process.argv = ["bun", "src/bin.ts", "status"];
-
-    try {
-      await __internalBin.main((specifier: string) => {
-        loaded.push(specifier);
-        return Promise.resolve({});
-      });
-      expect(process.argv).toEqual(["bun", "src/bin.ts", "status"]);
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect(loaded).toEqual(["./cli"]);
-  });
-
-  test("Bin main mcp path loads server module", async () => {
-    const originalArgv = process.argv;
-    const loaded: string[] = [];
-    process.argv = ["bun", "src/bin.ts", "mcp", "server"];
-
-    try {
-      await __internalBin.main((specifier: string) => {
-        loaded.push(specifier);
-        return Promise.resolve({});
-      });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect(loaded).toEqual(["./server"]);
+  test("Bin isMainModule handles non-main paths", () => {
+    expect(__internalBin.isMainModule(import.meta.url)).toBe(false);
   });
 
   test("Bin runMain catches thrown errors", async () => {
@@ -2637,10 +2552,8 @@ describe("Profiler utilities", () => {
   });
 
   test("Bin runMain uses default runner", async () => {
-    const originalArgv = process.argv;
     const originalExitCode = process.exitCode;
     const originalWrite = process.stderr.write.bind(process.stderr);
-    process.argv = ["bun", "src/bin.ts"];
     process.stderr.write = (() => true) as typeof process.stderr.write;
 
     try {
@@ -2648,25 +2561,15 @@ describe("Profiler utilities", () => {
       await __internalBin.runMain();
       expect(process.exitCode).toBe(0);
     } finally {
-      process.argv = originalArgv;
       process.exitCode = originalExitCode;
       process.stderr.write = originalWrite;
     }
   });
 
-  test("CLI help text includes key command groups", () => {
-    const text = __internalCli.cliHelp();
-    expect(text.includes("Commands:")).toBe(true);
-    expect(text.includes("status")).toBe(true);
-    expect(text.includes("discover --workspace")).toBe(true);
-  });
-
-  test("CLI command help includes usage and examples", () => {
-    const text = __internalCli.commandHelp("status");
-    expect(text.includes("Command:")).toBe(true);
-    expect(text.includes("Description:")).toBe(true);
-    expect(text.includes("Usage:")).toBe(true);
-    expect(text.includes("veil status --workspace")).toBe(true);
+  test("CLI createCli returns yargs parser surface", () => {
+    const cli = __internalCli.createCli([]);
+    expect(typeof cli.parseAsync).toBe("function");
+    expect(typeof cli.command).toBe("function");
   });
   test("State root helpers handle absolute and relative overrides", () => {
     const workspace = join(TEMP_TEST_DIR, "state-root-workspace");

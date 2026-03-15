@@ -94,6 +94,31 @@ export type InitWorkspaceIndexResult = {
   manifest: Manifest | null;
 };
 
+export type InitSetupMode = "skill-cli" | "mcp";
+
+export type InitSetupHost = "generic" | "codex" | "claude";
+
+export type InitSetupStepStatus = "planned" | "ok" | "failed" | "skipped";
+
+export type InitSetupStep = {
+  id: string;
+  label: string;
+  command: string;
+  status: InitSetupStepStatus;
+  ok: boolean;
+  details: string;
+};
+
+export type InitSetupResult = {
+  mode: InitSetupMode;
+  host: InitSetupHost;
+  interactive: boolean;
+  executed: boolean;
+  index: InitWorkspaceIndexResult | null;
+  steps: InitSetupStep[];
+  next_steps: string[];
+};
+
 export type GitToolName = "git_status" | "git_diff" | "git_log" | "git_show" | "gh_lookup";
 
 export type GitToolErrorCode =
@@ -256,7 +281,12 @@ export type WebSearchResponse = {
 
 export type FetchUrlFormat = "markdown" | "text" | "html";
 
-export type FetchUrlErrorCode = "invalid-url" | "timeout" | "fetch-failed" | "internal-error";
+export type FetchUrlErrorCode =
+  | "invalid-url"
+  | "blocked-host"
+  | "timeout"
+  | "fetch-failed"
+  | "internal-error";
 
 export type FetchUrlError = {
   code: FetchUrlErrorCode;

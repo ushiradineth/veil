@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 import { NodeHtmlMarkdown } from "node-html-markdown";
 
 import { errorMessage, isAbortLike } from "./errors";
@@ -119,6 +121,60 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
+function isPrivateIpv4(host: string): boolean {
+  const parts = host.split(".").map((part) => Number(part));
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return false;
+  }
+  const [a, b] = parts;
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower === "::" || lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
+  if (lower.startsWith("::ffff:")) {
+    const mapped = lower.slice("::ffff:".length);
+    return isPrivateIpv4(mapped);
+  }
+  if (/^fc[0-9a-f]{2}:/.test(lower) || /^fd[0-9a-f]{2}:/.test(lower)) return true;
+  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true;
+  return false;
+}
+
+function isBlockedHost(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (!lower) return true;
+  if (lower === "localhost" || lower.endsWith(".localhost")) return true;
+  if (lower === "metadata.google.internal" || lower === "metadata") return true;
+
+  const ipType = isIP(lower);
+  if (ipType === 4) return isPrivateIpv4(lower);
+  if (ipType === 6) return isPrivateIpv6(lower);
+  return false;
+}
+
+function validateUrlHost(parsed: URL, allowPrivateNetwork: boolean): string | null {
+  if (allowPrivateNetwork) return null;
+  if (isBlockedHost(parsed.hostname)) {
+    return `Refusing private or local host: ${parsed.hostname}`;
+  }
+  return null;
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 /**
  * Fetches URL content with markdown-first negotiation and security hardening.
  *
@@ -141,6 +197,7 @@ export async function fetchUrl(options: {
   format?: FetchUrlFormat;
   timeout_ms?: number;
   max_bytes?: number;
+  allow_private_network?: boolean;
   fetch_impl?: typeof fetch;
 }): Promise<FetchUrlResponse> {
   const started = nowMs();
@@ -149,12 +206,22 @@ export async function fetchUrl(options: {
   // Enforce timeout bounds: min 100ms, max 20s
   const timeoutMs = clampInt(options.timeout_ms, 100, 20_000, 8_000);
   const maxBytes = clampInt(options.max_bytes, 100, 2_000_000, 200_000);
+  const allowPrivateNetwork = options.allow_private_network ?? false;
 
   if (!parsed) {
     return {
       meta: { ok: false, duration_ms: Number((nowMs() - started).toFixed(4)), truncated: false },
       data: null,
       error: { code: "invalid-url", message: "URL must be a valid http(s) URL" },
+    };
+  }
+
+  const initialHostError = validateUrlHost(parsed, allowPrivateNetwork);
+  if (initialHostError) {
+    return {
+      meta: { ok: false, duration_ms: Number((nowMs() - started).toFixed(4)), truncated: false },
+      data: null,
+      error: { code: "blocked-host", message: initialHostError },
     };
   }
 
@@ -165,14 +232,59 @@ export async function fetchUrl(options: {
   }, timeoutMs);
 
   try {
-    const response = await fetchImpl(parsed.toString(), {
-      method: "GET",
-      headers: {
-        accept: chooseAccept(format),
-        "user-agent": "veil-fetch-url/1.0",
-      },
-      signal: abort.signal,
-    });
+    let current = parsed;
+    let response: Response | null = null;
+    for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+      response = await fetchImpl(current.toString(), {
+        method: "GET",
+        headers: {
+          accept: chooseAccept(format),
+          "user-agent": "veil-fetch-url/1.0",
+        },
+        redirect: "manual",
+        signal: abort.signal,
+      });
+
+      if (!isRedirectStatus(response.status)) {
+        break;
+      }
+      const location = response.headers.get("location");
+      if (!location) {
+        break;
+      }
+      const redirected = new URL(location, current);
+      const redirectedHostError = validateUrlHost(redirected, allowPrivateNetwork);
+      if (redirectedHostError) {
+        return {
+          meta: {
+            ok: false,
+            duration_ms: Number((nowMs() - started).toFixed(4)),
+            truncated: false,
+          },
+          data: null,
+          error: { code: "blocked-host", message: redirectedHostError },
+        };
+      }
+      current = redirected;
+      if (redirectCount === 5) {
+        return {
+          meta: {
+            ok: false,
+            duration_ms: Number((nowMs() - started).toFixed(4)),
+            truncated: false,
+          },
+          data: null,
+          error: { code: "fetch-failed", message: "Too many redirects" },
+        };
+      }
+    }
+    if (!response) {
+      return {
+        meta: { ok: false, duration_ms: Number((nowMs() - started).toFixed(4)), truncated: false },
+        data: null,
+        error: { code: "fetch-failed", message: "No response from fetch" },
+      };
+    }
 
     const contentType = contentTypeOf(response);
     const status = response.status;
@@ -202,7 +314,7 @@ export async function fetchUrl(options: {
         },
         data: {
           url: parsed.toString(),
-          final_url: response.url || parsed.toString(),
+          final_url: response.url || current.toString(),
           status,
           content_type: contentType,
           format,
@@ -223,7 +335,7 @@ export async function fetchUrl(options: {
       },
       data: {
         url: parsed.toString(),
-        final_url: response.url || parsed.toString(),
+        final_url: response.url || current.toString(),
         status,
         content_type: contentType,
         format,
@@ -264,5 +376,8 @@ export const __internalFetchUrl = {
   isMarkdown,
   truncateTo,
   parseUrl,
+  isBlockedHost,
+  validateUrlHost,
+  isRedirectStatus,
   NHM,
 };

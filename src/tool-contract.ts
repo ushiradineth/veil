@@ -45,7 +45,7 @@ export const CLI_COMMAND_DESCRIPTIONS: Record<CliCommandName, string> = {
   build: "Full index rebuild",
   refresh: "Incremental index rebuild",
   status: "Index freshness and manifest status",
-  init: "Initialize index if missing or stale",
+  init: "Initialize setup for CLI or MCP mode",
   discover: "Combined discovery: files, symbols, search",
   lookup: "Ranked intent-aware retrieval",
   files: "File path lookup by query",

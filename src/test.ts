@@ -2611,55 +2611,70 @@ describe("Profiler utilities", () => {
     expect(__internalCli.parseIntent("unknown")).toBe("auto");
   });
 
-  test("CLI init mode and host coercion are stable", () => {
+  test("CLI init mode coercion is stable", () => {
     expect(__internalCli.parseInitMode("mcp")).toBe("mcp");
-    expect(__internalCli.parseInitMode("unknown")).toBe("skill-cli");
-    expect(__internalCli.parseInitHost("codex")).toBe("codex");
-    expect(__internalCli.parseInitHost("unknown")).toBe("generic");
+    expect(__internalCli.parseInitMode("unknown")).toBe("cli");
   });
 
-  test("CLI init setup plan includes CLI install for skill-cli mode", () => {
-    const steps = __internalCli.initStepsForMode("skill-cli");
+  test("CLI package manager inference detects bun runtime", () => {
+    const pm = __internalCli.inferInitPackageManager(
+      undefined,
+      ["veil", "init"],
+      "/usr/local/bin/bun",
+    );
+    expect(pm).toBe("bun");
+  });
+
+  test("CLI package manager inference detects pnpm execpath", () => {
+    const pm = __internalCli.inferInitPackageManager(
+      undefined,
+      ["veil", "init"],
+      "/usr/local/bin/node",
+      "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs",
+    );
+    expect(pm).toBe("pnpm");
+  });
+
+  test("CLI init setup plan includes CLI and skill installs for cli mode", () => {
+    const steps = __internalCli.initStepsForMode("cli", "npm");
     expect(steps.some((step) => step.id === "install-cli")).toBe(true);
     expect(steps.some((step) => step.id === "install-skill")).toBe(true);
   });
 
-  test("CLI init setup plan includes skill install for mcp mode", () => {
-    const steps = __internalCli.initStepsForMode("mcp");
-    expect(steps.some((step) => step.id === "install-skill")).toBe(true);
+  test("CLI init setup plan includes mcp skill install for mcp mode", () => {
+    const steps = __internalCli.initStepsForMode("mcp", "npm");
+    expect(steps.some((step) => step.id === "install-mcp-skill")).toBe(true);
     expect(steps.some((step) => step.id === "install-cli")).toBe(false);
   });
 
-  test("CLI init setup result supports non-executing setup contract", async () => {
+  test("CLI init setup result supports generic mcp setup contract", async () => {
     const result = await __internalCli.buildInitSetupResult({
-      workspace: SMALL_REPO,
       mode: "mcp",
-      host: "codex",
       interactive: false,
       yes: false,
-      skipIndex: true,
+      executeInstalls: false,
+      packageManager: "npm",
     });
     expect(result.mode).toBe("mcp");
-    expect(result.host).toBe("codex");
+    expect(result.package_manager).toBe("npm");
     expect(result.executed).toBe(false);
-    expect(result.index).toBeNull();
+    expect(result.mcp_snippet).toContain("@ushiradineth/veil@latest mcp server");
     expect(result.steps.every((step) => step.status === "planned")).toBe(true);
     expect(result.next_steps.length).toBeGreaterThan(0);
   });
 
-  test("CLI init setup result can include index bootstrap", async () => {
+  test("CLI init setup result can execute cli install and skip skill", async () => {
     const result = await __internalCli.buildInitSetupResult({
-      workspace: SMALL_REPO,
-      mode: "skill-cli",
+      mode: "cli",
       interactive: false,
       yes: false,
-      skipIndex: false,
-      indexMode: "changed",
-      refreshIfStale: true,
+      packageManager: "npm",
+      runStep: (step) => ({ ...step, status: "ok", ok: true, details: "mocked" }),
     });
-    expect(result.mode).toBe("skill-cli");
-    expect(result.index).not.toBeNull();
-    expect(result.index?.workspace).toBe(SMALL_REPO);
+    expect(result.mode).toBe("cli");
+    expect(result.executed).toBe(true);
+    expect(result.steps[0]?.status).toBe("ok");
+    expect(result.steps[1]?.status).toBe("skipped");
   });
 
   test("Bin isMainModule handles non-main paths", () => {

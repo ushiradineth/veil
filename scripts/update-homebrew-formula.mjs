@@ -72,7 +72,7 @@ class Veil < Formula
   depends_on "node"
 
   def install
-    system "npm", "install", "-g", "--prefix", prefix, "."
+    system "npm", "install", "-g", "--prefix", prefix, "./package"
   end
 
   test do
@@ -93,12 +93,21 @@ async function run() {
 
   // Get current file SHA for update
   let fileSha = null;
+  let existingContent = null;
   try {
     const existing = await fetchJson(`${GITHUB_API}/repos/${TAP_REPO}/contents/${FORMULA_PATH}`);
     fileSha = existing.sha;
+    if (typeof existing.content === "string") {
+      existingContent = Buffer.from(existing.content, "base64").toString("utf8");
+    }
     console.log(`Existing formula SHA: ${fileSha}`);
   } catch {
     console.log("Formula file not found in tap, will create it");
+  }
+
+  if (existingContent === formula) {
+    console.log("Formula already up to date, skipping tap commit");
+    return;
   }
 
   const body = {

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 import { diagnostics } from "./diagnostics";
@@ -35,6 +35,7 @@ type RunnerOptions = {
 
 const DEFAULT_MAX_BYTES = 64_000;
 const MAX_BYTES_CAP = 500_000;
+const REPO_CONTEXT_MARKER = ".veil-repo-context";
 
 function nowMs(bunRef?: { nanoseconds?: () => number }): number {
   const runtimeBun = bunRef ?? (globalThis as { Bun?: { nanoseconds?: () => number } }).Bun;
@@ -845,9 +846,11 @@ export function ghLookup(
     }
 
     const tempRoot = options.temp_root?.trim() ? options.temp_root.trim() : "/tmp";
-    const target = join(tempRoot, basename(repoRef.name));
-    mkdirSync(tempRoot, { recursive: true });
+    const targetParent = join(tempRoot, repoRef.owner);
+    const target = join(targetParent, basename(repoRef.name));
+    mkdirSync(targetParent, { recursive: true });
     const gitDir = join(target, ".git");
+    const markerPath = join(target, REPO_CONTEXT_MARKER);
     let syncOut: RunResult;
     if (!existsSync(gitDir)) {
       syncOut = runCommand(
@@ -856,7 +859,29 @@ export function ghLookup(
         workspace,
         timeoutMs,
       );
+      if (syncOut.ok) {
+        writeFileSync(markerPath, `${repoRef.repo}\n`, "utf-8");
+      }
     } else {
+      if (!existsSync(markerPath)) {
+        recordDiagnostics("gh_lookup", started, false, false);
+        return Promise.resolve(
+          fail(workspace, "gh_lookup", started, {
+            code: "command-failed",
+            message: `existing clone target ${target} is unmanaged, refusing hard reset`,
+          }),
+        );
+      }
+      const markerRepo = readFileSync(markerPath, "utf-8").trim();
+      if (markerRepo !== repoRef.repo) {
+        recordDiagnostics("gh_lookup", started, false, false);
+        return Promise.resolve(
+          fail(workspace, "gh_lookup", started, {
+            code: "command-failed",
+            message: `existing clone target ${target} belongs to ${markerRepo || "unknown"}, refusing hard reset`,
+          }),
+        );
+      }
       const remote = runCommand(
         "git",
         ["-C", target, "remote", "set-url", "origin", repoRef.url],

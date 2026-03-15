@@ -802,6 +802,52 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.error?.code).toBe("invalid-url");
   });
 
+  test("Fetch URL blocks localhost by default", async () => {
+    const result = await fetchUrl({ url: "http://127.0.0.1:8080/health" });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("blocked-host");
+  });
+
+  test("Fetch URL blocks metadata endpoint by default", async () => {
+    const result = await fetchUrl({ url: "http://169.254.169.254/latest/meta-data" });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("blocked-host");
+  });
+
+  test("Fetch URL allows private hosts when explicitly enabled", async () => {
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("ok", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      )) as unknown as typeof fetch;
+    const result = await fetchUrl({
+      url: "http://127.0.0.1:8080/health",
+      allow_private_network: true,
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  test("Fetch URL blocks redirects to private hosts", async () => {
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("", {
+          status: 302,
+          headers: { location: "http://127.0.0.1/private" },
+        }),
+      )) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/redirect",
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("blocked-host");
+  });
+
   test("Fetch URL reports timeout", async () => {
     const mockFetch = ((_: RequestInfo | URL, init?: RequestInit) => {
       return new Promise<Response>((_, reject) => {
@@ -931,6 +977,11 @@ describe("Phase 2: Query accuracy", () => {
     expect(__internalFetchUrl.parseMarkdownTokens("9.8")).toBe(9);
     expect(__internalFetchUrl.isHtml("application/xhtml+xml")).toBe(true);
     expect(__internalFetchUrl.isMarkdown("text/x-markdown")).toBe(true);
+    expect(__internalFetchUrl.isBlockedHost("localhost")).toBe(true);
+    expect(__internalFetchUrl.isBlockedHost("10.0.0.1")).toBe(true);
+    expect(__internalFetchUrl.isBlockedHost("example.com")).toBe(false);
+    expect(__internalFetchUrl.isRedirectStatus(302)).toBe(true);
+    expect(__internalFetchUrl.isRedirectStatus(200)).toBe(false);
     const clipped = __internalFetchUrl.truncateTo("abcdef", 4);
     expect(clipped.truncated).toBe(true);
     expect(Buffer.byteLength(clipped.value, "utf-8")).toBeLessThanOrEqual(4);
@@ -1607,7 +1658,7 @@ describe("Phase 3: Cache behavior", () => {
       '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nexit 1\n',
     );
     const tempRoot = join(TEMP_TEST_DIR, "gh-repo-context-fail");
-    const existingRepo = join(tempRoot, "repo");
+    const existingRepo = join(tempRoot, "owner", "repo");
     await mkdir(existingRepo, { recursive: true });
     git(existingRepo, ["init"]);
     await writeFile(join(existingRepo, "tracked.ts"), "export const tracked = true\n");
@@ -1631,6 +1682,40 @@ describe("Phase 3: Cache behavior", () => {
     });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
+  });
+
+  test("GH repo_context refuses hard reset on unmanaged target", async () => {
+    const script = join(TEMP_TEST_DIR, "mock-gh-repo-context-unmanaged.sh");
+    await writeExecutableScript(
+      script,
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh-2; exit 0; fi\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo ok; exit 0; fi\nexit 1\n',
+    );
+    const tempRoot = join(TEMP_TEST_DIR, "gh-repo-context-unmanaged");
+    const existingRepo = join(tempRoot, "owner", "repo");
+    await mkdir(existingRepo, { recursive: true });
+    git(existingRepo, ["init"]);
+    await writeFile(join(existingRepo, "tracked.ts"), "export const tracked = true\n");
+    git(existingRepo, ["add", "."]);
+    git(existingRepo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    const result = await ghLookup(SMALL_REPO, {
+      repo: "owner/repo",
+      kind: "repo_context",
+      command: script,
+      temp_root: tempRoot,
+      timeout_ms: 500,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("command-failed");
+    expect(result.error?.message.includes("refusing hard reset")).toBe(true);
   });
 
   test("GH lookup accepts GitHub URL repository references", async () => {
@@ -2524,6 +2609,57 @@ describe("Profiler utilities", () => {
   test("CLI parser helper intent coercion is stable", () => {
     expect(__internalCli.parseIntent("docs")).toBe("docs");
     expect(__internalCli.parseIntent("unknown")).toBe("auto");
+  });
+
+  test("CLI init mode and host coercion are stable", () => {
+    expect(__internalCli.parseInitMode("mcp")).toBe("mcp");
+    expect(__internalCli.parseInitMode("unknown")).toBe("skill-cli");
+    expect(__internalCli.parseInitHost("codex")).toBe("codex");
+    expect(__internalCli.parseInitHost("unknown")).toBe("generic");
+  });
+
+  test("CLI init setup plan includes CLI install for skill-cli mode", () => {
+    const steps = __internalCli.initStepsForMode("skill-cli");
+    expect(steps.some((step) => step.id === "install-cli")).toBe(true);
+    expect(steps.some((step) => step.id === "install-skill")).toBe(true);
+  });
+
+  test("CLI init setup plan includes skill install for mcp mode", () => {
+    const steps = __internalCli.initStepsForMode("mcp");
+    expect(steps.some((step) => step.id === "install-skill")).toBe(true);
+    expect(steps.some((step) => step.id === "install-cli")).toBe(false);
+  });
+
+  test("CLI init setup result supports non-executing setup contract", async () => {
+    const result = await __internalCli.buildInitSetupResult({
+      workspace: SMALL_REPO,
+      mode: "mcp",
+      host: "codex",
+      interactive: false,
+      yes: false,
+      skipIndex: true,
+    });
+    expect(result.mode).toBe("mcp");
+    expect(result.host).toBe("codex");
+    expect(result.executed).toBe(false);
+    expect(result.index).toBeNull();
+    expect(result.steps.every((step) => step.status === "planned")).toBe(true);
+    expect(result.next_steps.length).toBeGreaterThan(0);
+  });
+
+  test("CLI init setup result can include index bootstrap", async () => {
+    const result = await __internalCli.buildInitSetupResult({
+      workspace: SMALL_REPO,
+      mode: "skill-cli",
+      interactive: false,
+      yes: false,
+      skipIndex: false,
+      indexMode: "changed",
+      refreshIfStale: true,
+    });
+    expect(result.mode).toBe("skill-cli");
+    expect(result.index).not.toBeNull();
+    expect(result.index?.workspace).toBe(SMALL_REPO);
   });
 
   test("Bin isMainModule handles non-main paths", () => {

@@ -393,13 +393,18 @@ server.registerTool(
       format: z.enum(["markdown", "text", "html"]).optional(),
       timeout_ms: z.number().int().positive().max(20000).optional(),
       max_bytes: z.number().int().positive().max(2000000).optional(),
+      allow_private_network: z.boolean().optional(),
     },
   },
-  async ({ url, format, timeout_ms, max_bytes }) => {
+  async ({ url, format, timeout_ms, max_bytes, allow_private_network }) => {
     return asText(
-      withAgentGuidance("fetch_url", await fetchUrl({ url, format, timeout_ms, max_bytes }), {
-        query: url,
-      }),
+      withAgentGuidance(
+        "fetch_url",
+        await fetchUrl({ url, format, timeout_ms, max_bytes, allow_private_network }),
+        {
+          query: url,
+        },
+      ),
     );
   },
 );

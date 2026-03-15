@@ -35,6 +35,11 @@ npx -y skills add https://github.com/ushiradineth/veil --skill veil
 
 ## Commands and Examples
 
+Global flags:
+
+- `veil --help`
+- `veil --version`
+
 | Command       | Description                                              | Example                                                                        |
 | ------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `status`      | Show index freshness, manifest state, and stale reasons. | `veil status --workspace .`                                                    |

@@ -91,7 +91,9 @@ Use `SKILL.md` as the canonical reusable skill prompt.
 - Merge the PR after CI passes; the `Publish` workflow handles tag, npm, GitHub release, and brew update.
 - Required secrets: `NPM_TOKEN`, `RELEASE_PR_TOKEN`, `HOMEBREW_TAP_GITHUB_TOKEN`.
 - Branch protection on `main` must require the `CI / test` check context.
-- See `README.md` for full secret and variable reference.
+- Verify post-publish with npm version lookup, remote tag presence, GitHub release page, and tap formula version/sha alignment.
+- If brew update fails after npm publish, keep the existing tag/release and rerun only formula update with the same `TAG` and `VERSION`.
+- See `README.md` for full release runbook and variable reference.
 
 ## Git Workflow
 

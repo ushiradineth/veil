@@ -35,6 +35,11 @@ jobs:
 
           if echo "${subject}" | grep -qE '^chore\(release\): bump version to [0-9]+\.[0-9]+\.[0-9]+$'; then
             version=$(echo "${subject}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')
+            package_version=$(node -p "require('./package.json').version")
+            if [ "${version}" != "${package_version}" ]; then
+              echo "Release commit version (${version}) does not match package.json (${package_version})"
+              exit 1
+            fi
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "version=${version}" >> $GITHUB_OUTPUT
             echo "tag=v${version}" >> $GITHUB_OUTPUT
@@ -69,6 +74,15 @@ jobs:
         with:
           node-version: "20"
           registry-url: https://registry.npmjs.org
+
+      - name: Validate required publish secrets
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN is required for publish workflow"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: bun install
@@ -166,7 +180,7 @@ jobs:
           VERSION: ${{ needs.check-release-commit.outputs.version }}
         run: |
           if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN}" ]; then
-            echo "HOMEBREW_TAP_GITHUB_TOKEN not set, skipping Homebrew update"
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set, skipping Homebrew update (npm and GitHub release already completed)"
             exit 0
           fi
           node scripts/update-homebrew-formula.mjs

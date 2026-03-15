@@ -454,7 +454,7 @@ async function buildInitSetupResult(args: {
 export function createCli(args: string[] = []): Argv {
   const cli = yargs(args)
     .scriptName("veil")
-    .usage("$0 <command> [options]")
+    .usage("Usage: $0 <command> [options]")
     .help("help")
     .alias("help", "h")
     .version("version", "Display version number", VEIL_VERSION)

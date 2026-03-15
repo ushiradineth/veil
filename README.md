@@ -1,8 +1,19 @@
-# Veil CLI
+# Veil Agent Toolkit
 
-Veil is a CLI/MCP Toolkit built for agent workflows that need fast, token-lean context before editing code.
+Veil helps coding agents find the right code fast.
 
-It indexes a repository and provides focused commands for files, symbols, semantic lookup, web/fetch context, and git or GitHub reads.
+Without Veil, agents often:
+
+- search too many files
+- guess where symbols are
+- repeat the same scans after each change
+
+With Veil, agents can:
+
+- use `discover` to get files, symbols, and code chunks in one step
+- use `lookup` to get the most relevant context for the task
+- use `files`, `symbols`, and `search` for focused follow-up
+- use built-in git and web tools instead of ad hoc shell commands
 
 Agents should:
 
@@ -10,53 +21,153 @@ Agents should:
 - Narrow with `lookup`, `search`, `files`, or `symbols`
 - Use built-in git and web commands instead of ad hoc shell fallbacks
 
-## Install the CLI
+## What It Is For
 
-Requires Node.js 20 or later.
+Veil is built for agents that need to move from prompt to implementation quickly.
 
-### With Homebrew
+It gives the agent indexed access to files, symbols, and relevant code chunks, so it can retrieve precise context before writing code. This reduces broad file reads and repeated text scans, improves token efficiency, and shortens time to first meaningful code change.
+
+In practice, Veil acts as a local retrieval layer for coding agents: discover where code lives, resolve symbols, pull focused context, then execute edits.
+
+## Setup
+
+### Initialize using the CLI (recommended)
+
+```bash
+npx -y @ushiradineth/veil@latest init
+```
+
+### Setup manually
+
+#### Install the CLI
+
+Package managers:
+
+```bash
+npm i -g @ushiradineth/veil
+pnpm add -g @ushiradineth/veil
+yarn global add @ushiradineth/veil
+bun add -g @ushiradineth/veil
+```
+
+Homebrew:
 
 ```bash
 brew tap ushiradineth/homebrew https://github.com/ushiradineth/homebrew
 brew install veil
 ```
 
-### npm
+#### Install the Skill (based on your preference)
+
+CLI skill:
 
 ```bash
-npm i -g @ushiradineth/veil
+npx -y skills add https://github.com/ushiradineth/veil --skill veil-cli
 ```
 
-## Install Skill
+MCP skill:
 
 ```bash
-npx -y skills add https://github.com/ushiradineth/veil --skill veil
+npx -y skills add https://github.com/ushiradineth/veil --skill veil-mcp
 ```
 
-## Commands and Examples
+### MCP Client Configuration
 
-Global flags:
+<details>
+  <summary>Codex</summary>
+  Follow the <a href="https://developers.openai.com/codex/mcp/#configure-with-the-cli">configure MCP guide</a>
+  using the standard config from above. You can also install Veil using the Codex CLI:
 
-- `veil --help`
-- `veil --version`
+```bash
+codex mcp add veil -- npx -y @ushiradineth/veil@latest mcp server
+```
 
-| Command       | Description                                              | Example                                                                        |
-| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `status`      | Show index freshness, manifest state, and stale reasons. | `veil status --workspace .`                                                    |
-| `init`        | Initialize index if missing or stale.                    | `veil init --workspace .`                                                      |
-| `build`       | Force full index rebuild for workspace.                  | `veil build --workspace .`                                                     |
-| `refresh`     | Incremental index refresh using changed files.           | `veil refresh --workspace . --mode changed`                                    |
-| `discover`    | Combined retrieval across files, symbols, and chunks.    | `veil discover --workspace . --query "find build logic"`                       |
-| `lookup`      | Intent-aware ranked retrieval with short reasoning.      | `veil lookup --workspace . --query "where is parseNdjson defined"`             |
-| `files`       | Search file paths by query.                              | `veil files --workspace . --query "workflow"`                                  |
-| `symbols`     | Search symbols (functions, classes, types, methods).     | `veil symbols --workspace . --query "TopKHeap"`                                |
-| `search`      | Search indexed content chunks in code or docs.           | `veil search --workspace . --query "pnpm install"`                             |
-| `web-search`  | Multi-provider web search with ranked results.           | `veil web-search --query "typescript language server" --limit 5`               |
-| `fetch-url`   | Fetch URL content and normalize to markdown or text.     | `veil fetch-url --url https://www.iana.org/domains/reserved --format markdown` |
-| `git-status`  | Show branch, dirty tree, and untracked summary.          | `veil git-status --workspace .`                                                |
-| `git-log`     | Show recent commits with metadata.                       | `veil git-log --workspace . --limit 10`                                        |
-| `git-diff`    | Show working or ranged git diff.                         | `veil git-diff --workspace .`                                                  |
-| `git-show`    | Show one git revision with metadata and patch text.      | `veil git-show --workspace . --rev HEAD`                                       |
-| `gh-lookup`   | Pull GitHub repo or PR context via `gh` CLI.             | `veil gh-lookup --repo ushiradineth/veil --kind repo_context`                  |
-| `diagnostics` | Show cache counters and latency diagnostics.             | `veil diagnostics`                                                             |
-| `mcp server`  | Start MCP stdio server runtime.                          | `veil mcp server`                                                              |
+</details>
+
+<details>
+  <summary>Claude Code</summary>
+
+Install via CLI:
+
+```bash
+claude mcp add --scope user veil -- npx -y @ushiradineth/veil@latest mcp server
+```
+
+See the <a href="https://code.claude.com/docs/en/mcp">Claude Code MCP guide</a> for more details.
+
+</details>
+
+<details>
+  <summary>OpenCode</summary>
+
+Add the following configuration to your `opencode.json` file. If you do not have one, create it at `~/.config/opencode/opencode.json` (<a href="https://opencode.ai/docs/mcp-servers">guide</a>):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "veil": {
+      "type": "local",
+      "command": ["npx", "-y", "@ushiradineth/veil@latest", "mcp", "server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+  <summary>Cursor</summary>
+
+Click to install:
+
+[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install in Cursor">](https://cursor.com/en/install-mcp?name=veil&config=eyJjb21tYW5kIjoibnB4IC15IEB1c2hpcmFkaW5ldGgvdmVpbEBsYXRlc3QgbWNwIHNlcnZlciJ9)
+
+Or install manually in `Cursor Settings` -> `MCP` -> `New MCP Server` with:
+
+```json
+{
+  "mcpServers": {
+    "veil": {
+      "command": "npx",
+      "args": ["-y", "@ushiradineth/veil@latest", "mcp", "server"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+  <summary>Windsurf</summary>
+  Follow the <a href="https://docs.windsurf.com/windsurf/cascade/mcp#mcp-config-json">configure MCP guide</a>
+  using the standard config from above.
+</details>
+
+## Capabilities
+
+Use the same capability surface from either CLI or MCP.
+
+| Capability                           | What it does                                                          | CLI command                                              | MCP tool      |
+| ------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------- | ------------- |
+| Index status                         | Shows index freshness, manifest health, and stale reasons.            | `veil status --workspace .`                              | `status`      |
+| Incremental index refresh            | Rebuilds index records from changed files only.                       | `veil refresh --workspace . --mode changed`              | `refresh`     |
+| Discover files, symbols, chunks      | Returns a mixed set of high-signal retrieval context in one call.     | `veil discover --workspace . --query "<query>"`          | `discover`    |
+| Intent-aware ranked lookup           | Ranks relevant context with intent-aware scoring for coding tasks.    | `veil lookup --workspace . --query "<query>"`            | `lookup`      |
+| File path retrieval                  | Finds matching file paths for quick navigation.                       | `veil files --workspace . --query "<query>"`             | `files`       |
+| Symbol retrieval                     | Finds functions, classes, types, and methods by name.                 | `veil symbols --workspace . --query "<query>"`           | `symbols`     |
+| Content search                       | Searches indexed code and docs chunks by query.                       | `veil search --workspace . --query "<query>"`            | `search`      |
+| Web search                           | Runs multi-provider web search for external context.                  | `veil web-search --query "<query>"`                      | `web_search`  |
+| URL fetch and markdown normalization | Fetches web content and normalizes output for agent-friendly reading. | `veil fetch-url --url <url> --format markdown`           | `fetch_url`   |
+| Git status                           | Shows branch state, dirty files, and untracked changes.               | `veil git-status --workspace .`                          | `git_status`  |
+| Git log                              | Returns recent commits with metadata for project history checks.      | `veil git-log --workspace . --limit 10`                  | `git_log`     |
+| Git diff                             | Returns working tree or revision-range diffs.                         | `veil git-diff --workspace .`                            | `git_diff`    |
+| Git show                             | Shows full details for a specific revision.                           | `veil git-show --workspace . --rev HEAD`                 | `git_show`    |
+| GitHub context lookup                | Pulls repository or pull request context via `gh` integration.        | `veil gh-lookup --repo <owner/repo> --kind repo_context` | `gh_lookup`   |
+| Runtime diagnostics                  | Surfaces cache counters and latency diagnostics.                      | `veil diagnostics`                                       | `diagnostics` |
+
+CLI-only setup/runtime helpers:
+
+- `veil init --workspace . --mode mcp|cli`
+- `veil build --workspace .`
+- `veil mcp server`

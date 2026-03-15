@@ -29,8 +29,8 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
   {
     name: "init",
     description: CLI_COMMAND_DESCRIPTIONS.init,
-    usage: "veil init --workspace <path> [--mode full|changed]",
-    examples: ["veil init --workspace . --mode changed"],
+    usage: "veil init --workspace <path> [--mode cli|mcp] [--yes] [--raw-output]",
+    examples: ["veil init --workspace . --mode cli", "veil init --workspace . --mode mcp"],
   },
   {
     name: "discover",

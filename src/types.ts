@@ -94,9 +94,9 @@ export type InitWorkspaceIndexResult = {
   manifest: Manifest | null;
 };
 
-export type InitSetupMode = "skill-cli" | "mcp";
+export type InitSetupMode = "cli" | "mcp";
 
-export type InitSetupHost = "generic" | "codex" | "claude";
+export type InitSetupPackageManager = "npm" | "pnpm" | "bun" | "yarn" | "brew";
 
 export type InitSetupStepStatus = "planned" | "ok" | "failed" | "skipped";
 
@@ -111,10 +111,10 @@ export type InitSetupStep = {
 
 export type InitSetupResult = {
   mode: InitSetupMode;
-  host: InitSetupHost;
   interactive: boolean;
+  package_manager: InitSetupPackageManager;
   executed: boolean;
-  index: InitWorkspaceIndexResult | null;
+  mcp_snippet: string | null;
   steps: InitSetupStep[];
   next_steps: string[];
 };

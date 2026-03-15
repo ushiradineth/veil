@@ -46,6 +46,7 @@
     "bench:suite": "bun run src/bench-suite.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.18.0",
     "@toon-format/toon": "^2.1.0",
     "node-html-markdown": "^2.0.0",

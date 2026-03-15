@@ -78,7 +78,7 @@ function parseInitMode(value: unknown): InitSetupMode {
 }
 
 function hasInteractiveTty(): boolean {
-  return Boolean(input.isTTY && output.isTTY);
+  return input.isTTY && output.isTTY;
 }
 
 async function selectInitModeInteractive(defaultMode: InitSetupMode): Promise<InitSetupMode> {
@@ -240,8 +240,8 @@ function executeCommand(command: string): { ok: boolean; detail: string } {
   if (result.error) return { ok: false, detail: String(result.error) };
   if (result.status === 0) return { ok: true, detail: "completed" };
 
-  const stdErr = result.stderr?.trim() ?? "";
-  const stdOut = result.stdout?.trim() ?? "";
+  const stdErr = result.stderr.trim();
+  const stdOut = result.stdout.trim();
   return {
     ok: false,
     detail: stdErr || stdOut || `exit status ${String(result.status ?? -1)}`,
@@ -330,11 +330,11 @@ function nextStepsForMode(mode: InitSetupMode): string[] {
   ];
 }
 
-async function runSetupStepInteractive(
+function runSetupStepInteractive(
   step: InitSetupStep,
   runStepFn: (value: InitSetupStep) => InitSetupStep,
   passthroughOutput: boolean,
-): Promise<InitSetupStep> {
+): InitSetupStep {
   const s = spinner();
   s.start(`${step.label}: $ ${step.command}`);
   const result = passthroughOutput
@@ -371,7 +371,7 @@ async function buildInitSetupResult(args: {
   skillInstallPrompt?: () => Promise<boolean>;
   runStep?: (step: InitSetupStep) => InitSetupStep;
 }): Promise<InitSetupResult> {
-  const interactive = Boolean(args.interactive && hasInteractiveTty() && !args.yes);
+  const interactive = (args.interactive ?? false) && hasInteractiveTty() && !args.yes;
   const selectedMode = args.mode ?? (interactive ? await selectInitModeInteractive("mcp") : "cli");
   const packageManager = args.packageManager ?? inferInitPackageManager();
   const runStepFn = args.runStep ?? runSetupStep;
@@ -401,13 +401,13 @@ async function buildInitSetupResult(args: {
           });
           continue;
         }
-        executedSteps.push(await runSetupStepInteractive(step, runStepFn, true));
+        executedSteps.push(runSetupStepInteractive(step, runStepFn, true));
       }
 
       let mcpSkillStep = steps[0];
       const shouldInstallMcpSkill = await promptMcpSkillInstall();
       if (shouldInstallMcpSkill) {
-        mcpSkillStep = await runSetupStepInteractive(mcpSkillStep, runStepFn, false);
+        mcpSkillStep = runSetupStepInteractive(mcpSkillStep, runStepFn, false);
       } else {
         mcpSkillStep = { ...mcpSkillStep, status: "skipped", ok: true, details: "user skipped" };
       }
@@ -418,7 +418,7 @@ async function buildInitSetupResult(args: {
     }
   } else if (executeInstalls) {
     const cliStep = interactive
-      ? await runSetupStepInteractive(steps[0], runStepFn, false)
+      ? runSetupStepInteractive(steps[0], runStepFn, false)
       : runStepFn(steps[0]);
     executed = true;
 
@@ -429,7 +429,7 @@ async function buildInitSetupResult(args: {
         log.info(
           "The skills installer is interactive. Select targets with space, then press enter.",
         );
-        skillStep = await runSetupStepInteractive(skillStep, runStepFn, false);
+        skillStep = runSetupStepInteractive(skillStep, runStepFn, false);
       } else {
         skillStep = runStepFn(skillStep);
       }
@@ -541,7 +541,7 @@ export function createCli(args: string[] = []): Argv {
         interactive: argv.interactive ?? true,
         yes: argv.yes ?? false,
       });
-      const useInteractiveSummary = Boolean((argv.interactive ?? true) && hasInteractiveTty());
+      const useInteractiveSummary = (argv.interactive ?? true) && hasInteractiveTty();
       if (useInteractiveSummary && !argv.rawOutput) {
         return;
       }

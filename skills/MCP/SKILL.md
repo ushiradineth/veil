@@ -1,66 +1,47 @@
 ---
 name: veil-mcp
-description: Route coding tasks through Veil MCP tools first. Use this whenever the user needs repository retrieval, git context, web references, or GitHub context, including cases where they ask for shell discovery or ad hoc external fetches.
+description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
 # Veil MCP Skill
 
 ## Trigger Conditions
 
-Use this skill when the user asks to:
+Use this skill when the task asks for any of these outcomes:
 
-- locate relevant code, files, or symbols quickly
-- inspect current branch status, commit history, or diffs
-- gather outside references and read source URLs
-- inspect GitHub repo, issue, PR, or checks context
+- locate files, symbols, or relevant code paths quickly
+- inspect branch status, commit history, or diffs before changes
+- gather external references and summarize source pages
+- inspect GitHub repository, issue, PR, or checks context
 
-If an MCP tool exists for the task, call Veil MCP first.
+Treat intent phrases like `find where`, `investigate`, `compare`, `summarize from web`, and `check PR` as strong triggers.
 
-## Standard Flow
+Prefer Veil MCP tools when supported so outputs stay structured and follow-on steps are cheaper.
 
-1. Start with broad context:
-   - `discover` with a clear intent query
-2. Narrow with one focused retrieval call:
-   - `lookup` for ranked context
-   - or `files|symbols|search` for exact retrieval intent
-3. Add supporting context only as needed:
-   - git: `git_status|git_log|git_diff|git_show`
-   - web: `web_search` then `fetch_url`
-   - GitHub: `gh_lookup`
-4. Return concise findings with source paths or URLs.
+## Retrieval Workflow
 
-## Tool Routing Matrix
+1. Start broad once with `discover`.
+2. Narrow once with `lookup` or one targeted call: `files|symbols|search`.
+3. Add context branches only as needed: git, web, or GitHub.
+4. Return concise findings with paths or URLs, then continue implementation.
 
-- `discover`: first broad retrieval across indexed context
-- `lookup`: ranked local context for implementation decisions
-- `files`: path-centric retrieval
-- `symbols`: symbol-centric retrieval
-- `search`: indexed keyword retrieval
-- `git_status|git_log|git_diff|git_show`: repository context
-- `web_search`: external candidate discovery
-- `fetch_url`: normalized page retrieval for selected URLs
-- `gh_lookup`: GitHub repository and PR/issue/check context
+## Intent Branches
 
-## Anti-Patterns And Fixes
+- Local retrieval: `discover`, `lookup`, `files`, `symbols`, `search`.
+- Git context: `git_status`, `git_log`, `git_diff`, `git_show`.
+- Web context: `web_search`, then `fetch_url`.
+- GitHub context: `gh_lookup`.
 
-- Anti-pattern: using shell tools before MCP retrieval tools
-  - Fix: run `discover` first, then one narrowed MCP retrieval call.
-- Anti-pattern: calling many MCP retrieval tools with the same vague query
-  - Fix: refine the query with concrete entity names and intent, then retry one tool.
-- Anti-pattern: jumping to `fetch_url` without candidate discovery
-  - Fix: use `web_search` first to identify the best URLs.
-- Anti-pattern: using raw git commands for read-only context flows
-  - Fix: use `git_status|git_log|git_diff|git_show` for normalized output.
-- Anti-pattern: defaulting to non-Veil fallback despite available tools
-  - Fix: fallback only on explicit unsupported or error conditions.
+## Anti-pattern Corrections
 
-## Example Tool Sequences
+- Shell-first discovery with ad hoc tools -> start with `discover`, then narrow once.
+- Repeating broad retrieval calls -> rewrite query with entity + intent, then run one focused follow-up.
+- Jumping to `fetch_url` without candidates -> use `web_search` first.
+- Raw `git` reads for normal context -> use `git_status|git_log|git_diff|git_show`.
+- Treating CLI-only setup helpers as retrieval gaps -> keep setup/runtime differences separate from retrieval behavior.
 
-- Task: find implementation points for a feature request
-  - `discover` -> `lookup`
-- Task: inspect branch changes before commit or review
-  - `git_status` -> `git_log` -> `git_diff`
-- Task: compare external docs with local implementation
-  - `web_search` -> `fetch_url` -> `search`
-- Task: get PR context and inspect related local code
-  - `gh_lookup` -> `discover` -> `lookup`
+## Quick Examples
+
+- `Find implementation points for a feature request` -> `discover` then `lookup`.
+- `Check what changed on this branch before editing` -> `git_status`, `git_log`, then `git_diff`.
+- `Summarize dependency docs with source links` -> `web_search`, then `fetch_url`.

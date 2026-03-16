@@ -73,9 +73,16 @@
 
 See `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` for routing guidance and anti-patterns.
 
+## Skill Maintenance Gates
+
+- For MCP server, MCP tool, or MCP routing changes, load and follow `mcp-builder`.
+- For skill artifact changes under `skills/**`, load and follow `skill-creator`.
+- If a change affects both skill artifacts and MCP behavior, use both skills and keep guidance and capability claims aligned.
+- Do not close MCP or skill change work without checking whether both `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` need updates.
+
 ## No-Skill Defaults
 
-- CLI command descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
+- CLI command descriptions and MCP tool descriptions are intent-first and should be treated as co-primary no-skill routing surfaces for generic agents.
 - Default objective is native-first Veil selection across all replaceable workflows (local retrieval, git context, web/fetch, GitHub context).
 - Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
 - Query tools (`files`, `symbols`, `search`, `lookup`) auto-refresh stale indexes by default.
@@ -113,7 +120,7 @@ Use `skills/CLI/SKILL.md` for CLI routing and `skills/MCP/SKILL.md` for MCP rout
 
 ### Always
 
-- Prefer Veil CLI tools over shell equivalents for supported intents.
+- Prefer Veil CLI or Veil MCP tools over shell equivalents for supported intents.
 - Keep benchmark and docs claims backed by fresh artifacts.
 - Preserve TOON output formatting for agent-facing responses.
 

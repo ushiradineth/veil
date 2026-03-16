@@ -146,7 +146,7 @@ Or install manually in `Cursor Settings` -> `MCP` -> `New MCP Server` with:
 
 ## Capabilities
 
-Use the same capability surface from either CLI or MCP.
+Use the same retrieval and context capability surface from either CLI or MCP.
 
 | Capability                           | What it does                                                          | CLI command                                              | MCP tool      |
 | ------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------- | ------------- |
@@ -165,9 +165,3 @@ Use the same capability surface from either CLI or MCP.
 | Git show                             | Shows full details for a specific revision.                           | `veil git-show --workspace . --rev HEAD`                 | `git_show`    |
 | GitHub context lookup                | Pulls repository or pull request context via `gh` integration.        | `veil gh-lookup --repo <owner/repo> --kind repo_context` | `gh_lookup`   |
 | Runtime diagnostics                  | Surfaces cache counters and latency diagnostics.                      | `veil diagnostics`                                       | `diagnostics` |
-
-CLI-only setup/runtime helpers:
-
-- `veil init --workspace . --mode mcp|cli`
-- `veil build --workspace .`
-- `veil mcp server`

@@ -5,6 +5,17 @@ import { createRequire } from "node:module";
 import { resolveIndexDir } from "./state-root";
 import type { ChunkRecord, FileRecord, Manifest, SymbolRecord } from "./types";
 
+export const INDEX_DB_CORRUPT_REASON = "index-db-corrupt";
+
+class IndexDbCorruptError extends Error {
+  readonly reason = INDEX_DB_CORRUPT_REASON;
+
+  constructor(path: string) {
+    super(`${INDEX_DB_CORRUPT_REASON}: ${path}`);
+    this.name = "IndexDbCorruptError";
+  }
+}
+
 type SqlJsStatement = {
   bind: (params?: unknown[] | Record<string, unknown>) => void;
   step: () => boolean;
@@ -119,6 +130,14 @@ async function persist(db: SqlJsDatabase, path: string): Promise<void> {
 }
 
 async function loadDb(path: string): Promise<SqlJsDatabase> {
+  return loadDbWithMode(path, false);
+}
+
+async function loadDbRecover(path: string): Promise<SqlJsDatabase> {
+  return loadDbWithMode(path, true);
+}
+
+async function loadDbWithMode(path: string, recoverIfCorrupt: boolean): Promise<SqlJsDatabase> {
   const currentMtime = await fileMtime(path);
   const cached = DB_CACHE.get(path);
   if (cached?.mtimeMs === currentMtime) {
@@ -131,6 +150,7 @@ async function loadDb(path: string): Promise<SqlJsDatabase> {
     try {
       db = new sql.Database(new Uint8Array(await readFile(path)));
     } catch {
+      if (!recoverIfCorrupt) throw new IndexDbCorruptError(path);
       db = new sql.Database();
     }
   } else {
@@ -139,11 +159,36 @@ async function loadDb(path: string): Promise<SqlJsDatabase> {
   try {
     ensureSchema(db);
   } catch {
+    if (!recoverIfCorrupt && existsSync(path)) throw new IndexDbCorruptError(path);
     db = new sql.Database();
     ensureSchema(db);
   }
   DB_CACHE.set(path, { db, mtimeMs: currentMtime });
   return db;
+}
+
+function uniqueTerms(tokens: string[], normalized: string): string[] {
+  const terms = [normalized, ...tokens]
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length >= 2)
+    .slice(0, 20);
+  return [...new Set(terms)];
+}
+
+function escapeLike(value: string): string {
+  return value.replaceAll("'", "''").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+function orLikeConditions(columns: string[], terms: string[]): string {
+  const clauses: string[] = [];
+  for (const term of terms) {
+    const escaped = escapeLike(term);
+    for (const column of columns) {
+      clauses.push(`${column} LIKE '%${escaped}%' ESCAPE '\\'`);
+    }
+  }
+  if (clauses.length === 0) return "1=1";
+  return `(${clauses.join(" OR ")})`;
 }
 
 export function indexDbExists(workspace: string, stateRoot?: string): boolean {
@@ -164,7 +209,7 @@ export async function replaceAllRecords(
   stateRoot?: string,
 ): Promise<void> {
   const path = dbPath(workspace, stateRoot);
-  const db = await loadDb(path);
+  const db = await loadDbRecover(path);
 
   db.run("BEGIN TRANSACTION");
   db.run("DELETE FROM files");
@@ -209,7 +254,7 @@ export async function applyChangedRecords(
   stateRoot?: string,
 ): Promise<void> {
   const path = dbPath(workspace, stateRoot);
-  const db = await loadDb(path);
+  const db = await loadDbRecover(path);
 
   db.run("BEGIN TRANSACTION");
   for (const rel of changedPaths) {
@@ -273,6 +318,92 @@ export async function readAllRecords(
     ),
   );
   return { files, symbols, chunks };
+}
+
+export async function readFileCandidates(
+  workspace: string,
+  options: {
+    normalized: string;
+    tokens: string[];
+    limit: number;
+  },
+  stateRoot?: string,
+): Promise<FileRecord[]> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return [];
+  const db = await loadDb(path);
+  const candidateLimit = Math.max(50, Math.min(2000, options.limit * 16));
+  const terms = uniqueTerms(options.tokens, options.normalized);
+  const where = orLikeConditions(["path", "top_level"], terms);
+  const rows = rowsFromExec<FileRecord>(
+    db.exec(
+      `SELECT path, language, size, hash, top_level FROM files WHERE ${where} ORDER BY path ASC LIMIT ${String(candidateLimit)}`,
+    ),
+  );
+  return rows;
+}
+
+export async function readSymbolCandidates(
+  workspace: string,
+  options: {
+    normalized: string;
+    tokens: string[];
+    limit: number;
+  },
+  stateRoot?: string,
+): Promise<SymbolRecord[]> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return [];
+  const db = await loadDb(path);
+  const candidateLimit = Math.max(100, Math.min(4000, options.limit * 24));
+  const terms = uniqueTerms(options.tokens, options.normalized);
+  const where = orLikeConditions(["name", "path", "kind"], terms);
+  const rows = rowsFromExec<SymbolRecord>(
+    db.exec(
+      `SELECT path, line, kind, name, signature_hint FROM symbols WHERE ${where} ORDER BY path ASC, line ASC, name ASC LIMIT ${String(candidateLimit)}`,
+    ),
+  );
+  return rows;
+}
+
+export async function readChunkCandidates(
+  workspace: string,
+  options: {
+    normalized: string;
+    tokens: string[];
+    limit: number;
+    pathPrefix?: string;
+  },
+  stateRoot?: string,
+): Promise<ChunkRecord[]> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return [];
+  const db = await loadDb(path);
+  const candidateLimit = Math.max(120, Math.min(5000, options.limit * 30));
+  const terms = uniqueTerms(options.tokens, options.normalized);
+  const predicates: string[] = [orLikeConditions(["path", "content"], terms)];
+  if (options.pathPrefix && options.pathPrefix.trim() !== "") {
+    const escapedPrefix = escapeLike(options.pathPrefix.trim().toLowerCase());
+    predicates.push(`path LIKE '${escapedPrefix}%' ESCAPE '\\'`);
+  }
+  const where = predicates.join(" AND ");
+  const rows = rowsFromExec<ChunkRecord>(
+    db.exec(
+      `SELECT id, path, start_line, end_line, content FROM chunks WHERE ${where} ORDER BY path ASC, start_line ASC LIMIT ${String(candidateLimit)}`,
+    ),
+  );
+  return rows;
+}
+
+export async function isIndexDbCorrupt(workspace: string, stateRoot?: string): Promise<boolean> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return false;
+  try {
+    await loadDb(path);
+    return false;
+  } catch (error) {
+    return error instanceof IndexDbCorruptError;
+  }
 }
 
 export async function readCounts(

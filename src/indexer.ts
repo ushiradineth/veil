@@ -12,9 +12,14 @@ import {
   applyChangedRecords,
   countsToManifest,
   getAllFilePaths,
+  INDEX_DB_CORRUPT_REASON,
   indexDbExists,
+  isIndexDbCorrupt,
   readAllRecords,
+  readChunkCandidates,
   readCounts,
+  readFileCandidates,
+  readSymbolCandidates,
   replaceAllRecords,
 } from "./index-db";
 import { rankLookupResults, scoreChunk, scoreFile, scoreSymbol } from "./query";
@@ -239,6 +244,14 @@ function parseQuery(input: string, intent: QueryIntent = "auto"): ParsedQuery {
     intent: resolveIntent(normalized, tokens, intent),
   };
   return cacheParsedQuery(key, parsed);
+}
+
+function queryTerms(parsed: ParsedQuery): string[] {
+  const terms = [parsed.normalized, ...parsed.tokens]
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= 2)
+    .slice(0, 20);
+  return [...new Set(terms)];
 }
 
 function codePathBias(pathLower: string): number {
@@ -560,7 +573,11 @@ export async function buildIndex(
     await replaceAllRecords(workspace, computed, options.state_root);
   } else {
     const prevStatus = await getStatus(workspace, options);
-    if (!prevStatus.exists || !prevStatus.manifest?.git_head) {
+    if (
+      !prevStatus.exists ||
+      !prevStatus.manifest?.git_head ||
+      prevStatus.reasons.includes(INDEX_DB_CORRUPT_REASON)
+    ) {
       const computed = await computeForPaths(
         workspace,
         tracked,
@@ -654,6 +671,7 @@ export async function getStatus(
   }
 
   const reasons: string[] = [];
+  if (await isIndexDbCorrupt(workspace, options.state_root)) reasons.push(INDEX_DB_CORRUPT_REASON);
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");
   if (manifest.git_head !== currentHead) reasons.push("git-head-mismatch");
   if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
@@ -815,13 +833,6 @@ function rankChunks(
     .filter((item): item is ChunkRecord => Boolean(item));
 }
 
-async function queryAll(
-  workspace: string,
-  stateRoot?: string,
-): Promise<{ files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
-  return readAllRecords(workspace, stateRoot);
-}
-
 export async function queryFiles(
   workspace: string,
   q: string,
@@ -839,8 +850,19 @@ export async function queryFiles(
     | null;
   if (cached) return cached;
 
-  const records = await queryAll(workspace, options.state_root);
-  const out = rankFiles(records.files, parsed, Math.min(limit, 200));
+  const out = rankFiles(
+    await readFileCandidates(
+      workspace,
+      {
+        normalized: parsed.normalized,
+        tokens: queryTerms(parsed),
+        limit: Math.min(limit, 200),
+      },
+      options.state_root,
+    ),
+    parsed,
+    Math.min(limit, 200),
+  );
   writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
@@ -864,8 +886,19 @@ export async function querySymbols(
     | null;
   if (cached) return cached;
 
-  const records = await queryAll(workspace, options.state_root);
-  const out = rankSymbols(records.symbols, parsed, Math.min(limit, 200));
+  const out = rankSymbols(
+    await readSymbolCandidates(
+      workspace,
+      {
+        normalized: parsed.normalized,
+        tokens: queryTerms(parsed),
+        limit: Math.min(limit, 200),
+      },
+      options.state_root,
+    ),
+    parsed,
+    Math.min(limit, 200),
+  );
   writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
@@ -897,8 +930,21 @@ export async function queryChunks(
     | null;
   if (cached) return cached;
 
-  const records = await queryAll(workspace, options.state_root);
-  const out = rankChunks(records.chunks, parsed, Math.min(limit, 100), options);
+  const out = rankChunks(
+    await readChunkCandidates(
+      workspace,
+      {
+        normalized: parsed.normalized,
+        tokens: queryTerms(parsed),
+        limit: Math.min(limit, 100),
+        pathPrefix: options.path_prefix,
+      },
+      options.state_root,
+    ),
+    parsed,
+    Math.min(limit, 100),
+    options,
+  );
   writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);

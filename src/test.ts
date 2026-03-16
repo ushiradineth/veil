@@ -38,7 +38,7 @@ import {
   resolveStateRoot,
   relativeStateRoot,
 } from "./state-root";
-import { missingRequiredParsers } from "./symbols-tree-sitter";
+import { getBunPrebuildRecoveryStatus, missingRequiredParsers } from "./symbols-tree-sitter";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { webSearch } from "./web-search";
 
@@ -1197,6 +1197,34 @@ describe("Phase 3: Cache behavior", () => {
     expect(removedFiles.some((file) => file.path === "remove.ts")).toBe(false);
   });
 
+  test("Changed mode tracks renamed files", async () => {
+    const repo = join(TEMP_TEST_DIR, "changed-rename-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "old-name.ts"), "export const renamed = true\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    await buildIndex(repo, "full");
+    await rm(join(repo, "old-name.ts"), { force: true });
+    await writeFile(join(repo, "new-name.ts"), "export const renamed = true\n");
+
+    await buildIndex(repo, "changed");
+
+    const oldMatches = await queryFiles(repo, "old-name.ts", 10);
+    const newMatches = await queryFiles(repo, "new-name.ts", 10);
+    expect(oldMatches.some((file) => file.path === "old-name.ts")).toBe(false);
+    expect(newMatches.some((file) => file.path === "new-name.ts")).toBe(true);
+  });
+
   test("Diagnostics counters increase for build and queries", async () => {
     diagnostics.reset();
     await buildIndex(SMALL_REPO, "full");
@@ -2105,7 +2133,7 @@ describe("Phase 4: Edge cases", () => {
     expect(status.reasons.includes("manifest-invalid-json")).toBe(true);
   });
 
-  test("Corrupted SQLite index does not crash file query", async () => {
+  test("Corrupted SQLite index surfaces deterministic status and query error", async () => {
     const repo = join(TEMP_TEST_DIR, "corrupted-sqlite");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
@@ -2114,8 +2142,16 @@ describe("Phase 4: Edge cases", () => {
     const dbPath = join(repo, ".veil", "index", "index.sqlite");
     await writeFile(dbPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
 
-    const files = await queryFiles(repo, "beta", 10);
-    expect(files.length).toBeGreaterThanOrEqual(0);
+    const status = await getStatus(repo);
+    expect(status.reasons.includes("index-db-corrupt")).toBe(true);
+
+    let caught = "";
+    try {
+      await queryFiles(repo, "beta", 10);
+    } catch (error) {
+      caught = String(error);
+    }
+    expect(caught.includes("index-db-corrupt")).toBe(true);
   });
 
   test("Schema version mismatch reports stale status", async () => {
@@ -2729,6 +2765,23 @@ describe("Profiler utilities", () => {
     const config = await getParserConfig(SMALL_REPO);
     const missing = missingRequiredParsers(new Set(config.enabled));
     expect(missing).toEqual([]);
+  });
+
+  test("Bun prebuild recovery status is explicit", () => {
+    const status = getBunPrebuildRecoveryStatus();
+    expect(typeof status.attempted).toBe("boolean");
+    expect(typeof status.ok).toBe("boolean");
+    expect(
+      [
+        "not-bun",
+        "already-present",
+        "linked",
+        "copied",
+        "missing-candidate",
+        "readonly",
+        "resolution-failed",
+      ].includes(status.reason),
+    ).toBe(true);
   });
 
   test("Bin isMainModule handles non-main paths", () => {

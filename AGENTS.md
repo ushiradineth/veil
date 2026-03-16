@@ -24,6 +24,13 @@
 - For performance or benchmark changes, run at least one fresh suite and update the newest `benchmarks/results/<run-id>/*` artifacts.
 - Keep benchmark tables in `BENCHMARKS.md` aligned with the newest `benchmarks/results/<run-id>/results.json`.
 
+## Skill Quality Gate
+
+- After any feature, command, tool, or workflow change, review `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` before closing the task.
+- If behavior, routing, defaults, anti-patterns, or examples changed, update the affected skill files in the same change.
+- Treat skill updates as a required quality gate, not optional follow-up.
+- If no skill update is needed, explicitly state why in the final task summary.
+
 ## Project Structure
 
 - `src/cli.ts`: primary CLI command surface.

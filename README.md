@@ -150,20 +150,25 @@ If index build fails with `Missing required parser runtimes for enabled built-in
 
 Use the same retrieval and context capability surface from either CLI or MCP.
 
-| Capability                           | What it does                                                          | CLI command                                              | MCP tool      |
-| ------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------- | ------------- |
-| Index status                         | Shows index freshness, manifest health, and stale reasons.            | `veil status --workspace .`                              | `status`      |
-| Incremental index refresh            | Rebuilds index records from changed files only.                       | `veil refresh --workspace . --mode changed`              | `refresh`     |
-| Discover files, symbols, chunks      | Returns a mixed set of high-signal retrieval context in one call.     | `veil discover --workspace . --query "<query>"`          | `discover`    |
-| Intent-aware ranked lookup           | Ranks relevant context with intent-aware scoring for coding tasks.    | `veil lookup --workspace . --query "<query>"`            | `lookup`      |
-| File path retrieval                  | Finds matching file paths for quick navigation.                       | `veil files --workspace . --query "<query>"`             | `files`       |
-| Symbol retrieval                     | Finds functions, classes, types, and methods by name.                 | `veil symbols --workspace . --query "<query>"`           | `symbols`     |
-| Content search                       | Searches indexed code and docs chunks by query.                       | `veil search --workspace . --query "<query>"`            | `search`      |
-| Web search                           | Runs multi-provider web search for external context.                  | `veil web-search --query "<query>"`                      | `web_search`  |
-| URL fetch and markdown normalization | Fetches web content and normalizes output for agent-friendly reading. | `veil fetch-url --url <url> --format markdown`           | `fetch_url`   |
-| Git status                           | Shows branch state, dirty files, and untracked changes.               | `veil git-status --workspace .`                          | `git_status`  |
-| Git log                              | Returns recent commits with metadata for project history checks.      | `veil git-log --workspace . --limit 10`                  | `git_log`     |
-| Git diff                             | Returns working tree or revision-range diffs.                         | `veil git-diff --workspace .`                            | `git_diff`    |
-| Git show                             | Shows full details for a specific revision.                           | `veil git-show --workspace . --rev HEAD`                 | `git_show`    |
-| GitHub context lookup                | Pulls repository or pull request context via `gh` integration.        | `veil gh-lookup --repo <owner/repo> --kind repo_context` | `gh_lookup`   |
-| Runtime diagnostics                  | Surfaces cache counters and latency diagnostics.                      | `veil diagnostics`                                       | `diagnostics` |
+MCP breaking change: canonical tool names are now prefixed with `veil_` and compatibility aliases were removed.
+
+MCP responses are TOON text only and optimized for compact machine parsing. Guidance is included only when confidence is not high/full. Retrieval tools (`discover`, `lookup`, `search`) return compact chunk content by default, and full chunk content is opt-in (`--include-content` / `include_content`).
+
+| Capability                           | What it does                                                          | CLI command                                              | MCP tool           |
+| ------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------- | ------------------ |
+| Index status                         | Shows index freshness, manifest health, and stale reasons.            | `veil status --workspace .`                              | `veil_status`      |
+| Incremental index refresh            | Rebuilds index records from changed files only.                       | `veil refresh --workspace . --mode changed`              | `veil_refresh`     |
+| Discover files, symbols, chunks      | Returns a mixed set of high-signal retrieval context in one call.     | `veil discover --workspace . --query "<query>"`          | `veil_discover`    |
+| Targeted chunk fetch                 | Fetches full content for one chunk id after compact retrieval.        | `veil chunk --workspace . --id <chunk-id>`               | `veil_chunk`       |
+| Intent-aware ranked lookup           | Ranks relevant context with intent-aware scoring for coding tasks.    | `veil lookup --workspace . --query "<query>"`            | `veil_lookup`      |
+| File path retrieval                  | Finds matching file paths for quick navigation.                       | `veil files --workspace . --query "<query>"`             | `veil_files`       |
+| Symbol retrieval                     | Finds functions, classes, types, and methods by name.                 | `veil symbols --workspace . --query "<query>"`           | `veil_symbols`     |
+| Content search                       | Searches indexed code and docs chunks by query.                       | `veil search --workspace . --query "<query>"`            | `veil_search`      |
+| Web search                           | Runs multi-provider web search for external context.                  | `veil web-search --query "<query>"`                      | `veil_web_search`  |
+| URL fetch and markdown normalization | Fetches web content and normalizes output for agent-friendly reading. | `veil fetch-url --url <url> --format markdown`           | `veil_fetch_url`   |
+| Git status                           | Shows branch state, dirty files, and untracked changes.               | `veil git-status --workspace .`                          | `veil_git_status`  |
+| Git log                              | Returns recent commits with metadata for project history checks.      | `veil git-log --workspace . --limit 10`                  | `veil_git_log`     |
+| Git diff                             | Returns working tree or revision-range diffs.                         | `veil git-diff --workspace .`                            | `veil_git_diff`    |
+| Git show                             | Shows full details for a specific revision.                           | `veil git-show --workspace . --rev HEAD`                 | `veil_git_show`    |
+| GitHub context lookup                | Pulls repository or pull request context via `gh` integration.        | `veil gh-lookup --repo <owner/repo> --kind repo_context` | `veil_gh_lookup`   |
+| Runtime diagnostics                  | Surfaces cache counters and latency diagnostics.                      | `veil diagnostics`                                       | `veil_diagnostics` |

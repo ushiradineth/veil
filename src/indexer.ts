@@ -16,6 +16,7 @@ import {
   indexDbExists,
   isIndexDbCorrupt,
   readAllRecords,
+  readChunkById,
   readChunkCandidates,
   readCounts,
   readFileCandidates,
@@ -48,6 +49,7 @@ const MAX_QUERY_CACHE_SIZE = 100;
 const STATUS_CACHE_TTL_MS = 1500;
 const MAX_STATUS_CACHE_SIZE = 64;
 const MAX_QUERY_PARSE_CACHE = 256;
+const DEFAULT_CHUNK_PREVIEW_CHARS = 240;
 
 type ParsedQuery = {
   normalized: string;
@@ -61,6 +63,8 @@ type QueryChunksOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  include_content?: boolean;
+  content_max_chars?: number;
   state_root?: string;
 };
 
@@ -72,6 +76,8 @@ type DiscoverOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  include_content?: boolean;
+  content_max_chars?: number;
   state_root?: string;
 };
 
@@ -833,6 +839,60 @@ function rankChunks(
     .filter((item): item is ChunkRecord => Boolean(item));
 }
 
+function normalizeContentMaxChars(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_CHUNK_PREVIEW_CHARS;
+  }
+  return Math.max(40, Math.min(20000, Math.floor(value)));
+}
+
+function projectChunk(
+  chunk: ChunkRecord,
+  includeContent: boolean,
+  contentMaxChars?: number,
+): ChunkRecord {
+  const fullLength = chunk.content.length;
+  if (includeContent) {
+    if (
+      typeof contentMaxChars === "number" &&
+      Number.isFinite(contentMaxChars) &&
+      contentMaxChars > 0
+    ) {
+      const limit = normalizeContentMaxChars(contentMaxChars);
+      if (fullLength > limit) {
+        return {
+          ...chunk,
+          content: chunk.content.slice(0, limit),
+          content_truncated: true,
+          content_chars: fullLength,
+        };
+      }
+    }
+    return {
+      ...chunk,
+      content_truncated: false,
+      content_chars: fullLength,
+    };
+  }
+
+  const limit = normalizeContentMaxChars(contentMaxChars);
+  const truncated = fullLength > limit;
+  return {
+    ...chunk,
+    content: truncated ? chunk.content.slice(0, limit) : chunk.content,
+    content_truncated: truncated,
+    content_chars: fullLength,
+  };
+}
+
+function projectChunks(
+  chunks: ChunkRecord[],
+  includeContent: boolean,
+  contentMaxChars?: number,
+): ChunkRecord[] {
+  return chunks.map((chunk) => projectChunk(chunk, includeContent, contentMaxChars));
+}
+
 export async function queryFiles(
   workspace: string,
   q: string,
@@ -922,6 +982,8 @@ export async function queryChunks(
     parsed.normalized,
     String(limit),
     String(options.prefer_code ?? ""),
+    String(options.include_content ?? false),
+    String(options.content_max_chars ?? ""),
     options.path_prefix ?? "",
     options.language ?? "",
   ].join("\u0000");
@@ -930,7 +992,7 @@ export async function queryChunks(
     | null;
   if (cached) return cached;
 
-  const out = rankChunks(
+  const ranked = rankChunks(
     await readChunkCandidates(
       workspace,
       {
@@ -945,6 +1007,7 @@ export async function queryChunks(
     Math.min(limit, 100),
     options,
   );
+  const out = projectChunks(ranked, options.include_content ?? false, options.content_max_chars);
   writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
@@ -976,6 +1039,8 @@ export async function discoverIndex(
     path_prefix: options.path_prefix,
     language: options.language,
     intent: parsed.intent,
+    include_content: options.include_content,
+    content_max_chars: options.content_max_chars,
     state_root: options.state_root,
   });
   return { intent: parsed.intent, files, symbols, chunks };
@@ -1007,6 +1072,7 @@ export async function lookupIndex(
     path_prefix: options.path_prefix,
     language: options.language,
     intent: parsed.intent,
+    include_content: true,
     state_root: options.state_root,
   });
 
@@ -1031,6 +1097,7 @@ export async function lookupIndex(
       path_prefix: options.path_prefix,
       language: options.language,
       intent: "code",
+      include_content: true,
       state_root: options.state_root,
     });
     if (chunks.length > 0) {
@@ -1048,6 +1115,16 @@ export async function lookupIndex(
     }
   }
 
+  const compactChunks = projectChunks(
+    chunks,
+    options.include_content ?? false,
+    options.content_max_chars,
+  );
+  const chunkById = new Map<string, ChunkRecord>();
+  for (const chunk of chunks) {
+    chunkById.set(chunk.id, chunk);
+  }
+
   const response: LookupResponse = {
     intent: parsed.intent,
     files: rankLookupResults(files, (item) => scoreFile(item.path, filesParsed), {
@@ -1058,10 +1135,14 @@ export async function lookupIndex(
       label: "fallback-symbol-match",
       detail: "Symbol returned by fallback retrieval path",
     }),
-    chunks: rankLookupResults(chunks, (item) => scoreChunk(item, chunksParsed), {
-      label: "fallback-chunk-match",
-      detail: "Chunk returned by fallback retrieval path",
-    }),
+    chunks: rankLookupResults(
+      compactChunks,
+      (item) => scoreChunk(chunkById.get(item.id) ?? item, chunksParsed),
+      {
+        label: "fallback-chunk-match",
+        detail: "Chunk returned by fallback retrieval path",
+      },
+    ),
     fallback: {
       used: fallbackStage !== "none",
       stage: fallbackStage,
@@ -1072,6 +1153,16 @@ export async function lookupIndex(
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return response;
+}
+
+export async function queryChunkById(
+  workspace: string,
+  id: string,
+  options: { state_root?: string; include_content?: boolean; content_max_chars?: number } = {},
+): Promise<ChunkRecord | null> {
+  const chunk = await readChunkById(workspace, id, options.state_root);
+  if (!chunk) return null;
+  return projectChunk(chunk, options.include_content ?? true, options.content_max_chars);
 }
 
 export const __internal = {

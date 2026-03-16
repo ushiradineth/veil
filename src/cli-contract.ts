@@ -39,6 +39,12 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
     examples: ['veil discover --workspace . --query "find build logic"'],
   },
   {
+    name: "chunk",
+    description: CLI_COMMAND_DESCRIPTIONS.chunk,
+    usage: "veil chunk --workspace <path> --id <chunk-id>",
+    examples: ['veil chunk --workspace . --id "src/indexer.ts:901-1020"'],
+  },
+  {
     name: "lookup",
     description: CLI_COMMAND_DESCRIPTIONS.lookup,
     usage: "veil lookup --workspace <path> --query <text>",

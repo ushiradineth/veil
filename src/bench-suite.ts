@@ -641,39 +641,39 @@ function veilCliArgsForScenario(scenario: Scenario): string[] | null {
 function veilMcpCallForScenario(workspace: string, scenario: Scenario): McpToolCall | null {
   switch (scenario.kind) {
     case "status":
-      return { toolName: "status", args: { workspace } };
+      return { toolName: "veil_status", args: { workspace } };
     case "refresh":
-      return { toolName: "refresh", args: { workspace, mode: "changed" } };
+      return { toolName: "veil_refresh", args: { workspace, mode: "changed" } };
     case "files":
-      return { toolName: "files", args: { workspace, query: scenario.query, limit: 20 } };
+      return { toolName: "veil_files", args: { workspace, query: scenario.query, limit: 20 } };
     case "symbols":
-      return { toolName: "symbols", args: { workspace, query: scenario.query, limit: 20 } };
+      return { toolName: "veil_symbols", args: { workspace, query: scenario.query, limit: 20 } };
     case "search":
       return {
-        toolName: "search",
+        toolName: "veil_search",
         args: { workspace, query: scenario.query, limit: 10, prefer_code: true },
       };
     case "lookup":
-      return { toolName: "lookup", args: { workspace, query: scenario.query } };
+      return { toolName: "veil_lookup", args: { workspace, query: scenario.query } };
     case "discover":
-      return { toolName: "discover", args: { workspace, query: scenario.query } };
+      return { toolName: "veil_discover", args: { workspace, query: scenario.query } };
     case "web_search":
-      return { toolName: "web_search", args: { workspace, query: scenario.query, limit: 5 } };
+      return { toolName: "veil_web_search", args: { workspace, query: scenario.query, limit: 5 } };
     case "fetch_url":
-      return { toolName: "fetch_url", args: { url: scenario.query, format: "markdown" } };
+      return { toolName: "veil_fetch_url", args: { url: scenario.query, format: "markdown" } };
     case "diagnostics":
-      return { toolName: "diagnostics", args: {} };
+      return { toolName: "veil_diagnostics", args: {} };
     case "git_status":
-      return { toolName: "git_status", args: { workspace } };
+      return { toolName: "veil_git_status", args: { workspace } };
     case "git_log":
-      return { toolName: "git_log", args: { workspace, limit: 10 } };
+      return { toolName: "veil_git_log", args: { workspace, limit: 10 } };
     case "git_diff":
-      return { toolName: "git_diff", args: { workspace } };
+      return { toolName: "veil_git_diff", args: { workspace } };
     case "git_show":
-      return { toolName: "git_show", args: { workspace, rev: "HEAD" } };
+      return { toolName: "veil_git_show", args: { workspace, rev: "HEAD" } };
     case "gh_lookup":
       return {
-        toolName: "gh_lookup",
+        toolName: "veil_gh_lookup",
         args: { workspace, repo: scenario.query, kind: "repo_context", limit: 1 },
       };
     default:

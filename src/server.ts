@@ -1,11 +1,14 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { withAgentGuidance } from "./agent-guidance";
+import { withAgentGuidanceCompact } from "./agent-guidance";
 import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
@@ -16,6 +19,7 @@ import {
   getStatus,
   initWorkspaceIndex,
   lookupIndex,
+  queryChunkById,
   queryChunks,
   queryFiles,
   querySymbols,
@@ -25,25 +29,115 @@ import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { VEIL_VERSION } from "./version";
 import { webSearch } from "./web-search";
 
-function asText(data: unknown): {
-  content: { type: "text"; text: string }[];
-  structuredContent: Record<string, unknown>;
-} {
-  const structuredContent =
-    data && typeof data === "object" && !Array.isArray(data)
-      ? (data as Record<string, unknown>)
-      : { value: data };
-  return {
-    content: [{ type: "text", text: toToon(data) }],
-    structuredContent,
-  };
-}
+const LOCAL_READ_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+const INDEX_WRITE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+const EXTERNAL_READ_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
+const DIAGNOSTICS_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+};
 
 type QueryInitArgs = {
   workspace?: string;
   state_root?: string;
   refresh_if_stale?: boolean;
 };
+
+type ToolDefinition = {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, z.ZodTypeAny>;
+  annotations: ToolAnnotations;
+  handler: (args: Record<string, unknown>) => unknown;
+};
+
+type HttpServerOptions = {
+  host?: string;
+  port?: number;
+  path?: string;
+  allow_remote?: boolean;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function successResult(value: unknown): CallToolResult {
+  return {
+    content: [{ type: "text", text: toToon(value) }],
+    isError: false,
+  };
+}
+
+function errorResult(message: string, details?: unknown): CallToolResult {
+  const detailsRecord = asRecord(details);
+  const errorDetails = asRecord(detailsRecord.error);
+  const code = asString(errorDetails.code) ?? "tool-error";
+  const payload: Record<string, unknown> = {
+    ok: false,
+    error: { code, message },
+  };
+  return {
+    content: [{ type: "text", text: toToon(payload) }],
+    isError: true,
+  };
+}
+
+function compactStatusSummary(value: unknown): Record<string, unknown> {
+  const status = asRecord(value);
+  return {
+    exists: status.exists === true,
+    stale: status.stale === true,
+    reasons: Array.isArray(status.reasons) ? status.reasons : [],
+  };
+}
+
+function responseErrorMessage(value: unknown): string | null {
+  const payload = asRecord(value);
+  const meta = asRecord(payload.meta);
+  if (meta.ok === false) {
+    const error = asRecord(payload.error);
+    const message = asString(error.message);
+    return message?.trim() ? message : "Tool execution failed";
+  }
+  return null;
+}
 
 function resolveWorkspace(workspace?: string, stateRoot?: string): string {
   const ws = workspace ?? process.cwd();
@@ -60,49 +154,47 @@ async function initQueryWorkspace(args: QueryInitArgs): Promise<string> {
   return ws;
 }
 
-const server = new McpServer({
-  name: "veil",
-  version: VEIL_VERSION,
-});
-
-server.registerTool(
-  "status",
+const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   {
-    description: TOOL_DESCRIPTIONS.status,
+    name: "veil_status",
+    title: "Veil Index Status",
+    description: TOOL_DESCRIPTIONS.veil_status,
     inputSchema: {
       workspace: z.string().optional(),
       state_root: z.string().optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const status = await getStatus(ws, { state_root: stateRoot });
+      return withAgentGuidanceCompact("status", status);
+    },
   },
-  async ({ workspace, state_root }) => {
-    const ws = resolveWorkspace(workspace, state_root);
-    const status = await getStatus(ws, { state_root });
-    return asText(withAgentGuidance("status", status));
-  },
-);
-
-server.registerTool(
-  "refresh",
   {
-    description: TOOL_DESCRIPTIONS.refresh,
+    name: "veil_refresh",
+    title: "Veil Refresh Index",
+    description: TOOL_DESCRIPTIONS.veil_refresh,
     inputSchema: {
       workspace: z.string().optional(),
       mode: z.enum(["full", "changed"]).optional(),
       state_root: z.string().optional(),
     },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const mode = args.mode === "full" ? "full" : "changed";
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const manifest = await buildIndex(ws, mode, { state_root: stateRoot });
+      return withAgentGuidanceCompact("refresh", { ok: true, mode, manifest });
+    },
   },
-  async ({ workspace, mode, state_root }) => {
-    const ws = resolveWorkspace(workspace, state_root);
-    const selectedMode = mode ?? "changed";
-    const manifest = await buildIndex(ws, selectedMode, { state_root });
-    return asText(withAgentGuidance("refresh", { ok: true, mode: selectedMode, manifest }));
-  },
-);
-
-server.registerTool(
-  "files",
   {
-    description: TOOL_DESCRIPTIONS.files,
+    name: "veil_files",
+    title: "Veil Find Files",
+    description: TOOL_DESCRIPTIONS.veil_files,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -110,18 +202,26 @@ server.registerTool(
       refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const refreshIfStale = asBoolean(args.refresh_if_stale);
+      const limit = asNumber(args.limit);
+      const ws = await initQueryWorkspace({
+        workspace,
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await queryFiles(ws, query, limit ?? 20, { state_root: stateRoot });
+      return withAgentGuidanceCompact("files", { items }, { query });
+    },
   },
-  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await queryFiles(ws, query, limit ?? 20, { state_root });
-    return asText(withAgentGuidance("files", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "symbols",
   {
-    description: TOOL_DESCRIPTIONS.symbols,
+    name: "veil_symbols",
+    title: "Veil Find Symbols",
+    description: TOOL_DESCRIPTIONS.veil_symbols,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -129,22 +229,32 @@ server.registerTool(
       refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const refreshIfStale = asBoolean(args.refresh_if_stale);
+      const limit = asNumber(args.limit);
+      const ws = await initQueryWorkspace({
+        workspace,
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await querySymbols(ws, query, limit ?? 20, { state_root: stateRoot });
+      return withAgentGuidanceCompact("symbols", { items }, { query });
+    },
   },
-  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await querySymbols(ws, query, limit ?? 20, { state_root });
-    return asText(withAgentGuidance("symbols", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "search",
   {
-    description: TOOL_DESCRIPTIONS.search,
+    name: "veil_search",
+    title: "Veil Search Chunks",
+    description: TOOL_DESCRIPTIONS.veil_search,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
       limit: z.number().int().positive().max(100).optional(),
+      include_content: z.boolean().optional(),
+      content_max_chars: z.number().int().positive().max(20000).optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
       language: z.string().optional(),
@@ -152,117 +262,44 @@ server.registerTool(
       refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
-  },
-  async ({
-    workspace,
-    query,
-    limit,
-    prefer_code,
-    path_prefix,
-    language,
-    intent,
-    refresh_if_stale,
-    state_root,
-  }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await queryChunks(ws, query, limit ?? 10, {
-      prefer_code,
-      path_prefix,
-      language,
-      intent,
-      state_root,
-    });
-    return asText(withAgentGuidance("search", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "find_file",
-  {
-    description: TOOL_DESCRIPTIONS.find_file,
-    inputSchema: {
-      workspace: z.string().optional(),
-      query: z.string(),
-      limit: z.number().int().positive().max(200).optional(),
-      refresh_if_stale: z.boolean().optional(),
-      state_root: z.string().optional(),
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const refreshIfStale = asBoolean(args.refresh_if_stale);
+      const ws = await initQueryWorkspace({
+        workspace,
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const items = await queryChunks(ws, query, asNumber(args.limit) ?? 10, {
+        include_content: asBoolean(args.include_content),
+        content_max_chars: asNumber(args.content_max_chars),
+        prefer_code: asBoolean(args.prefer_code),
+        path_prefix: asString(args.path_prefix),
+        language: asString(args.language),
+        intent:
+          args.intent === "code" || args.intent === "docs" || args.intent === "symbols"
+            ? args.intent
+            : "auto",
+        state_root: stateRoot,
+      });
+      return withAgentGuidanceCompact("search", { items }, { query });
     },
   },
-  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await queryFiles(ws, query, limit ?? 20, { state_root });
-    return asText(withAgentGuidance("find_file", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "find_symbol",
   {
-    description: TOOL_DESCRIPTIONS.find_symbol,
-    inputSchema: {
-      workspace: z.string().optional(),
-      query: z.string(),
-      limit: z.number().int().positive().max(200).optional(),
-      refresh_if_stale: z.boolean().optional(),
-      state_root: z.string().optional(),
-    },
-  },
-  async ({ workspace, query, limit, refresh_if_stale, state_root }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await querySymbols(ws, query, limit ?? 20, { state_root });
-    return asText(withAgentGuidance("find_symbol", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "search_for_pattern",
-  {
-    description: TOOL_DESCRIPTIONS.search_for_pattern,
-    inputSchema: {
-      workspace: z.string().optional(),
-      query: z.string(),
-      limit: z.number().int().positive().max(100).optional(),
-      prefer_code: z.boolean().optional(),
-      path_prefix: z.string().optional(),
-      language: z.string().optional(),
-      intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
-      refresh_if_stale: z.boolean().optional(),
-      state_root: z.string().optional(),
-    },
-  },
-  async ({
-    workspace,
-    query,
-    limit,
-    prefer_code,
-    path_prefix,
-    language,
-    intent,
-    refresh_if_stale,
-    state_root,
-  }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const items = await queryChunks(ws, query, limit ?? 10, {
-      prefer_code,
-      path_prefix,
-      language,
-      intent,
-      state_root,
-    });
-    return asText(withAgentGuidance("search_for_pattern", { items }, { query }));
-  },
-);
-
-server.registerTool(
-  "lookup",
-  {
-    description: TOOL_DESCRIPTIONS.lookup,
+    name: "veil_lookup",
+    title: "Veil Lookup Context",
+    description: TOOL_DESCRIPTIONS.veil_lookup,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
       files_limit: z.number().int().positive().max(200).optional(),
       symbols_limit: z.number().int().positive().max(200).optional(),
       search_limit: z.number().int().positive().max(100).optional(),
+      include_content: z.boolean().optional(),
+      content_max_chars: z.number().int().positive().max(20000).optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
       language: z.string().optional(),
@@ -270,45 +307,47 @@ server.registerTool(
       refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const refreshIfStale = asBoolean(args.refresh_if_stale);
+      const ws = await initQueryWorkspace({
+        workspace,
+        state_root: stateRoot,
+        refresh_if_stale: refreshIfStale,
+      });
+      const result = await lookupIndex(ws, query, {
+        files_limit: asNumber(args.files_limit),
+        symbols_limit: asNumber(args.symbols_limit),
+        search_limit: asNumber(args.search_limit),
+        include_content: asBoolean(args.include_content),
+        content_max_chars: asNumber(args.content_max_chars),
+        prefer_code: asBoolean(args.prefer_code),
+        path_prefix: asString(args.path_prefix),
+        language: asString(args.language),
+        intent:
+          args.intent === "code" || args.intent === "docs" || args.intent === "symbols"
+            ? args.intent
+            : "auto",
+        state_root: stateRoot,
+      });
+      return withAgentGuidanceCompact("lookup", result, { query });
+    },
   },
-  async ({
-    workspace,
-    query,
-    files_limit,
-    symbols_limit,
-    search_limit,
-    prefer_code,
-    path_prefix,
-    language,
-    intent,
-    refresh_if_stale,
-    state_root,
-  }) => {
-    const ws = await initQueryWorkspace({ workspace, state_root, refresh_if_stale });
-    const result = await lookupIndex(ws, query, {
-      files_limit,
-      symbols_limit,
-      search_limit,
-      prefer_code,
-      path_prefix,
-      language,
-      intent,
-      state_root,
-    });
-    return asText(withAgentGuidance("lookup", result, { query }));
-  },
-);
-
-server.registerTool(
-  "discover",
   {
-    description: TOOL_DESCRIPTIONS.discover,
+    name: "veil_discover",
+    title: "Veil Discover Context",
+    description: TOOL_DESCRIPTIONS.veil_discover,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
       files_limit: z.number().int().positive().max(200).optional(),
       symbols_limit: z.number().int().positive().max(200).optional(),
       search_limit: z.number().int().positive().max(100).optional(),
+      include_content: z.boolean().optional(),
+      content_max_chars: z.number().int().positive().max(20000).optional(),
       refresh_if_stale: z.boolean().optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
@@ -316,56 +355,76 @@ server.registerTool(
       intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
       state_root: z.string().optional(),
     },
-  },
-  async ({
-    workspace,
-    query,
-    files_limit,
-    symbols_limit,
-    search_limit,
-    refresh_if_stale,
-    prefer_code,
-    path_prefix,
-    language,
-    intent,
-    state_root,
-  }) => {
-    const ws = resolveWorkspace(workspace, state_root);
-    const initResult = await initWorkspaceIndex(ws, {
-      state_root,
-      refresh_if_stale: refresh_if_stale ?? true,
-    });
-    const discovered = await discoverIndex(ws, query, {
-      files_limit,
-      symbols_limit,
-      search_limit,
-      prefer_code,
-      path_prefix,
-      language,
-      intent,
-      state_root,
-    });
-
-    return asText(
-      withAgentGuidance(
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const initResult = await initWorkspaceIndex(ws, {
+        state_root: stateRoot,
+        refresh_if_stale: asBoolean(args.refresh_if_stale) ?? true,
+      });
+      const discovered = await discoverIndex(ws, query, {
+        files_limit: asNumber(args.files_limit),
+        symbols_limit: asNumber(args.symbols_limit),
+        search_limit: asNumber(args.search_limit),
+        include_content: asBoolean(args.include_content),
+        content_max_chars: asNumber(args.content_max_chars),
+        prefer_code: asBoolean(args.prefer_code),
+        path_prefix: asString(args.path_prefix),
+        language: asString(args.language),
+        intent:
+          args.intent === "code" || args.intent === "docs" || args.intent === "symbols"
+            ? args.intent
+            : "auto",
+        state_root: stateRoot,
+      });
+      return withAgentGuidanceCompact(
         "discover",
         {
-          status: initResult.status_after,
+          status: compactStatusSummary(initResult.status_after),
           intent: discovered.intent,
           files: discovered.files,
           symbols: discovered.symbols,
           chunks: discovered.chunks,
         },
         { query },
-      ),
-    );
+      );
+    },
   },
-);
-
-server.registerTool(
-  "web_search",
   {
-    description: TOOL_DESCRIPTIONS.web_search,
+    name: "veil_chunk",
+    title: "Veil Fetch Chunk",
+    description: TOOL_DESCRIPTIONS.veil_chunk,
+    inputSchema: {
+      workspace: z.string().optional(),
+      id: z.string(),
+      content_max_chars: z.number().int().positive().max(20000).optional(),
+      state_root: z.string().optional(),
+    },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = await initQueryWorkspace({
+        workspace,
+        state_root: stateRoot,
+        refresh_if_stale: true,
+      });
+      const id = asString(args.id) ?? "";
+      const item = await queryChunkById(ws, id, {
+        state_root: stateRoot,
+        include_content: true,
+        content_max_chars: asNumber(args.content_max_chars),
+      });
+      return withAgentGuidanceCompact("chunk", { item }, { query: id });
+    },
+  },
+  {
+    name: "veil_web_search",
+    title: "Veil Web Search",
+    description: TOOL_DESCRIPTIONS.veil_web_search,
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
@@ -373,21 +432,26 @@ server.registerTool(
       timeout_ms: z.number().int().positive().max(15000).optional(),
       debug: z.boolean().optional(),
     },
+    annotations: EXTERNAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const query = asString(args.query) ?? "";
+      const workspace = asString(args.workspace) ?? process.cwd();
+      return withAgentGuidanceCompact(
+        "web_search",
+        await webSearch(workspace, {
+          query,
+          limit: asNumber(args.limit),
+          timeout_ms: asNumber(args.timeout_ms),
+          debug: asBoolean(args.debug),
+        }),
+        { query },
+      );
+    },
   },
-  async ({ workspace, query, limit, timeout_ms, debug }) => {
-    const ws = workspace ?? process.cwd();
-    return asText(
-      withAgentGuidance("web_search", await webSearch(ws, { query, limit, timeout_ms, debug }), {
-        query,
-      }),
-    );
-  },
-);
-
-server.registerTool(
-  "fetch_url",
   {
-    description: TOOL_DESCRIPTIONS.fetch_url,
+    name: "veil_fetch_url",
+    title: "Veil Fetch URL",
+    description: TOOL_DESCRIPTIONS.veil_fetch_url,
     inputSchema: {
       url: z.string(),
       format: z.enum(["markdown", "text", "html"]).optional(),
@@ -395,39 +459,46 @@ server.registerTool(
       max_bytes: z.number().int().positive().max(2000000).optional(),
       allow_private_network: z.boolean().optional(),
     },
-  },
-  async ({ url, format, timeout_ms, max_bytes, allow_private_network }) => {
-    return asText(
-      withAgentGuidance(
+    annotations: EXTERNAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const url = asString(args.url) ?? "";
+      return withAgentGuidanceCompact(
         "fetch_url",
-        await fetchUrl({ url, format, timeout_ms, max_bytes, allow_private_network }),
-        {
-          query: url,
-        },
-      ),
-    );
+        await fetchUrl({
+          url,
+          format:
+            args.format === "text" || args.format === "html" || args.format === "markdown"
+              ? args.format
+              : undefined,
+          timeout_ms: asNumber(args.timeout_ms),
+          max_bytes: asNumber(args.max_bytes),
+          allow_private_network: asBoolean(args.allow_private_network),
+        }),
+        { query: url },
+      );
+    },
   },
-);
-
-server.registerTool(
-  "git_status",
   {
-    description: TOOL_DESCRIPTIONS.git_status,
+    name: "veil_git_status",
+    title: "Veil Git Status",
+    description: TOOL_DESCRIPTIONS.veil_git_status,
     inputSchema: {
       workspace: z.string().optional(),
       timeout_ms: z.number().int().positive().max(10000).optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: (args) =>
+      withAgentGuidanceCompact(
+        "git_status",
+        gitStatus(asString(args.workspace) ?? process.cwd(), {
+          timeout_ms: asNumber(args.timeout_ms),
+        }),
+      ),
   },
-  ({ workspace, timeout_ms }) => {
-    const ws = workspace ?? process.cwd();
-    return asText(withAgentGuidance("git_status", gitStatus(ws, { timeout_ms })));
-  },
-);
-
-server.registerTool(
-  "git_log",
   {
-    description: TOOL_DESCRIPTIONS.git_log,
+    name: "veil_git_log",
+    title: "Veil Git Log",
+    description: TOOL_DESCRIPTIONS.veil_git_log,
     inputSchema: {
       workspace: z.string().optional(),
       limit: z.number().int().positive().max(200).optional(),
@@ -436,19 +507,23 @@ server.registerTool(
       grep: z.string().optional(),
       timeout_ms: z.number().int().positive().max(12000).optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: (args) =>
+      withAgentGuidanceCompact(
+        "git_log",
+        gitLog(asString(args.workspace) ?? process.cwd(), {
+          limit: asNumber(args.limit),
+          since: asString(args.since),
+          author: asString(args.author),
+          grep: asString(args.grep),
+          timeout_ms: asNumber(args.timeout_ms),
+        }),
+      ),
   },
-  ({ workspace, limit, since, author, grep, timeout_ms }) => {
-    const ws = workspace ?? process.cwd();
-    return asText(
-      withAgentGuidance("git_log", gitLog(ws, { limit, since, author, grep, timeout_ms })),
-    );
-  },
-);
-
-server.registerTool(
-  "git_diff",
   {
-    description: TOOL_DESCRIPTIONS.git_diff,
+    name: "veil_git_diff",
+    title: "Veil Git Diff",
+    description: TOOL_DESCRIPTIONS.veil_git_diff,
     inputSchema: {
       workspace: z.string().optional(),
       staged: z.boolean().optional(),
@@ -459,22 +534,25 @@ server.registerTool(
       timeout_ms: z.number().int().positive().max(10000).optional(),
       max_bytes: z.number().int().positive().max(500000).optional(),
     },
-  },
-  ({ workspace, staged, path, base, head, name_only, timeout_ms, max_bytes }) => {
-    const ws = workspace ?? process.cwd();
-    return asText(
-      withAgentGuidance(
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: (args) =>
+      withAgentGuidanceCompact(
         "git_diff",
-        gitDiff(ws, { staged, path, base, head, name_only, timeout_ms, max_bytes }),
+        gitDiff(asString(args.workspace) ?? process.cwd(), {
+          staged: asBoolean(args.staged),
+          path: asString(args.path),
+          base: asString(args.base),
+          head: asString(args.head),
+          name_only: asBoolean(args.name_only),
+          timeout_ms: asNumber(args.timeout_ms),
+          max_bytes: asNumber(args.max_bytes),
+        }),
       ),
-    );
   },
-);
-
-server.registerTool(
-  "git_show",
   {
-    description: TOOL_DESCRIPTIONS.git_show,
+    name: "veil_git_show",
+    title: "Veil Git Show",
+    description: TOOL_DESCRIPTIONS.veil_git_show,
     inputSchema: {
       workspace: z.string().optional(),
       rev: z.string(),
@@ -483,19 +561,23 @@ server.registerTool(
       timeout_ms: z.number().int().positive().max(12000).optional(),
       max_bytes: z.number().int().positive().max(500000).optional(),
     },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: (args) =>
+      withAgentGuidanceCompact(
+        "git_show",
+        gitShow(asString(args.workspace) ?? process.cwd(), {
+          rev: asString(args.rev) ?? "",
+          path: asString(args.path),
+          patch: asBoolean(args.patch),
+          timeout_ms: asNumber(args.timeout_ms),
+          max_bytes: asNumber(args.max_bytes),
+        }),
+      ),
   },
-  ({ workspace, rev, path, patch, timeout_ms, max_bytes }) => {
-    const ws = workspace ?? process.cwd();
-    return asText(
-      withAgentGuidance("git_show", gitShow(ws, { rev, path, patch, timeout_ms, max_bytes })),
-    );
-  },
-);
-
-server.registerTool(
-  "gh_lookup",
   {
-    description: TOOL_DESCRIPTIONS.gh_lookup,
+    name: "veil_gh_lookup",
+    title: "Veil GitHub Lookup",
+    description: TOOL_DESCRIPTIONS.veil_gh_lookup,
     inputSchema: {
       workspace: z.string().optional(),
       repo: z.string(),
@@ -506,44 +588,256 @@ server.registerTool(
       temp_root: z.string().optional(),
       state_root: z.string().optional(),
     },
-  },
-  async ({ workspace, repo, kind, query, limit, timeout_ms, temp_root, state_root }) => {
-    const ws = resolveWorkspace(workspace, state_root);
-    return asText(
-      withAgentGuidance(
+    annotations: EXTERNAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const repo = asString(args.repo) ?? "";
+      const kind =
+        args.kind === "issues" || args.kind === "prs" || args.kind === "checks"
+          ? args.kind
+          : "repo_context";
+      const query = asString(args.query);
+      return withAgentGuidanceCompact(
         "gh_lookup",
-        await ghLookup(ws, { repo, kind, query, limit, timeout_ms, temp_root, state_root }),
+        await ghLookup(ws, {
+          repo,
+          kind,
+          query,
+          limit: asNumber(args.limit),
+          timeout_ms: asNumber(args.timeout_ms),
+          temp_root: asString(args.temp_root),
+          state_root: stateRoot,
+        }),
         { query: query ?? repo },
-      ),
-    );
+      );
+    },
   },
-);
-
-server.registerTool(
-  "diagnostics",
   {
-    description: TOOL_DESCRIPTIONS.diagnostics,
+    name: "veil_diagnostics",
+    title: "Veil Diagnostics",
+    description: TOOL_DESCRIPTIONS.veil_diagnostics,
     inputSchema: {
       reset: z.boolean().optional(),
     },
+    annotations: DIAGNOSTICS_ANNOTATIONS,
+    handler: (args) => {
+      const data = diagnostics.getDiagnostics();
+      if (asBoolean(args.reset)) {
+        diagnostics.reset();
+      }
+      return withAgentGuidanceCompact("diagnostics", data);
+    },
   },
-  ({ reset }) => {
-    const data = diagnostics.getDiagnostics();
-    if (reset) {
-      diagnostics.reset();
+];
+
+async function executeTool(
+  definition: ToolDefinition,
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  try {
+    const value = await definition.handler(args);
+    const errorMessage = responseErrorMessage(value);
+    if (errorMessage) {
+      return errorResult(errorMessage, value);
     }
-    return asText(withAgentGuidance("diagnostics", data));
-  },
-);
+    return successResult(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errorResult(message);
+  }
+}
+
+function createMcpServer(): McpServer {
+  const server = new McpServer({
+    name: "veil-mcp-server",
+    version: VEIL_VERSION,
+  });
+
+  for (const definition of TOOL_DEFINITIONS) {
+    server.registerTool(
+      definition.name,
+      {
+        title: definition.title,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+        annotations: definition.annotations,
+      },
+      async (args) => executeTool(definition, args as Record<string, unknown>),
+    );
+  }
+
+  return server;
+}
+
+function normalizeHost(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function hostNameFromHeader(value: string | undefined): string {
+  const host = value?.trim() ?? "";
+  if (!host) return "";
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) {
+      return normalizeHost(host.slice(0, end + 1));
+    }
+    return normalizeHost(host);
+  }
+  const first = host.split(":")[0] ?? "";
+  return normalizeHost(first);
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function originHost(origin: string | undefined): string {
+  if (!origin) return "";
+  try {
+    return normalizeHost(new URL(origin).hostname);
+  } catch {
+    return "";
+  }
+}
+
+function validateHttpRequest(
+  req: IncomingMessage,
+  listenHost: string,
+  allowRemote: boolean,
+): string | null {
+  if (allowRemote) return null;
+
+  const requestHost = hostNameFromHeader(req.headers.host);
+  if (!requestHost || !isLoopbackHost(requestHost)) {
+    return "Request host is not allowed for local-only mode";
+  }
+
+  const parsedOriginHost = originHost(asString(req.headers.origin));
+  if (parsedOriginHost && !isLoopbackHost(parsedOriginHost)) {
+    return "Origin is not allowed for local-only mode";
+  }
+
+  if (!isLoopbackHost(normalizeHost(listenHost))) {
+    return "Server host must be loopback unless allow_remote is true";
+  }
+
+  return null;
+}
+
+async function parseRequestBody(req: IncomingMessage): Promise<unknown> {
+  if (req.method !== "POST") return undefined;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    if (typeof chunk === "string") {
+      chunks.push(Buffer.from(chunk));
+      continue;
+    }
+    if (Buffer.isBuffer(chunk)) {
+      chunks.push(chunk);
+      continue;
+    }
+    if (chunk instanceof Uint8Array) {
+      chunks.push(Buffer.from(chunk));
+      continue;
+    }
+    chunks.push(Buffer.from(String(chunk)));
+  }
+  if (chunks.length === 0) return undefined;
+  const raw = Buffer.concat(chunks).toString("utf-8").trim();
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
 
 let started = false;
 
 export async function startServer(): Promise<void> {
   if (started) return;
   started = true;
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
+
+let httpServerStarted = false;
+
+export async function startHttpServer(options: HttpServerOptions = {}): Promise<void> {
+  if (httpServerStarted) return;
+  httpServerStarted = true;
+
+  const host = options.host?.trim() ?? "127.0.0.1";
+  const port = Number.isFinite(options.port) ? Number(options.port) : 8765;
+  const path = options.path?.trim() ?? "/mcp";
+  const allowRemote = options.allow_remote === true;
+
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      if ((req.url ?? "") !== path) {
+        res.statusCode = 404;
+        res.end("Not Found");
+        return;
+      }
+
+      if (req.method !== "GET" && req.method !== "POST" && req.method !== "DELETE") {
+        res.statusCode = 405;
+        res.end("Method Not Allowed");
+        return;
+      }
+
+      const requestValidationError = validateHttpRequest(req, host, allowRemote);
+      if (requestValidationError) {
+        res.statusCode = 403;
+        res.end(requestValidationError);
+        return;
+      }
+
+      const parsedBody = await parseRequestBody(req);
+      const mcpServer = createMcpServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+
+      res.on("close", () => {
+        void transport.close();
+        void mcpServer.close();
+      });
+
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, parsedBody);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        const message = error instanceof Error ? error.message : String(error);
+        res.end(message);
+      }
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, host, () => {
+      resolve();
+    });
+  });
+}
+
+export const __internalServer = {
+  createMcpServer,
+  toolNames: TOOL_DEFINITIONS.map((definition) => definition.name),
+  toolDefinitions: TOOL_DEFINITIONS,
+  responseErrorMessage,
+};
 
 const meta = import.meta as unknown as Record<string, unknown>;
 const sourceSuffix = `${sep}src${sep}server.ts`;

@@ -6,11 +6,9 @@ export type GuidanceTool =
   | "files"
   | "symbols"
   | "search"
-  | "find_file"
-  | "find_symbol"
-  | "search_for_pattern"
   | "lookup"
   | "discover"
+  | "chunk"
   | "web_search"
   | "fetch_url"
   | "git_status"
@@ -64,16 +62,15 @@ function nextCalls(tool: GuidanceTool): string[] {
   switch (tool) {
     case "discover":
       return ["lookup", "search"];
+    case "chunk":
+      return ["lookup", "search"];
     case "lookup":
       return ["discover", "search"];
     case "files":
-    case "find_file":
       return ["search", "lookup"];
     case "symbols":
-    case "find_symbol":
       return ["lookup", "search"];
     case "search":
-    case "search_for_pattern":
       return ["lookup", "files"];
     case "web_search":
       return ["fetch_url", "discover"];
@@ -193,5 +190,22 @@ export function withAgentGuidance(
   return {
     ...payload,
     guidance: buildAgentGuidance(tool, payload, options),
+  };
+}
+
+export function withAgentGuidanceCompact(
+  tool: GuidanceTool,
+  payloadValue: unknown,
+  options?: GuidanceOptions,
+): RecordLike {
+  const payload = asRecord(payloadValue);
+  const guidance = buildAgentGuidance(tool, payload, options);
+  const include = guidance.confidence !== "high" || guidance.coverage !== "full";
+  if (!include) {
+    return payload;
+  }
+  return {
+    ...payload,
+    guidance,
   };
 }

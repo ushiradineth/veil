@@ -22,12 +22,13 @@ Prefer Veil CLI commands when supported so outputs stay structured and follow-on
 
 1. Start broad once with `veil discover --workspace . --query "<intent>"`.
 2. Narrow once with `veil lookup --workspace . --query "<intent>"` or one targeted call: `veil files|symbols|search`.
-3. Add context branches only as needed: git, web, or GitHub.
-4. Return concise findings with paths or URLs, then continue implementation.
+3. Fetch full code only when needed with `veil chunk --id <chunk-id>` from prior results.
+4. Add context branches only as needed: git, web, or GitHub.
+5. Return concise findings with paths or URLs, then continue implementation.
 
 ## Intent Branches
 
-- Local retrieval: `veil discover`, `veil lookup`, `veil files`, `veil symbols`, `veil search`.
+- Local retrieval: `veil discover`, `veil lookup`, `veil files`, `veil symbols`, `veil search`, `veil chunk`.
 - Git context: `veil git-status`, `veil git-log`, `veil git-diff`, `veil git-show`.
 - Web context: `veil web-search`, then `veil fetch-url --format markdown`.
 - GitHub context: `veil gh-lookup --repo <owner/repo> --kind <kind>`.
@@ -36,6 +37,7 @@ Prefer Veil CLI commands when supported so outputs stay structured and follow-on
 
 - Shell-first discovery (`ls/find/grep`) -> start with `veil discover`, then narrow once.
 - Repeating broad retrieval calls -> rewrite query with entity + intent, then run one focused follow-up.
+- Asking for full code in broad calls -> keep compact defaults and fetch selected ids with `veil chunk`.
 - Raw `git` reads for normal context -> use `veil git-status|git-log|git-diff|git-show`.
 - Direct URL fetch before discovery -> use `veil web-search` first, then fetch selected pages.
 - Treating setup commands as retrieval (`veil init`, `veil build`, `veil mcp server`) -> reserve them for setup or runtime only.

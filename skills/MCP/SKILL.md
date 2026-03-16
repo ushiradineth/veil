@@ -18,30 +18,34 @@ Treat intent phrases like `find where`, `investigate`, `compare`, `summarize fro
 
 Prefer Veil MCP tools when supported so outputs stay structured and follow-on steps are cheaper.
 
+Veil MCP responses are compact TOON payloads. Guidance fields appear only on low-confidence or missing-context responses.
+
 ## Retrieval Workflow
 
-1. Start broad once with `discover`.
-2. Narrow once with `lookup` or one targeted call: `files|symbols|search`.
-3. Add context branches only as needed: git, web, or GitHub.
-4. Return concise findings with paths or URLs, then continue implementation.
+1. Start broad once with `veil_discover`.
+2. Narrow once with `veil_lookup` or one targeted call: `veil_files|veil_symbols|veil_search`.
+3. Fetch full code only when needed with `veil_chunk` using chunk ids from prior results.
+4. Add context branches only as needed: git, web, or GitHub.
+5. Return concise findings with paths or URLs, then continue implementation.
 
 ## Intent Branches
 
-- Local retrieval: `discover`, `lookup`, `files`, `symbols`, `search`.
-- Git context: `git_status`, `git_log`, `git_diff`, `git_show`.
-- Web context: `web_search`, then `fetch_url`.
-- GitHub context: `gh_lookup`.
+- Local retrieval: `veil_discover`, `veil_lookup`, `veil_files`, `veil_symbols`, `veil_search`, `veil_chunk`.
+- Git context: `veil_git_status`, `veil_git_log`, `veil_git_diff`, `veil_git_show`.
+- Web context: `veil_web_search`, then `veil_fetch_url`.
+- GitHub context: `veil_gh_lookup`.
 
 ## Anti-pattern Corrections
 
-- Shell-first discovery with ad hoc tools -> start with `discover`, then narrow once.
+- Shell-first discovery with ad hoc tools -> start with `veil_discover`, then narrow once.
 - Repeating broad retrieval calls -> rewrite query with entity + intent, then run one focused follow-up.
-- Jumping to `fetch_url` without candidates -> use `web_search` first.
-- Raw `git` reads for normal context -> use `git_status|git_log|git_diff|git_show`.
+- Asking for full code in broad calls -> keep compact defaults and fetch only selected chunk ids with `veil_chunk`.
+- Jumping to `veil_fetch_url` without candidates -> use `veil_web_search` first.
+- Raw `git` reads for normal context -> use `veil_git_status|veil_git_log|veil_git_diff|veil_git_show`.
 - Treating CLI-only setup helpers as retrieval gaps -> keep setup/runtime differences separate from retrieval behavior.
 
 ## Quick Examples
 
-- `Find implementation points for a feature request` -> `discover` then `lookup`.
-- `Check what changed on this branch before editing` -> `git_status`, `git_log`, then `git_diff`.
-- `Summarize dependency docs with source links` -> `web_search`, then `fetch_url`.
+- `Find implementation points for a feature request` -> `veil_discover` then `veil_lookup`.
+- `Check what changed on this branch before editing` -> `veil_git_status`, `veil_git_log`, then `veil_git_diff`.
+- `Summarize dependency docs with source links` -> `veil_web_search`, then `veil_fetch_url`.

@@ -64,7 +64,7 @@
 
 ## CLI Routing Policy
 
-See `SKILL.md` for the canonical routing order and anti-patterns.
+See `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` for routing guidance and anti-patterns.
 
 ## No-Skill Defaults
 
@@ -83,7 +83,7 @@ When a prompt includes words like `research`, `investigate`, `find where`, `summ
 3. `fetch_url` for top URLs
 4. Return concise synthesis with source URLs
 
-Use `SKILL.md` as the canonical reusable skill prompt.
+Use `skills/CLI/SKILL.md` for CLI routing and `skills/MCP/SKILL.md` for MCP routing.
 
 ## Release Workflow
 

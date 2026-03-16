@@ -8,7 +8,7 @@ import type { Argv } from "yargs";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
-import { withAgentGuidance } from "./agent-guidance";
+import { withAgentGuidanceCompact } from "./agent-guidance";
 import { diagnostics, profiler } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
@@ -30,6 +30,7 @@ import {
   getStatus,
   initWorkspaceIndex,
   lookupIndex,
+  queryChunkById,
   queryChunks,
   queryFiles,
   querySymbols,
@@ -57,6 +58,18 @@ type McpClient = "claude" | "codex" | "opencode" | "other";
 
 function parseIntent(value: unknown): Intent {
   return value === "code" || value === "docs" || value === "symbols" ? value : "auto";
+}
+
+function compactStatusSummary(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { exists: false, stale: true, reasons: ["unknown"] };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    exists: record.exists === true,
+    stale: record.stale === true,
+    reasons: Array.isArray(record.reasons) ? record.reasons : [],
+  };
 }
 
 function writeOutput(data: unknown): void {
@@ -538,7 +551,7 @@ export function createCli(args: string[] = []): Argv {
       const { workspace, stateRoot } = configureContext(argv);
       const mode = argv.mode ?? "changed";
       const manifest = await buildIndex(workspace, mode, { state_root: stateRoot });
-      writeOutput(withAgentGuidance("refresh", { ok: true, mode, manifest }));
+      writeOutput(withAgentGuidanceCompact("refresh", { ok: true, mode, manifest }));
     },
   );
 
@@ -549,7 +562,7 @@ export function createCli(args: string[] = []): Argv {
     async (argv) => {
       const { workspace, stateRoot } = configureContext(argv);
       const status = await getStatus(workspace, { state_root: stateRoot });
-      writeOutput(withAgentGuidance("status", status));
+      writeOutput(withAgentGuidanceCompact("status", status));
     },
   );
 
@@ -609,7 +622,15 @@ export function createCli(args: string[] = []): Argv {
     },
   );
 
-  cli.command<SharedArgs & { query?: string; intent?: Intent; refreshIfStale?: boolean }>(
+  cli.command<
+    SharedArgs & {
+      query?: string;
+      intent?: Intent;
+      includeContent?: boolean;
+      contentMaxChars?: number;
+      refreshIfStale?: boolean;
+    }
+  >(
     "discover",
     "Combined discovery: files, symbols, search",
     (cmd) =>
@@ -618,6 +639,16 @@ export function createCli(args: string[] = []): Argv {
         .option("intent", {
           choices: ["auto", "code", "docs", "symbols"],
           default: "auto" as const,
+        })
+        .option("includeContent", {
+          type: "boolean",
+          alias: "include-content",
+          default: false,
+        })
+        .option("contentMaxChars", {
+          type: "number",
+          alias: "content-max-chars",
+          default: 240,
         })
         .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true }),
     async (argv) => {
@@ -630,13 +661,15 @@ export function createCli(args: string[] = []): Argv {
       const discovered = await discoverIndex(workspace, query, {
         prefer_code: true,
         intent: parseIntent(argv.intent),
+        include_content: argv.includeContent ?? false,
+        content_max_chars: argv.contentMaxChars,
         state_root: stateRoot,
       });
       writeOutput(
-        withAgentGuidance(
+        withAgentGuidanceCompact(
           "discover",
           {
-            status: initResult.status_after,
+            status: compactStatusSummary(initResult.status_after),
             intent: discovered.intent,
             files: discovered.files,
             symbols: discovered.symbols,
@@ -648,7 +681,14 @@ export function createCli(args: string[] = []): Argv {
     },
   );
 
-  cli.command<SharedArgs & { query?: string; intent?: Intent }>(
+  cli.command<
+    SharedArgs & {
+      query?: string;
+      intent?: Intent;
+      includeContent?: boolean;
+      contentMaxChars?: number;
+    }
+  >(
     "lookup",
     "Ranked intent-aware retrieval",
     (cmd) =>
@@ -657,6 +697,16 @@ export function createCli(args: string[] = []): Argv {
         .option("intent", {
           choices: ["auto", "code", "docs", "symbols"],
           default: "auto" as const,
+        })
+        .option("includeContent", {
+          type: "boolean",
+          alias: "include-content",
+          default: false,
+        })
+        .option("contentMaxChars", {
+          type: "number",
+          alias: "content-max-chars",
+          default: 240,
         }),
     async (argv) => {
       const { workspace, stateRoot } = configureContext(argv);
@@ -664,9 +714,38 @@ export function createCli(args: string[] = []): Argv {
       const result = await lookupIndex(workspace, query, {
         intent: parseIntent(argv.intent),
         prefer_code: true,
+        include_content: argv.includeContent ?? false,
+        content_max_chars: argv.contentMaxChars,
         state_root: stateRoot,
       });
-      writeOutput(withAgentGuidance("lookup", result, { query }));
+      writeOutput(withAgentGuidanceCompact("lookup", result, { query }));
+    },
+  );
+
+  cli.command<SharedArgs & { id?: string; contentMaxChars?: number; refreshIfStale?: boolean }>(
+    "chunk",
+    "Fetch one chunk by id",
+    (cmd) =>
+      withSharedOptions(cmd)
+        .option("id", { type: "string", default: "" })
+        .option("contentMaxChars", {
+          type: "number",
+          alias: "content-max-chars",
+        })
+        .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true }),
+    async (argv) => {
+      const { workspace, stateRoot } = configureContext(argv);
+      await initWorkspaceIndex(workspace, {
+        state_root: stateRoot,
+        refresh_if_stale: argv.refreshIfStale ?? true,
+      });
+      const id = argv.id ?? "";
+      const item = await queryChunkById(workspace, id, {
+        state_root: stateRoot,
+        include_content: true,
+        content_max_chars: argv.contentMaxChars,
+      });
+      writeOutput(withAgentGuidanceCompact("chunk", { item }, { query: id }));
     },
   );
 
@@ -686,7 +765,7 @@ export function createCli(args: string[] = []): Argv {
         refresh_if_stale: argv.refreshIfStale ?? true,
       });
       const items = await queryFiles(workspace, query, argv.limit ?? 20, { state_root: stateRoot });
-      writeOutput(withAgentGuidance("files", { items }, { query }));
+      writeOutput(withAgentGuidanceCompact("files", { items }, { query }));
     },
   );
 
@@ -708,7 +787,7 @@ export function createCli(args: string[] = []): Argv {
       const items = await querySymbols(workspace, query, argv.limit ?? 20, {
         state_root: stateRoot,
       });
-      writeOutput(withAgentGuidance("symbols", { items }, { query }));
+      writeOutput(withAgentGuidanceCompact("symbols", { items }, { query }));
     },
   );
 
@@ -717,6 +796,8 @@ export function createCli(args: string[] = []): Argv {
       query?: string;
       limit?: number;
       refreshIfStale?: boolean;
+      includeContent?: boolean;
+      contentMaxChars?: number;
       preferCode?: boolean;
       intent?: Intent;
     }
@@ -728,6 +809,16 @@ export function createCli(args: string[] = []): Argv {
         .option("query", { type: "string", default: "" })
         .option("limit", { type: "number", default: 10 })
         .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true })
+        .option("includeContent", {
+          type: "boolean",
+          alias: "include-content",
+          default: false,
+        })
+        .option("contentMaxChars", {
+          type: "number",
+          alias: "content-max-chars",
+          default: 240,
+        })
         .option("preferCode", { type: "boolean", alias: "prefer-code", default: true })
         .option("intent", {
           choices: ["auto", "code", "docs", "symbols"],
@@ -741,11 +832,13 @@ export function createCli(args: string[] = []): Argv {
         refresh_if_stale: argv.refreshIfStale ?? true,
       });
       const items = await queryChunks(workspace, query, argv.limit ?? 10, {
+        include_content: argv.includeContent ?? false,
+        content_max_chars: argv.contentMaxChars,
         prefer_code: argv.preferCode ?? true,
         intent: parseIntent(argv.intent),
         state_root: stateRoot,
       });
-      writeOutput(withAgentGuidance("search", { items }, { query }));
+      writeOutput(withAgentGuidanceCompact("search", { items }, { query }));
     },
   );
 
@@ -767,7 +860,7 @@ export function createCli(args: string[] = []): Argv {
         timeout_ms: argv.timeoutMs ?? 5000,
         debug: argv.debug ?? false,
       });
-      writeOutput(withAgentGuidance("web_search", result, { query }));
+      writeOutput(withAgentGuidanceCompact("web_search", result, { query }));
     },
   );
 
@@ -803,7 +896,7 @@ export function createCli(args: string[] = []): Argv {
         max_bytes: argv.maxBytes ?? 200000,
         allow_private_network: argv.allowPrivateNetwork ?? false,
       });
-      writeOutput(withAgentGuidance("fetch_url", result, { query: url }));
+      writeOutput(withAgentGuidanceCompact("fetch_url", result, { query: url }));
     },
   );
 
@@ -813,7 +906,7 @@ export function createCli(args: string[] = []): Argv {
     (cmd) => withSharedOptions(cmd),
     (argv) => {
       configureContext(argv);
-      writeOutput(withAgentGuidance("diagnostics", diagnostics.getDiagnostics()));
+      writeOutput(withAgentGuidanceCompact("diagnostics", diagnostics.getDiagnostics()));
     },
   );
 
@@ -905,7 +998,7 @@ export function createCli(args: string[] = []): Argv {
     (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
-        withAgentGuidance(
+        withAgentGuidanceCompact(
           "git_status",
           gitStatus(workspace, { timeout_ms: argv.timeoutMs ?? 5000 }),
         ),
@@ -934,7 +1027,7 @@ export function createCli(args: string[] = []): Argv {
     (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
-        withAgentGuidance(
+        withAgentGuidanceCompact(
           "git_log",
           gitLog(workspace, {
             timeout_ms: argv.timeoutMs ?? 8000,
@@ -973,7 +1066,7 @@ export function createCli(args: string[] = []): Argv {
     (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
-        withAgentGuidance(
+        withAgentGuidanceCompact(
           "git_diff",
           gitDiff(workspace, {
             timeout_ms: argv.timeoutMs ?? 5000,
@@ -1010,7 +1103,7 @@ export function createCli(args: string[] = []): Argv {
     (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
-        withAgentGuidance(
+        withAgentGuidanceCompact(
           "git_show",
           gitShow(workspace, {
             rev: argv.rev ?? "",
@@ -1059,7 +1152,7 @@ export function createCli(args: string[] = []): Argv {
         state_root: stateRoot,
         temp_root: argv.tempRoot,
       });
-      writeOutput(withAgentGuidance("gh_lookup", result, { query: argv.query ?? repo }));
+      writeOutput(withAgentGuidanceCompact("gh_lookup", result, { query: argv.query ?? repo }));
     },
   );
 
@@ -1077,6 +1170,34 @@ export function createCli(args: string[] = []): Argv {
           async () => {
             const { startServer } = await import("./server");
             await startServer();
+          },
+        )
+        .command<{
+          host?: string;
+          port?: number;
+          path?: string;
+          allowRemote?: boolean;
+        }>(
+          "http",
+          "Start MCP streamable HTTP server",
+          (sub) =>
+            sub
+              .option("host", { type: "string", default: "127.0.0.1" })
+              .option("port", { type: "number", default: 8765 })
+              .option("path", { type: "string", default: "/mcp" })
+              .option("allowRemote", {
+                type: "boolean",
+                alias: "allow-remote",
+                default: false,
+              }),
+          async (argv) => {
+            const { startHttpServer } = await import("./server");
+            await startHttpServer({
+              host: argv.host,
+              port: argv.port,
+              path: argv.path,
+              allow_remote: argv.allowRemote,
+            });
           },
         )
         .demandCommand(1)

@@ -84,7 +84,6 @@ See `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` for routing guidance and ant
 
 - CLI command descriptions and MCP tool descriptions are intent-first and should be treated as co-primary no-skill routing surfaces for generic agents.
 - Default objective is native-first Veil selection across all replaceable workflows (local retrieval, git context, web/fetch, GitHub context).
-- Veil exposes compatibility aliases for common retrieval heuristics: `find_file`, `find_symbol`, `search_for_pattern`.
 - Query tools (`files`, `symbols`, `search`, `lookup`) auto-refresh stale indexes by default.
 - No project-specific environment variables are required for normal operation.
 

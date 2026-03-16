@@ -3,9 +3,11 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { buildAgentGuidance } from "./agent-guidance";
+import { buildAgentGuidance, withAgentGuidanceCompact } from "./agent-guidance";
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
@@ -29,6 +31,7 @@ import {
   queryFiles,
   querySymbols,
   queryChunks,
+  queryChunkById,
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
@@ -66,6 +69,18 @@ function requestUrl(input: RequestInfo | URL): string {
   if (input instanceof URL) return input.toString();
   if (typeof input === "string") return input;
   return input.url;
+}
+
+function toolText(payload: unknown): string {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
+  const record = payload as { content?: unknown };
+  if (!Array.isArray(record.content)) return "";
+  for (const item of record.content) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const text = (item as { text?: unknown }).text;
+    if (typeof text === "string") return text;
+  }
+  return "";
 }
 
 async function writeExecutableScript(path: string, body: string): Promise<void> {
@@ -169,6 +184,33 @@ describe("Phase 2: Query accuracy", () => {
       language: "typescript",
     });
     expect(chunks.length).toBeGreaterThan(0);
+  });
+
+  test("Chunk query defaults to compact content projection", async () => {
+    const chunks = await queryChunks(MEDIUM_REPO, "service", 5);
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const chunk of chunks) {
+      expect(typeof chunk.content).toBe("string");
+      expect(typeof chunk.content_chars).toBe("number");
+      expect(chunk.content.length).toBeLessThanOrEqual(chunk.content_chars ?? chunk.content.length);
+    }
+  });
+
+  test("Chunk query supports full content opt-in", async () => {
+    const compact = await queryChunks(MEDIUM_REPO, "service", 1, { include_content: false });
+    const full = await queryChunks(MEDIUM_REPO, "service", 1, { include_content: true });
+    expect(compact.length).toBeGreaterThan(0);
+    expect(full.length).toBeGreaterThan(0);
+    expect((full[0]?.content_chars ?? 0) >= (compact[0]?.content_chars ?? 0)).toBe(true);
+    expect(full[0]?.content.length >= compact[0]?.content.length).toBe(true);
+  });
+
+  test("Chunk by id supports targeted follow-up content fetch", async () => {
+    const chunks = await queryChunks(MEDIUM_REPO, "service", 1, { include_content: true });
+    const firstId = chunks[0]?.id ?? "";
+    const item = await queryChunkById(MEDIUM_REPO, firstId);
+    expect(item).not.toBeNull();
+    expect(item?.id).toBe(firstId);
   });
 
   test("Discover combines files, symbols, and chunks", async () => {
@@ -2617,14 +2659,14 @@ describe("Indexer internals", () => {
 });
 
 describe("Agent guidance helpers", () => {
-  test("tool descriptions are intent-first and expose compatibility aliases", () => {
+  test("tool descriptions are intent-first for canonical MCP tools", () => {
     const descriptions = TOOL_DESCRIPTIONS;
-    expect(descriptions.discover.startsWith("Use when you need")).toBe(true);
-    expect(descriptions.lookup.startsWith("Use when you need")).toBe(true);
-    expect(descriptions.find_file.includes("`files` behavior")).toBe(true);
-    expect(descriptions.find_symbol.includes("`symbols` behavior")).toBe(true);
-    expect(descriptions.search_for_pattern.includes("`search` behavior")).toBe(true);
-    expect(descriptions.gh_lookup.includes("GitHub")).toBe(true);
+    expect(descriptions.veil_discover.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_lookup.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_files.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_symbols.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_search.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_gh_lookup.includes("GitHub")).toBe(true);
   });
 
   test("buildAgentGuidance returns high confidence for successful results", () => {
@@ -2657,6 +2699,92 @@ describe("Agent guidance helpers", () => {
     expect(guidance.confidence).toBe("low");
     expect(guidance.coverage).toBe("none");
     expect((guidance.missing_context ?? []).length).toBeGreaterThan(0);
+  });
+
+  test("withAgentGuidanceCompact omits guidance for high-confidence payloads", () => {
+    const payload = withAgentGuidanceCompact("discover", {
+      files: [{ item: { path: "src/a.ts" }, score: 1 }],
+      symbols: [],
+      chunks: [],
+    });
+    expect(payload.guidance).toBeUndefined();
+  });
+
+  test("withAgentGuidanceCompact keeps guidance for low-confidence payloads", () => {
+    const payload = withAgentGuidanceCompact(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "build index" },
+    );
+    expect(payload.guidance).toBeDefined();
+  });
+});
+
+describe("MCP protocol conformance", () => {
+  async function withMcpClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
+    const client = new Client({ name: "veil-test", version: "0.1.0" }, { capabilities: {} });
+    const transport = new StdioClientTransport({
+      command: "nix",
+      args: ["run", "nixpkgs#bun", "--", "run", "src/bin.ts", "mcp", "server"],
+      cwd: join(import.meta.dir, ".."),
+      stderr: "pipe",
+    });
+
+    await client.connect(transport);
+    try {
+      return await run(client);
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  }
+
+  test("tools/list exposes canonical MCP tool names and metadata", async () => {
+    await withMcpClient(async (client) => {
+      const list = await client.listTools();
+      const toolNames = list.tools.map((tool) => tool.name);
+
+      expect(toolNames.includes("veil_discover")).toBe(true);
+      expect(toolNames.includes("veil_lookup")).toBe(true);
+      expect(toolNames.includes("veil_fetch_url")).toBe(true);
+      expect(toolNames.includes("veil_chunk")).toBe(true);
+      expect(toolNames.includes("find_file")).toBe(false);
+
+      const discover = list.tools.find((tool) => tool.name === "veil_discover");
+      expect((discover?.title ?? "").length).toBeGreaterThan(0);
+      expect(discover?.annotations).toBeDefined();
+    });
+  });
+
+  test("tools/call returns explicit tool execution errors", async () => {
+    await withMcpClient(async (client) => {
+      const okResult = await client.callTool({
+        name: "veil_status",
+        arguments: { workspace: SMALL_REPO },
+      });
+      expect(okResult.isError).toBe(false);
+
+      const errorResult = await client.callTool({
+        name: "veil_fetch_url",
+        arguments: { url: "not-a-valid-url" },
+      });
+      expect(errorResult.isError).toBe(true);
+      const errorText = toolText(errorResult);
+      expect(errorText.includes("details")).toBe(false);
+    });
+  });
+
+  test("discover output uses compact status summary", async () => {
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_discover",
+        arguments: { workspace: SMALL_REPO, query: "hello" },
+      });
+      expect(result.isError).toBe(false);
+      const text = toolText(result);
+      expect(text.includes("manifest")).toBe(false);
+      expect(text.includes("reasons")).toBe(true);
+    });
   });
 });
 

@@ -33,6 +33,8 @@ export type ChunkRecord = {
   start_line: number;
   end_line: number;
   content: string;
+  content_truncated?: boolean;
+  content_chars?: number;
 };
 
 export type QueryIntent = "auto" | "code" | "docs" | "symbols";

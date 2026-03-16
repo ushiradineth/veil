@@ -395,6 +395,22 @@ export async function readChunkCandidates(
   return rows;
 }
 
+export async function readChunkById(
+  workspace: string,
+  id: string,
+  stateRoot?: string,
+): Promise<ChunkRecord | null> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return null;
+  const db = await loadDb(path);
+  const rows = rowsFromExec<ChunkRecord>(
+    db.exec("SELECT id, path, start_line, end_line, content FROM chunks WHERE id = ? LIMIT 1", [
+      id,
+    ]),
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
 export async function isIndexDbCorrupt(workspace: string, stateRoot?: string): Promise<boolean> {
   const path = dbPath(workspace, stateRoot);
   if (!existsSync(path)) return false;

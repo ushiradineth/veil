@@ -13,28 +13,103 @@ type RuntimeLanguageConfig = {
 
 const require = createRequire(import.meta.url);
 
-function ensureBunTreeSitterPrebuild(): void {
-  if (typeof process.versions.bun !== "string") return;
+export type BunPrebuildRecovery = {
+  attempted: boolean;
+  ok: boolean;
+  reason:
+    | "not-bun"
+    | "already-present"
+    | "linked"
+    | "copied"
+    | "missing-candidate"
+    | "readonly"
+    | "resolution-failed";
+};
+
+let LAST_BUN_PREBUILD_RECOVERY: BunPrebuildRecovery = {
+  attempted: false,
+  ok: false,
+  reason: "not-bun",
+};
+
+function permissionDenied(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "EACCES" || code === "EPERM" || code === "EROFS";
+}
+
+function ensureBunTreeSitterPrebuild(): BunPrebuildRecovery {
+  if (typeof process.versions.bun !== "string") {
+    const status: BunPrebuildRecovery = { attempted: false, ok: false, reason: "not-bun" };
+    LAST_BUN_PREBUILD_RECOVERY = status;
+    return status;
+  }
   try {
     const pkg = require.resolve("tree-sitter/package.json");
     const root = dirname(pkg);
     const expectedDir = join(root, "prebuilds", `${process.platform}-${process.arch}`);
     const expectedFile = join(expectedDir, "tree-sitter.node");
-    if (existsSync(expectedFile)) return;
+    if (existsSync(expectedFile)) {
+      const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "already-present" };
+      LAST_BUN_PREBUILD_RECOVERY = status;
+      return status;
+    }
 
     const candidate = join(root, "build", "Release", "tree_sitter_runtime_binding.node");
-    if (!existsSync(candidate)) return;
+    if (!existsSync(candidate)) {
+      const status: BunPrebuildRecovery = {
+        attempted: true,
+        ok: false,
+        reason: "missing-candidate",
+      };
+      LAST_BUN_PREBUILD_RECOVERY = status;
+      return status;
+    }
 
-    mkdirSync(expectedDir, { recursive: true });
+    try {
+      mkdirSync(expectedDir, { recursive: true });
+    } catch (error) {
+      if (permissionDenied(error)) {
+        const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "readonly" };
+        LAST_BUN_PREBUILD_RECOVERY = status;
+        return status;
+      }
+      throw error;
+    }
+
     try {
       symlinkSync(relative(expectedDir, candidate), expectedFile);
+      const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "linked" };
+      LAST_BUN_PREBUILD_RECOVERY = status;
+      return status;
     } catch {
-      if (!existsSync(expectedFile)) {
-        copyFileSync(candidate, expectedFile);
+      try {
+        if (!existsSync(expectedFile)) {
+          copyFileSync(candidate, expectedFile);
+          const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "copied" };
+          LAST_BUN_PREBUILD_RECOVERY = status;
+          return status;
+        }
+        const status: BunPrebuildRecovery = {
+          attempted: true,
+          ok: true,
+          reason: "already-present",
+        };
+        LAST_BUN_PREBUILD_RECOVERY = status;
+        return status;
+      } catch (error) {
+        if (permissionDenied(error)) {
+          const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "readonly" };
+          LAST_BUN_PREBUILD_RECOVERY = status;
+          return status;
+        }
+        throw error;
       }
     }
   } catch {
-    // ignored: runtime remains unavailable
+    const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "resolution-failed" };
+    LAST_BUN_PREBUILD_RECOVERY = status;
+    return status;
   }
 }
 
@@ -44,6 +119,10 @@ function loadParserClass(): ParserCtor | undefined {
   ensureBunTreeSitterPrebuild();
   parser = optionalModule("tree-sitter") as ParserCtor | undefined;
   return parser;
+}
+
+export function getBunPrebuildRecoveryStatus(): BunPrebuildRecovery {
+  return LAST_BUN_PREBUILD_RECOVERY;
 }
 
 function optionalModule(name: string): unknown {

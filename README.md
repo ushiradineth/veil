@@ -146,6 +146,8 @@ Or install manually in `Cursor Settings` -> `MCP` -> `New MCP Server` with:
 
 ## Capabilities
 
+If index build fails with `Missing required parser runtimes for enabled built-ins`, reinstall dependencies (`bun install` or `npm install`) and rerun `veil init` parser setup. In read-only environments, ensure `tree-sitter` runtime artifacts are available before running `build` or `refresh`.
+
 Use the same retrieval and context capability surface from either CLI or MCP.
 
 | Capability                           | What it does                                                          | CLI command                                              | MCP tool      |

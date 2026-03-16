@@ -18,10 +18,10 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 ## Latest Run
 
-- Run directory: `benchmarks/results/20260312-163035Z`
-- Result JSON: `benchmarks/results/20260312-163035Z/results.json`
-- Summary markdown: `benchmarks/results/20260312-163035Z/SUMMARY.md`
-- Generated: `2026-03-12T16:30:40.144Z`
+- Run directory: `benchmarks/results/20260316-103430Z`
+- Result JSON: `benchmarks/results/20260316-103430Z/results.json`
+- Summary markdown: `benchmarks/results/20260316-103430Z/SUMMARY.md`
+- Generated: `2026-03-16T10:34:35.478Z`
 - Workspace: `/Users/shu/Code/veil`
 - Profile: `smoke`
 - Agents: `veil,firecrawl`
@@ -46,25 +46,25 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 | Scenario | veil (mcp_transport) | veil (cli_skill) | firecrawl (mcp_transport) | firecrawl (cli_skill) |
 | --- | --- | --- | --- | --- |
-| status-bootstrap | 278.2771 / 278.2771 | 211.1512 / 211.1512 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| files-homebrew | 293.9072 / 293.9072 | 247.5804 / 247.5804 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| symbols-build | 305.8332 / 305.8332 | 246.5070 / 246.5070 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| search-pnpm-install | 302.8813 / 302.8813 | 235.5865 / 235.5865 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| lookup-build-index | 307.8387 / 307.8387 | 237.4309 / 237.4309 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| discover-combined | 299.2090 / 299.2090 | 249.4950 / 249.4950 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| git-status-check | 313.7513 / 313.7513 | 251.3912 / 251.3912 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| status-bootstrap | 334.6200 / 334.6200 | 259.0540 / 259.0540 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| files-homebrew | 328.6357 / 328.6357 | 259.3834 / 259.3834 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| symbols-build | 331.4048 / 331.4048 | 265.1192 / 265.1192 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| search-pnpm-install | 342.9068 / 342.9068 | 271.4266 / 271.4266 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| lookup-build-index | 342.9462 / 342.9462 | 256.4105 / 256.4105 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| discover-combined | 347.8771 / 347.8771 | 283.7451 / 283.7451 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| git-status-check | 342.8333 / 342.8333 | 282.4903 / 282.4903 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
 
 ## A/B Signals (schema_overhead_tokens / first_useful_action_ms / fallback_rate)
 
 | Scenario | veil (mcp_transport) | veil (cli_skill) | firecrawl (mcp_transport) | firecrawl (cli_skill) |
 | --- | --- | --- | --- | --- |
-| status-bootstrap | 12000 / 278.2771 / 1.00 | 400 / 211.1512 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| files-homebrew | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| symbols-build | 12000 / 305.8332 / 1.00 | 400 / 246.5070 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| search-pnpm-install | 12000 / 302.8813 / 1.00 | 400 / 235.5865 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| lookup-build-index | 12000 / 307.8387 / 1.00 | 400 / 237.4309 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| discover-combined | 12000 / 299.2090 / 1.00 | 400 / 249.4950 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| git-status-check | 12000 / 313.7513 / 1.00 | 400 / 251.3912 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| status-bootstrap | 12000 / 334.6200 / 1.00 | 400 / 259.0540 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| files-homebrew | 12000 / 328.6357 / 1.00 | 400 / 259.3834 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| symbols-build | 12000 / 331.4048 / 1.00 | 400 / 265.1192 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| search-pnpm-install | 12000 / 342.9068 / 1.00 | 400 / 271.4266 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| lookup-build-index | 12000 / 342.9462 / 1.00 | 400 / 256.4105 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| discover-combined | 12000 / 347.8771 / 1.00 | 400 / 283.7451 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| git-status-check | 12000 / 342.8333 / 1.00 | 400 / 282.4903 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
 
 ## Preflight
 
@@ -80,7 +80,7 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 | Scenario | veil (mcp_transport) | veil (cli_skill) | firecrawl (mcp_transport) | firecrawl (cli_skill) |
 | --- | --- | --- | --- | --- |
 | status-bootstrap | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |
-| files-homebrew | 1.00 / 2.00 / 1.00 | 1.00 / 2.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |
+| files-homebrew | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |
 | symbols-build | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |
 | search-pnpm-install | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |
 | lookup-build-index | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 0.00 | 0.00 / 3.00 / 1.00 | 0.00 / 3.00 / 1.00 |

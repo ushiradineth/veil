@@ -1,0 +1,1064 @@
+{
+  "generated_at": "2026-03-16T10:34:35.478Z",
+  "environment": {
+    "hostname": "unknown",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v24.3.0",
+    "bun": "1.3.3",
+    "cpu_model": "Apple M2 Pro",
+    "cpu_cores": 10
+  },
+  "config": {
+    "workspace": "/Users/shu/Code/veil",
+    "profile": "smoke",
+    "agents": [
+      "veil",
+      "firecrawl"
+    ],
+    "strategies": [
+      "mcp_transport",
+      "cli_skill"
+    ],
+    "cold_iterations": 1,
+    "warm_iterations": 1,
+    "output_dir": "/Users/shu/Code/veil/benchmarks/results/20260316-103430Z",
+    "competitors": [
+      "veil-mcp_transport",
+      "veil-cli_skill",
+      "firecrawl-mcp_transport",
+      "firecrawl-cli_skill"
+    ],
+    "max_runtime_ms": 120000,
+    "max_cell_runtime_ms": 20000,
+    "preflight": {
+      "veil-mcp_transport": {
+        "ready": true,
+        "mode_control": "strict",
+        "reason": "local veil MCP stdio transport"
+      },
+      "veil-cli_skill": {
+        "ready": true,
+        "mode_control": "strict",
+        "reason": "local veil CLI execution"
+      },
+      "firecrawl-mcp_transport": {
+        "ready": false,
+        "mode_control": "strict",
+        "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP"
+      },
+      "firecrawl-cli_skill": {
+        "ready": false,
+        "mode_control": "strict",
+        "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\""
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "status-bootstrap",
+      "kind": "status",
+      "title": "Repository status bootstrap",
+      "prompt": "Get repository index and freshness status",
+      "query": "status",
+      "expected_patterns": [
+        "exists",
+        "stale",
+        "manifest"
+      ]
+    },
+    {
+      "id": "files-homebrew",
+      "kind": "files",
+      "title": "File lookup by path intent",
+      "prompt": "Find files related to homebrew",
+      "query": "homebrew",
+      "expected_patterns": [
+        "homebrew",
+        "brew",
+        "nix"
+      ]
+    },
+    {
+      "id": "symbols-build",
+      "kind": "symbols",
+      "title": "Symbol lookup by name intent",
+      "prompt": "Find symbols related to build",
+      "query": "build",
+      "expected_patterns": [
+        "build",
+        "install",
+        "package"
+      ]
+    },
+    {
+      "id": "search-pnpm-install",
+      "kind": "search",
+      "title": "Code content lookup",
+      "prompt": "Locate code snippets that contain pnpm install",
+      "query": "pnpm install",
+      "expected_patterns": [
+        "pnpm",
+        "install"
+      ]
+    },
+    {
+      "id": "lookup-build-index",
+      "kind": "lookup",
+      "title": "Intent-aware lookup",
+      "prompt": "Find where buildIndex is defined",
+      "query": "where is buildIndex defined",
+      "expected_patterns": [
+        "buildindex",
+        "indexer",
+        "score"
+      ]
+    },
+    {
+      "id": "discover-combined",
+      "kind": "discover",
+      "title": "Combined discovery workflow",
+      "prompt": "Find files, symbols, and code for homebrew pnpm build",
+      "query": "homebrew pnpm build",
+      "expected_patterns": [
+        "homebrew",
+        "pnpm",
+        "build"
+      ]
+    },
+    {
+      "id": "git-status-check",
+      "kind": "git_status",
+      "title": "Git status lookup",
+      "prompt": "Inspect repository git status",
+      "query": "status",
+      "expected_patterns": [
+        "branch",
+        "clean",
+        "dirty"
+      ]
+    }
+  ],
+  "competitors": [
+    {
+      "id": "veil-mcp_transport",
+      "label": "veil (mcp_transport)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 334.62,
+            "p95_ms": 334.62,
+            "p99_ms": 334.62,
+            "mean_ms": 334.62,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 334.62,
+            "fallback_rate": 1
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 328.6357,
+            "p95_ms": 328.6357,
+            "p99_ms": 328.6357,
+            "mean_ms": 328.6357,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 328.6357,
+            "fallback_rate": 1
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 331.4048,
+            "p95_ms": 331.4048,
+            "p99_ms": 331.4048,
+            "mean_ms": 331.4048,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 331.4048,
+            "fallback_rate": 1
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 342.9068,
+            "p95_ms": 342.9068,
+            "p99_ms": 342.9068,
+            "mean_ms": 342.9068,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 342.9068,
+            "fallback_rate": 1
+          }
+        },
+        "lookup-build-index": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 342.9462,
+            "p95_ms": 342.9462,
+            "p99_ms": 342.9462,
+            "mean_ms": 342.9462,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 342.9462,
+            "fallback_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 347.8771,
+            "p95_ms": 347.8771,
+            "p99_ms": 347.8771,
+            "mean_ms": 347.8771,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 347.8771,
+            "fallback_rate": 1
+          }
+        },
+        "git-status-check": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 342.8333,
+            "p95_ms": 342.8333,
+            "p99_ms": 342.8333,
+            "mean_ms": 342.8333,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 342.8333,
+            "fallback_rate": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "veil-cli_skill",
+      "label": "veil (cli_skill)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 259.054,
+            "p95_ms": 259.054,
+            "p99_ms": 259.054,
+            "mean_ms": 259.054,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 259.054,
+            "fallback_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 259.3834,
+            "p95_ms": 259.3834,
+            "p99_ms": 259.3834,
+            "mean_ms": 259.3834,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 259.3834,
+            "fallback_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 265.1192,
+            "p95_ms": 265.1192,
+            "p99_ms": 265.1192,
+            "mean_ms": 265.1192,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 265.1192,
+            "fallback_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 271.4266,
+            "p95_ms": 271.4266,
+            "p99_ms": 271.4266,
+            "mean_ms": 271.4266,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 271.4266,
+            "fallback_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 256.4105,
+            "p95_ms": 256.4105,
+            "p99_ms": 256.4105,
+            "mean_ms": 256.4105,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 256.4105,
+            "fallback_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 283.7451,
+            "p95_ms": 283.7451,
+            "p99_ms": 283.7451,
+            "mean_ms": 283.7451,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 283.7451,
+            "fallback_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 1,
+            "p50_ms": 282.4903,
+            "p95_ms": 282.4903,
+            "p99_ms": 282.4903,
+            "mean_ms": 282.4903,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 282.4903,
+            "fallback_rate": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "firecrawl-mcp_transport",
+      "label": "firecrawl (mcp_transport)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "git-status-check": {
+          "status": "unsupported",
+          "reason": "missing FIRECRAWL_API_KEY for firecrawl MCP",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "firecrawl-cli_skill",
+      "label": "firecrawl (cli_skill)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "files-homebrew": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "symbols-build": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "search-pnpm-install": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "lookup-build-index": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "discover-combined": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        },
+        "git-status-check": {
+          "status": "unsupported",
+          "reason": "firecrawl unavailable: Executable not found in $PATH: \"firecrawl\"",
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 0,
+            "calls_to_useful_context": 3,
+            "non_veil_fallback_rate": 1
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 400,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 1
+          }
+        }
+      }
+    }
+  ]
+}

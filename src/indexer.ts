@@ -6,9 +6,20 @@ import { join, relative } from "node:path";
 
 import { TopKHeap, getLru, setLru } from "./cache";
 import { diagnostics } from "./diagnostics";
-import { mergeIncrementalRecords, sortIndexedRecords } from "./indexer/build";
+import { listIndexableFiles } from "./file-discovery";
+import { getParserConfig, type ParserId } from "./grammar-manager";
+import {
+  applyChangedRecords,
+  countsToManifest,
+  getAllFilePaths,
+  indexDbExists,
+  readAllRecords,
+  readCounts,
+  replaceAllRecords,
+} from "./index-db";
 import { rankLookupResults, scoreChunk, scoreFile, scoreSymbol } from "./query";
 import { relativeStateRoot, resolveIndexDir } from "./state-root";
+import { extractSymbolsWithTreeSitter, missingRequiredParsers } from "./symbols-tree-sitter";
 import type {
   BuildMode,
   ChunkRecord,
@@ -22,36 +33,16 @@ import type {
   SymbolRecord,
 } from "./types";
 
-const SCHEMA_VERSION = "1";
+const SCHEMA_VERSION = "2";
 const DEFAULT_STALE_HOURS = 24;
 const MAX_FILE_SIZE = 512 * 1024;
 const CHUNK_SIZE_LINES = 120;
 const CHUNK_OVERLAP_LINES = 20;
 const BATCH_SIZE = 20;
-
-type IndexCacheEntry = {
-  filesMtimeMs: number | null;
-  symbolsMtimeMs: number | null;
-  chunksMtimeMs: number | null;
-  files: FileRecord[];
-  filesLower: string[];
-  filesTopLevelLower: string[];
-  symbols: SymbolRecord[];
-  symbolsLower: string[];
-  symbolsPathLower: string[];
-  symbolTokenToIndexes: Map<string, number[]>;
-  chunks: ChunkRecord[];
-  chunksSearch: string[];
-  chunksPathLower: string[];
-  chunksTopLevelLower: string[];
-  chunksBasenameLower: string[];
-  chunksCodeBias: number[];
-  chunksDocsBias: number[];
-  chunkTokenToIndexes: Map<string, number[]>;
-  queryFilesCache: Map<string, FileRecord[]>;
-  querySymbolsCache: Map<string, SymbolRecord[]>;
-  queryChunksCache: Map<string, ChunkRecord[]>;
-};
+const MAX_QUERY_CACHE_SIZE = 100;
+const STATUS_CACHE_TTL_MS = 1500;
+const MAX_STATUS_CACHE_SIZE = 64;
+const MAX_QUERY_PARSE_CACHE = 256;
 
 type ParsedQuery = {
   normalized: string;
@@ -79,12 +70,10 @@ type DiscoverOptions = {
   state_root?: string;
 };
 
-const INDEX_CACHE = new Map<string, IndexCacheEntry>();
 const STATUS_CACHE = new Map<string, { value: IndexStatus; ts: number }>();
-const STATUS_CACHE_TTL_MS = 1500;
-const MAX_INDEX_CACHE_SIZE = 32;
-const MAX_STATUS_CACHE_SIZE = 64;
-const MAX_QUERY_CACHE_SIZE = 100; // LRU limit for per-index query caches
+const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
+const QUERY_RESULT_CACHE = new Map<string, Map<string, unknown[]>>();
+
 const STOP_TOKENS = new Set([
   "the",
   "and",
@@ -118,22 +107,8 @@ const STOP_TOKENS = new Set([
   "files",
   "repo",
   "project",
-  "prompt",
-  "agent",
-  "relevant",
-  "exact",
-  "without",
-  "editing",
 ]);
-const DOC_HINT_TOKENS = new Set([
-  "doc",
-  "docs",
-  "readme",
-  "markdown",
-  "guide",
-  "explain",
-  "documentation",
-]);
+const DOC_HINT_TOKENS = new Set(["doc", "docs", "readme", "markdown", "guide", "documentation"]);
 const SYMBOL_HINT_TOKENS = new Set([
   "symbol",
   "symbols",
@@ -142,7 +117,6 @@ const SYMBOL_HINT_TOKENS = new Set([
   "method",
   "type",
   "interface",
-  "definition",
 ]);
 const CODE_TOP_LEVEL_HINTS = new Set([
   "src",
@@ -156,19 +130,9 @@ const CODE_TOP_LEVEL_HINTS = new Set([
   "outputs",
   "scripts",
 ]);
-const MAX_QUERY_PARSE_CACHE = 256;
-const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
 
 function cacheKey(workspace: string, stateRoot?: string): string {
   return `${workspace}::${resolveIndexDir(workspace, stateRoot)}`;
-}
-
-function setIndexCache(key: string, entry: IndexCacheEntry): void {
-  INDEX_CACHE.set(key, entry);
-  if (INDEX_CACHE.size > MAX_INDEX_CACHE_SIZE) {
-    const first = INDEX_CACHE.keys().next().value;
-    if (first) INDEX_CACHE.delete(first);
-  }
 }
 
 function setStatusCache(key: string, value: IndexStatus): void {
@@ -179,12 +143,137 @@ function setStatusCache(key: string, value: IndexStatus): void {
   }
 }
 
-function getIndexDir(workspace: string, stateRoot?: string): string {
-  return resolveIndexDir(workspace, stateRoot);
+function nowMs(): number {
+  if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
+    return Bun.nanoseconds() / 1_000_000;
+  }
+  return Date.now();
 }
 
-function getIndexPath(workspace: string, file: string, stateRoot?: string): string {
-  return join(getIndexDir(workspace, stateRoot), file);
+function runGit(workspace: string, args: string[]): string | null {
+  const result = spawnSync("git", ["-C", workspace, ...args], { encoding: "utf-8" });
+  if (result.status !== 0) return null;
+  return result.stdout.trim();
+}
+
+function hasDirtyWorkspace(workspace: string): boolean {
+  const raw = runGit(workspace, ["status", "--porcelain"]);
+  if (raw === null) return false;
+  return raw.length > 0;
+}
+
+function listDirtyFiles(workspace: string, baseHead: string | null): Set<string> {
+  const out = new Set<string>();
+  const addLines = (raw: string | null): void => {
+    if (!raw) return;
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed) out.add(trimmed);
+    }
+  };
+
+  if (baseHead) addLines(runGit(workspace, ["diff", "--name-only", `${baseHead}..HEAD`]));
+  addLines(runGit(workspace, ["diff", "--name-only"]));
+  addLines(runGit(workspace, ["diff", "--cached", "--name-only"]));
+  addLines(runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
+  return out;
+}
+
+function normalizeText(input: string): string {
+  return input.toLowerCase();
+}
+
+function tokenize(input: string): string[] {
+  const normalized = normalizeText(input);
+  const tokens = normalized
+    .split(/[^a-z0-9_./-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && token.length <= 64)
+    .filter((token) => !STOP_TOKENS.has(token));
+  return [...new Set(tokens)];
+}
+
+function normalizeQuery(input: string): string {
+  return normalizeText(input).replace(/\s+/g, " ").trim();
+}
+
+function resolveIntent(
+  normalized: string,
+  tokens: string[],
+  requested: QueryIntent = "auto",
+): ResolvedQueryIntent {
+  if (requested !== "auto") return requested;
+  if (
+    tokens.some((token) => DOC_HINT_TOKENS.has(token)) ||
+    normalized.includes("readme") ||
+    normalized.includes("docs")
+  )
+    return "docs";
+  if (tokens.some((token) => SYMBOL_HINT_TOKENS.has(token))) return "symbols";
+  return "code";
+}
+
+function cacheParsedQuery(key: string, parsed: ParsedQuery): ParsedQuery {
+  QUERY_PARSE_CACHE.set(key, parsed);
+  if (QUERY_PARSE_CACHE.size > MAX_QUERY_PARSE_CACHE) {
+    const first = QUERY_PARSE_CACHE.keys().next().value;
+    if (first) QUERY_PARSE_CACHE.delete(first);
+  }
+  return parsed;
+}
+
+function parseQuery(input: string, intent: QueryIntent = "auto"): ParsedQuery {
+  const key = `${intent}\u0000${input}`;
+  const cached = QUERY_PARSE_CACHE.get(key);
+  if (cached) return cached;
+
+  const normalized = normalizeQuery(input);
+  let tokens = tokenize(normalized);
+  if (tokens.length === 0 && normalized) {
+    tokens = [...new Set(normalized.split(/\s+/).filter((token) => token.length >= 2))];
+  }
+  const parsed: ParsedQuery = {
+    normalized,
+    tokens,
+    pathTokens: tokens.filter((token) => token.includes("/") || token.includes(".")),
+    intent: resolveIntent(normalized, tokens, intent),
+  };
+  return cacheParsedQuery(key, parsed);
+}
+
+function codePathBias(pathLower: string): number {
+  let score = 0;
+  if (pathLower.endsWith(".md")) score -= 1.5;
+  if (pathLower.endsWith(".lock")) score -= 2;
+  if (pathLower.includes("/docs/")) score -= 1;
+  if (pathLower.endsWith(".nix")) score += 1;
+  if (pathLower.startsWith("src/") || pathLower.includes("/src/")) score += 1.5;
+  if (pathLower.startsWith("lib/") || pathLower.includes("/lib/")) score += 1.2;
+  return score;
+}
+
+function docsPathBias(pathLower: string): number {
+  let score = 0;
+  if (pathLower.endsWith(".md")) score += 2;
+  if (pathLower.includes("/docs/")) score += 2;
+  if (pathLower.endsWith("/readme.md") || pathLower === "readme.md") score += 3;
+  return score;
+}
+
+function matchesLanguage(pathLower: string, languageFilter: string): boolean {
+  if (!languageFilter) return true;
+  if (languageFilter === "nix") return pathLower.endsWith(".nix");
+  if (languageFilter === "typescript")
+    return pathLower.endsWith(".ts") || pathLower.endsWith(".tsx");
+  if (languageFilter === "javascript")
+    return (
+      pathLower.endsWith(".js") ||
+      pathLower.endsWith(".jsx") ||
+      pathLower.endsWith(".mjs") ||
+      pathLower.endsWith(".cjs")
+    );
+  if (languageFilter === "markdown") return pathLower.endsWith(".md");
+  return pathLower.endsWith(`.${languageFilter}`);
 }
 
 function hashText(content: string): string {
@@ -216,55 +305,6 @@ function topLevel(path: string): string {
   return path.split("/")[0] || ".";
 }
 
-function runGit(workspace: string, args: string[]): string | null {
-  const result = spawnSync("git", ["-C", workspace, ...args], {
-    encoding: "utf-8",
-  });
-  if (result.status !== 0) return null;
-  return result.stdout.trim();
-}
-
-function nowMs(): number {
-  if (typeof Bun !== "undefined" && typeof Bun.nanoseconds === "function") {
-    return Bun.nanoseconds() / 1_000_000;
-  }
-  return Date.now();
-}
-
-function listTrackedFiles(workspace: string): string[] | null {
-  const out = runGit(workspace, ["ls-files"]);
-  if (out === null) return null;
-  return out
-    .split("\n")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
-function listDirtyFiles(workspace: string, baseHead: string | null): Set<string> {
-  const out = new Set<string>();
-  const addLines = (raw: string | null) => {
-    if (!raw) return;
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed) out.add(trimmed);
-    }
-  };
-
-  if (baseHead) {
-    addLines(runGit(workspace, ["diff", "--name-only", `${baseHead}..HEAD`]));
-  }
-  addLines(runGit(workspace, ["diff", "--name-only"]));
-  addLines(runGit(workspace, ["diff", "--cached", "--name-only"]));
-  addLines(runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
-  return out;
-}
-
-function hasDirtyWorkspace(workspace: string): boolean {
-  const raw = runGit(workspace, ["status", "--porcelain"]);
-  if (raw === null) return false;
-  return raw.length > 0;
-}
-
 async function listFilesFallback(workspace: string, stateRoot?: string): Promise<string[]> {
   const out: string[] = [];
   const stateRootRel = relativeStateRoot(workspace, stateRoot);
@@ -285,337 +325,18 @@ async function listFilesFallback(workspace: string, stateRoot?: string): Promise
   return out;
 }
 
-/**
- * Single-pass NDJSON parser
- * Eliminates intermediate arrays (split, map, filter, map) for 50-70% speedup
- */
-function parseNdjson<T>(content: string): T[] {
-  const result: T[] = [];
-  let start = 0;
-
-  for (let i = 0; i <= content.length; i++) {
-    if (i === content.length || content[i] === "\n") {
-      if (i > start) {
-        const line = content.slice(start, i).trim();
-        if (line.length > 0) {
-          try {
-            result.push(JSON.parse(line) as T);
-          } catch {
-            // Ignore malformed lines and keep reading the rest.
-          }
-        }
-      }
-      start = i + 1;
-    }
-  }
-
-  return result;
-}
-
-async function mtimeMs(path: string): Promise<number | null> {
-  try {
-    const st = await stat(path);
-    return st.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeText(input: string): string {
-  return input.toLowerCase();
-}
-
-function tokenize(input: string): string[] {
-  const normalized = normalizeText(input);
-  const tokens = normalized
-    .split(/[^a-z0-9_./-]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && token.length <= 64)
-    .filter((token) => !STOP_TOKENS.has(token));
-  return [...new Set(tokens)];
-}
-
-function normalizeQuery(input: string): string {
-  return normalizeText(input).replace(/\s+/g, " ").trim();
-}
-
-function resolveIntent(
-  normalized: string,
-  tokens: string[],
-  requested: QueryIntent = "auto",
-): ResolvedQueryIntent {
-  if (requested !== "auto") return requested;
-  if (
-    tokens.some((token) => DOC_HINT_TOKENS.has(token)) ||
-    normalized.includes("readme") ||
-    normalized.includes("docs")
-  ) {
-    return "docs";
-  }
-  if (tokens.some((token) => SYMBOL_HINT_TOKENS.has(token))) return "symbols";
-  return "code";
-}
-
-function cacheParsedQuery(cacheKey: string, parsed: ParsedQuery): ParsedQuery {
-  QUERY_PARSE_CACHE.set(cacheKey, parsed);
-  if (QUERY_PARSE_CACHE.size > MAX_QUERY_PARSE_CACHE) {
-    const first = QUERY_PARSE_CACHE.keys().next().value;
-    if (first) QUERY_PARSE_CACHE.delete(first);
-  }
-  return parsed;
-}
-
-function parseQuery(input: string, intent: QueryIntent = "auto"): ParsedQuery {
-  const cacheKey = `${intent}\u0000${input}`;
-  const cached = QUERY_PARSE_CACHE.get(cacheKey);
-  if (cached) return cached;
-
-  const normalized = normalizeQuery(input);
-  let tokens = tokenize(normalized);
-  if (tokens.length === 0 && normalized) {
-    tokens = [...new Set(normalized.split(/\s+/).filter((token) => token.length >= 2))];
-  }
-  const pathTokens = tokens.filter((token) => token.includes("/") || token.includes("."));
-  const parsed: ParsedQuery = {
-    normalized,
-    tokens,
-    pathTokens,
-    intent: resolveIntent(normalized, tokens, intent),
-  };
-  return cacheParsedQuery(cacheKey, parsed);
-}
-
-function codePathBias(pathLower: string): number {
-  let score = 0;
-  if (pathLower.endsWith(".md")) score -= 1.5;
-  if (pathLower.endsWith(".lock")) score -= 2;
-  if (pathLower.includes("/docs/")) score -= 1;
-  if (pathLower.includes("/node_modules/")) score -= 3;
-  if (pathLower.endsWith(".nix")) score += 1;
-  if (pathLower.startsWith("src/") || pathLower.includes("/src/")) score += 1.5;
-  if (pathLower.startsWith("lib/") || pathLower.includes("/lib/")) score += 1.2;
-  if (pathLower.startsWith("modules/") || pathLower.includes("/modules/")) score += 1.1;
-  if (pathLower.startsWith("hosts/") || pathLower.includes("/hosts/")) score += 1.1;
-  if (pathLower.startsWith("outputs/") || pathLower.includes("/outputs/")) score += 1;
-  return score;
-}
-
-function docsPathBias(pathLower: string, basenameLower: string): number {
-  let score = 0;
-  if (pathLower.endsWith(".md")) score += 2;
-  if (pathLower.includes("/docs/")) score += 2;
-  if (basenameLower === "readme.md" || basenameLower === "readme") score += 3;
-  if (pathLower.includes("/guide/")) score += 1;
-  return score;
-}
-
-function matchesLanguage(pathLower: string, languageFilter: string): boolean {
-  if (!languageFilter) return true;
-  if (languageFilter === "nix") return pathLower.endsWith(".nix");
-  if (languageFilter === "typescript")
-    return pathLower.endsWith(".ts") || pathLower.endsWith(".tsx");
-  if (languageFilter === "javascript")
-    return pathLower.endsWith(".js") || pathLower.endsWith(".jsx");
-  if (languageFilter === "markdown") return pathLower.endsWith(".md");
-  return pathLower.endsWith(`.${languageFilter}`);
-}
-
-/**
- * Build chunk token index with Set-based deduplication
- * Uses Set for intermediate storage, converts to array at end for 20-40% speedup
- */
-function buildChunkTokenIndex(chunksSearch: string[]): Map<string, number[]> {
-  const out = new Map<string, Set<number>>();
-  for (let i = 0; i < chunksSearch.length; i++) {
-    const tokens = tokenize(chunksSearch[i] ?? "");
-    for (const token of tokens) {
-      let existing = out.get(token);
-      if (!existing) {
-        existing = new Set<number>();
-        out.set(token, existing);
-      }
-      existing.add(i);
-    }
-  }
-  // Convert Sets to arrays
-  const result = new Map<string, number[]>();
-  for (const [token, indexSet] of out) {
-    result.set(token, Array.from(indexSet));
-  }
-  return result;
-}
-
-/**
- * Build symbol token index with Set-based deduplication
- * Uses Set for intermediate storage, converts to array at end for 20-40% speedup
- */
-function buildSymbolTokenIndex(symbolsLower: string[]): Map<string, number[]> {
-  const out = new Map<string, Set<number>>();
-  for (let i = 0; i < symbolsLower.length; i++) {
-    const tokens = tokenize(symbolsLower[i] ?? "");
-    for (const token of tokens) {
-      let existing = out.get(token);
-      if (!existing) {
-        existing = new Set<number>();
-        out.set(token, existing);
-      }
-      existing.add(i);
-    }
-  }
-  // Convert Sets to arrays
-  const result = new Map<string, number[]>();
-  for (const [token, indexSet] of out) {
-    result.set(token, Array.from(indexSet));
-  }
-  return result;
-}
-
-/**
- * Build cache entry with normalized string caching
- * Caches path normalization per unique path for 40-60% memory reduction
- */
-function buildCacheEntry(
-  files: FileRecord[],
-  symbols: SymbolRecord[],
-  chunks: ChunkRecord[],
-  mtimes: { files: number | null; symbols: number | null; chunks: number | null },
-): IndexCacheEntry {
-  // Cache normalized paths to avoid redundant allocations
-  const pathNormCache = new Map<string, string>();
-  const normalizePath = (path: string): string => {
-    let cached = pathNormCache.get(path);
-    if (cached === undefined) {
-      cached = normalizeText(path);
-      pathNormCache.set(path, cached);
-    }
-    return cached;
-  };
-
-  // Cache top-level extraction
-  const topLevelCache = new Map<string, string>();
-  const getTopLevel = (path: string): string => {
-    let cached = topLevelCache.get(path);
-    if (cached === undefined) {
-      cached = topLevel(path);
-      topLevelCache.set(path, cached);
-    }
-    return cached;
-  };
-
-  // Cache basename extraction
-  const basenameCache = new Map<string, string>();
-  const getBasename = (path: string): string => {
-    let cached = basenameCache.get(path);
-    if (cached === undefined) {
-      const lastSlash = path.lastIndexOf("/");
-      cached = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
-      basenameCache.set(path, cached);
-    }
-    return cached;
-  };
-
-  const filesLower = files.map((f) => normalizePath(f.path));
-  const filesTopLevelLower = files.map((f) => normalizeText(getTopLevel(f.path)));
-  const chunksPathLower = chunks.map((c) => normalizePath(c.path));
-  const chunksTopLevelLower = chunks.map((c) => normalizeText(getTopLevel(c.path)));
-  const chunksBasenameLower = chunks.map((c) => normalizeText(getBasename(c.path)));
-  const chunksSearch = chunks.map((c) => normalizeText(`${c.path}\n${c.content}`));
-  const chunksCodeBias = chunksPathLower.map((pathLower) => codePathBias(pathLower));
-  const chunksDocsBias = chunksPathLower.map((pathLower, i) =>
-    docsPathBias(pathLower, chunksBasenameLower[i] ?? ""),
-  );
-  const symbolsLower = symbols.map((s) => normalizeText(s.name));
-  const symbolsPathLower = symbols.map((s) => normalizePath(s.path));
-
-  return {
-    filesMtimeMs: mtimes.files,
-    symbolsMtimeMs: mtimes.symbols,
-    chunksMtimeMs: mtimes.chunks,
-    files,
-    filesLower,
-    filesTopLevelLower,
-    symbols,
-    symbolsLower,
-    symbolsPathLower,
-    symbolTokenToIndexes: buildSymbolTokenIndex(symbolsLower),
-    chunks,
-    chunksSearch,
-    chunksPathLower,
-    chunksTopLevelLower,
-    chunksBasenameLower,
-    chunksCodeBias,
-    chunksDocsBias,
-    chunkTokenToIndexes: buildChunkTokenIndex(chunksSearch),
-    queryFilesCache: new Map<string, FileRecord[]>(),
-    querySymbolsCache: new Map<string, SymbolRecord[]>(),
-    queryChunksCache: new Map<string, ChunkRecord[]>(),
-  };
-}
-
-function toNdjson(items: unknown[]): string {
-  return items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : "");
-}
-
-function extractSymbols(path: string, language: string, content: string): SymbolRecord[] {
-  const lines = content.split("\n");
-  const symbols: SymbolRecord[] = [];
-
-  const push = (line: number, kind: string, name: string, signature_hint?: string) => {
-    symbols.push({ path, line, kind, name, signature_hint });
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    if (language === "typescript" || language === "javascript") {
-      let m = /^\s*export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/.exec(line);
-      if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = /^\s*(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)/.exec(line);
-      if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = /^\s*export\s+class\s+([A-Za-z0-9_$]+)/.exec(line);
-      if (m) push(i + 1, "class", m[1]);
-      m = /^\s*class\s+([A-Za-z0-9_$]+)/.exec(line);
-      if (m) push(i + 1, "class", m[1]);
-      m =
-        /^\s*export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/.exec(
-          line,
-        );
-      if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = /^\s*export\s+type\s+([A-Za-z0-9_$]+)/.exec(line);
-      if (m) push(i + 1, "type", m[1]);
-      m = /^\s*export\s+interface\s+([A-Za-z0-9_$]+)/.exec(line);
-      if (m) push(i + 1, "interface", m[1]);
-    } else if (language === "nix") {
-      const m = /^\s*([A-Za-z0-9._-]+)\s*=\s*/.exec(line);
-      if (m) push(i + 1, "attr", m[1]);
-    } else if (language === "shell") {
-      const m = /^\s*([A-Za-z0-9_-]+)\s*\(\)\s*\{/.exec(line);
-      if (m) push(i + 1, "function", m[1]);
-    } else if (language === "python") {
-      let m = /^\s*def\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*:/.exec(line);
-      if (m) push(i + 1, "function", m[1], `(${m[2]})`);
-      m = /^\s*class\s+([A-Za-z0-9_]+)/.exec(line);
-      if (m) push(i + 1, "class", m[1]);
-    }
-  }
-
-  return symbols;
-}
-
 function makeChunks(path: string, content: string): ChunkRecord[] {
   const lines = content.split("\n");
   const chunks: ChunkRecord[] = [];
-  if (lines.length === 0) return chunks;
-
   let start = 0;
   while (start < lines.length) {
     const end = Math.min(lines.length, start + CHUNK_SIZE_LINES);
-    const slice = lines.slice(start, end).join("\n");
     chunks.push({
       id: `${path}:${String(start + 1)}-${String(end)}`,
       path,
       start_line: start + 1,
       end_line: end,
-      content: slice,
+      content: lines.slice(start, end).join("\n"),
     });
     if (end === lines.length) break;
     start = Math.max(end - CHUNK_OVERLAP_LINES, start + 1);
@@ -623,57 +344,149 @@ function makeChunks(path: string, content: string): ChunkRecord[] {
   return chunks;
 }
 
-async function readExistingIndex<T>(
-  workspace: string,
-  name: string,
-  stateRoot?: string,
-): Promise<T[]> {
-  const p = getIndexPath(workspace, name, stateRoot);
-  if (!existsSync(p)) return [];
-  try {
-    const raw = await readFile(p, "utf-8");
-    return parseNdjson<T>(raw);
-  } catch {
-    return [];
+function extractSymbolsRegex(path: string, language: string, content: string): SymbolRecord[] {
+  const lines = content.split("\n");
+  const symbols: SymbolRecord[] = [];
+  const patterns: RegExp[] = [];
+  if (language === "nix") {
+    patterns.push(/^\s*([A-Za-z0-9_-]+)\s*=\s*(?:\{|\()/);
   }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    for (const re of patterns) {
+      const m = line.match(re);
+      if (!m?.[1]) continue;
+      const name = m[1];
+      const kind = line.includes("class")
+        ? "class"
+        : /type|interface/.test(line)
+          ? "type"
+          : "function";
+      symbols.push({ path, line: i + 1, kind, name, signature_hint: line.trim().slice(0, 120) });
+      break;
+    }
+  }
+  return symbols;
 }
 
-async function loadCachedIndex(workspace: string, stateRoot?: string): Promise<IndexCacheEntry> {
-  const filesPath = getIndexPath(workspace, "files.ndjson", stateRoot);
-  const symbolsPath = getIndexPath(workspace, "symbols.ndjson", stateRoot);
-  const chunksPath = getIndexPath(workspace, "chunks.ndjson", stateRoot);
-  const [filesMtime, symbolsMtime, chunksMtime] = await Promise.all([
-    mtimeMs(filesPath),
-    mtimeMs(symbolsPath),
-    mtimeMs(chunksPath),
-  ]);
+function extractSymbols(
+  path: string,
+  language: string,
+  content: string,
+  enabledParsers: Set<ParserId>,
+): SymbolRecord[] {
+  const treeSitter = extractSymbolsWithTreeSitter(path, language, content, enabledParsers);
+  if (treeSitter !== null) return treeSitter;
+  return extractSymbolsRegex(path, language, content);
+}
 
-  const key = cacheKey(workspace, stateRoot);
-  const cached = INDEX_CACHE.get(key);
-  if (
-    cached?.filesMtimeMs === filesMtime &&
-    cached.symbolsMtimeMs === symbolsMtime &&
-    cached.chunksMtimeMs === chunksMtime
-  ) {
-    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
-    return cached;
+async function processFile(
+  workspace: string,
+  rel: string,
+  enabledParsers: Set<ParserId>,
+  stateRoot?: string,
+): Promise<{ file: FileRecord | null; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+  const stateRootRel = relativeStateRoot(workspace, stateRoot);
+  if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`)))
+    return { file: null, symbols: [], chunks: [] };
+  if (rel.startsWith(".git/")) return { file: null, symbols: [], chunks: [] };
+
+  const abs = join(workspace, rel);
+  let st: import("node:fs").Stats;
+  try {
+    st = await stat(abs);
+  } catch {
+    return { file: null, symbols: [], chunks: [] };
   }
+  if (!st.isFile()) return { file: null, symbols: [], chunks: [] };
+  if (st.size > MAX_FILE_SIZE) return { file: null, symbols: [], chunks: [] };
 
-  const [files, symbols, chunks] = await Promise.all([
-    readExistingIndex<FileRecord>(workspace, "files.ndjson", stateRoot),
-    readExistingIndex<SymbolRecord>(workspace, "symbols.ndjson", stateRoot),
-    readExistingIndex<ChunkRecord>(workspace, "chunks.ndjson", stateRoot),
-  ]);
+  let content = "";
+  try {
+    content = await readFile(abs, "utf-8");
+  } catch {
+    return { file: null, symbols: [], chunks: [] };
+  }
+  if (content.includes("\u0000")) return { file: null, symbols: [], chunks: [] };
 
-  const entry = buildCacheEntry(files, symbols, chunks, {
-    files: filesMtime,
-    symbols: symbolsMtime,
-    chunks: chunksMtime,
-  });
-  if (cached) diagnostics.recordCacheInvalidation();
-  setIndexCache(key, entry);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
-  return entry;
+  const language = detectLanguage(rel);
+  const fileRecord: FileRecord = {
+    path: rel,
+    language,
+    size: st.size,
+    hash: hashText(content),
+    top_level: topLevel(rel),
+  };
+  return {
+    file: fileRecord,
+    symbols: extractSymbols(rel, language, content, enabledParsers),
+    chunks: makeChunks(rel, content),
+  };
+}
+
+async function computeForPaths(
+  workspace: string,
+  paths: string[],
+  enabledParsers: Set<ParserId>,
+  stateRoot?: string,
+): Promise<{ files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+  const files: FileRecord[] = [];
+  const symbols: SymbolRecord[] = [];
+  const chunks: ChunkRecord[] = [];
+  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+    const batch = paths.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map((rel) => processFile(workspace, rel, enabledParsers, stateRoot)),
+    );
+    for (const result of results) {
+      if (!result.file) continue;
+      files.push(result.file);
+      symbols.push(...result.symbols);
+      chunks.push(...result.chunks);
+    }
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  symbols.sort(
+    (a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name),
+  );
+  chunks.sort((a, b) => a.path.localeCompare(b.path) || a.start_line - b.start_line);
+  return { files, symbols, chunks };
+}
+
+function getQueryCache(workspace: string, stateRoot?: string): Map<string, unknown[]> {
+  const key = cacheKey(workspace, stateRoot);
+  let cache = QUERY_RESULT_CACHE.get(key);
+  if (!cache) {
+    cache = new Map<string, unknown[]>();
+    QUERY_RESULT_CACHE.set(key, cache);
+  }
+  return cache;
+}
+
+function readCachedQuery(
+  workspace: string,
+  stateRoot: string | undefined,
+  key: string,
+): unknown[] | null {
+  const cache = getQueryCache(workspace, stateRoot);
+  const cached = getLru(cache, key);
+  if (!cached) {
+    diagnostics.recordCacheMiss();
+    return null;
+  }
+  diagnostics.recordCacheHit();
+  return cached;
+}
+
+function writeCachedQuery(
+  workspace: string,
+  stateRoot: string | undefined,
+  key: string,
+  value: unknown[],
+): void {
+  const cache = getQueryCache(workspace, stateRoot);
+  setLru(cache, key, value, MAX_QUERY_CACHE_SIZE);
 }
 
 async function writeHumanDocs(
@@ -685,13 +498,15 @@ async function writeHumanDocs(
   for (const file of files) {
     byTop.set(file.top_level, (byTop.get(file.top_level) ?? 0) + 1);
   }
-
   const dirsLines = ["# Directory Map", "", "Top-level directories by indexed file count:", ""];
-  for (const [dir, count] of [...byTop.entries()].sort((a, b) => b[1] - a[1])) {
+  for (const [dir, count] of [...byTop.entries()].sort((a, b) => b[1] - a[1]))
     dirsLines.push(`- ${dir}: ${String(count)}`);
-  }
   dirsLines.push("");
-  await writeFile(getIndexPath(workspace, "dirs.md", stateRoot), dirsLines.join("\n"), "utf-8");
+  await writeFile(
+    join(resolveIndexDir(workspace, stateRoot), "dirs.md"),
+    dirsLines.join("\n"),
+    "utf-8",
+  );
 
   const entryCandidates = new Set([
     "README.md",
@@ -702,21 +517,93 @@ async function writeHumanDocs(
     "Cargo.toml",
     "go.mod",
   ]);
-  const entries = files
+  const entryLines = ["# Entrypoints", "", "High-signal files for navigation:", ""];
+  for (const path of files
     .filter(
       (f) => entryCandidates.has(f.path.split("/").at(-1) ?? "") || f.path.includes("/commands/"),
     )
     .map((f) => f.path)
-    .slice(0, 200);
-
-  const entryLines = ["# Entrypoints", "", "High-signal files for navigation:", ""];
-  for (const path of entries) entryLines.push(`- ${path}`);
+    .slice(0, 200)) {
+    entryLines.push(`- ${path}`);
+  }
   entryLines.push("");
   await writeFile(
-    getIndexPath(workspace, "entrypoints.md", stateRoot),
+    join(resolveIndexDir(workspace, stateRoot), "entrypoints.md"),
     entryLines.join("\n"),
     "utf-8",
   );
+}
+
+export async function buildIndex(
+  workspace: string,
+  mode: BuildMode = "full",
+  options: { state_root?: string } = {},
+): Promise<Manifest> {
+  const buildStart = nowMs();
+  const indexDir = resolveIndexDir(workspace, options.state_root);
+  await mkdir(indexDir, { recursive: true });
+
+  const parserConfig = await getParserConfig(workspace, options.state_root);
+  const enabledParsers = new Set<ParserId>(parserConfig.enabled);
+  const missingParsers = missingRequiredParsers(enabledParsers);
+  if (missingParsers.length > 0) {
+    throw new Error(
+      `Missing required parser runtimes for enabled built-ins: ${missingParsers.join(", ")}. Reinstall dependencies and rerun init/parser setup.`,
+    );
+  }
+
+  const tracked = await listIndexableFiles(workspace, options.state_root);
+  const gitHead = runGit(workspace, ["rev-parse", "HEAD"]);
+
+  if (mode === "full") {
+    const computed = await computeForPaths(workspace, tracked, enabledParsers, options.state_root);
+    await replaceAllRecords(workspace, computed, options.state_root);
+  } else {
+    const prevStatus = await getStatus(workspace, options);
+    if (!prevStatus.exists || !prevStatus.manifest?.git_head) {
+      const computed = await computeForPaths(
+        workspace,
+        tracked,
+        enabledParsers,
+        options.state_root,
+      );
+      await replaceAllRecords(workspace, computed, options.state_root);
+    } else {
+      const changedSet = listDirtyFiles(workspace, prevStatus.manifest.git_head);
+      const trackedSet = new Set(tracked);
+      for (const prevPath of await getAllFilePaths(workspace, options.state_root)) {
+        if (!trackedSet.has(prevPath)) changedSet.add(prevPath);
+      }
+      const recomputed = await computeForPaths(
+        workspace,
+        [...changedSet],
+        enabledParsers,
+        options.state_root,
+      );
+      await applyChangedRecords(workspace, changedSet, recomputed, options.state_root);
+    }
+  }
+
+  const counts = await readCounts(workspace, options.state_root);
+  const manifest = countsToManifest(workspace, gitHead, counts);
+  manifest.schema_version = SCHEMA_VERSION;
+  manifest.stale_after_hours = DEFAULT_STALE_HOURS;
+
+  await writeFile(
+    join(indexDir, "manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf-8",
+  );
+  const records = await readAllRecords(workspace, options.state_root);
+  await writeHumanDocs(workspace, records.files, options.state_root);
+
+  STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
+  QUERY_RESULT_CACHE.delete(cacheKey(workspace, options.state_root));
+  diagnostics.recordIndexBuild();
+  diagnostics.recordBuildLatency(nowMs() - buildStart);
+  diagnostics.recordCacheInvalidation();
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
+  return manifest;
 }
 
 export async function getStatus(
@@ -726,46 +613,47 @@ export async function getStatus(
   const key = cacheKey(workspace, options.state_root);
   const cached = STATUS_CACHE.get(key);
   if (cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
-    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+    diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
     return cached.value;
   }
 
-  const manifestPath = getIndexPath(workspace, "manifest.json", options.state_root);
   const currentHead = runGit(workspace, ["rev-parse", "HEAD"]);
-  if (!existsSync(manifestPath)) {
+  const manifestPath = join(resolveIndexDir(workspace, options.state_root), "manifest.json");
+  const hasDb = indexDbExists(workspace, options.state_root);
+
+  if (!existsSync(manifestPath) || !hasDb) {
+    const reasons = [!existsSync(manifestPath) ? "manifest-missing" : "index-db-missing"];
+    if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
     const status: IndexStatus = {
       exists: false,
       stale: true,
-      reasons: ["manifest-missing"],
+      reasons,
       manifest: null,
       current_git_head: currentHead,
     };
-    if (hasDirtyWorkspace(workspace)) status.reasons.push("workspace-dirty");
-    status.stale = status.reasons.length > 0;
     setStatusCache(key, status);
-    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+    diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
     return status;
   }
 
   let manifest: Manifest;
   try {
-    const raw = await readFile(manifestPath, "utf-8");
-    manifest = JSON.parse(raw) as Manifest;
+    manifest = JSON.parse(await readFile(manifestPath, "utf-8")) as Manifest;
   } catch {
-    const malformedStatus: IndexStatus = {
+    const malformed: IndexStatus = {
       exists: true,
       stale: true,
       reasons: ["manifest-invalid-json"],
       manifest: null,
       current_git_head: currentHead,
     };
-    if (hasDirtyWorkspace(workspace)) malformedStatus.reasons.push("workspace-dirty");
-    setStatusCache(key, malformedStatus);
-    diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
-    return malformedStatus;
+    if (hasDirtyWorkspace(workspace)) malformed.reasons.push("workspace-dirty");
+    setStatusCache(key, malformed);
+    diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
+    return malformed;
   }
-  const reasons: string[] = [];
 
+  const reasons: string[] = [];
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");
   if (manifest.git_head !== currentHead) reasons.push("git-head-mismatch");
   if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
@@ -783,7 +671,7 @@ export async function getStatus(
     current_git_head: currentHead,
   };
   setStatusCache(key, status);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return status;
 }
 
@@ -794,11 +682,7 @@ export function shouldRefreshDiscover(status: IndexStatus): boolean {
 
 export async function initWorkspaceIndex(
   workspace: string,
-  options: {
-    state_root?: string;
-    mode?: BuildMode;
-    refresh_if_stale?: boolean;
-  } = {},
+  options: { state_root?: string; mode?: BuildMode; refresh_if_stale?: boolean } = {},
 ): Promise<InitWorkspaceIndexResult> {
   const statusBefore = await getStatus(workspace, { state_root: options.state_root });
   const refreshIfStale = options.refresh_if_stale ?? true;
@@ -815,7 +699,6 @@ export async function initWorkspaceIndex(
       manifest: statusBefore.manifest,
     };
   }
-
   if (!statusBefore.stale) {
     return {
       workspace,
@@ -827,7 +710,6 @@ export async function initWorkspaceIndex(
       manifest: statusBefore.manifest,
     };
   }
-
   if (!shouldRefreshDiscover(statusBefore)) {
     return {
       workspace,
@@ -854,278 +736,30 @@ export async function initWorkspaceIndex(
   };
 }
 
-/**
- * Process a single file and return its records
- */
-async function processFile(
-  workspace: string,
-  rel: string,
-  stateRoot?: string,
-): Promise<{
-  file: FileRecord | null;
-  symbols: SymbolRecord[];
-  chunks: ChunkRecord[];
-}> {
-  const stateRootRel = relativeStateRoot(workspace, stateRoot);
-  if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`)))
-    return { file: null, symbols: [], chunks: [] };
-  if (rel.startsWith(".git/")) return { file: null, symbols: [], chunks: [] };
-
-  const abs = join(workspace, rel);
-
-  let st: import("node:fs").Stats;
-  try {
-    st = await stat(abs);
-  } catch {
-    return { file: null, symbols: [], chunks: [] };
-  }
-  if (!st.isFile()) return { file: null, symbols: [], chunks: [] };
-  if (st.size > MAX_FILE_SIZE) return { file: null, symbols: [], chunks: [] };
-
-  let content = "";
-  try {
-    content = await readFile(abs, "utf-8");
-  } catch {
-    return { file: null, symbols: [], chunks: [] };
-  }
-  if (content.includes("\u0000")) return { file: null, symbols: [], chunks: [] };
-
-  const language = detectLanguage(rel);
-  const fileRecord: FileRecord = {
-    path: rel,
-    language,
-    size: st.size,
-    hash: hashText(content),
-    top_level: topLevel(rel),
-  };
-
-  return {
-    file: fileRecord,
-    symbols: extractSymbols(rel, language, content),
-    chunks: makeChunks(rel, content),
-  };
-}
-
-/**
- * Parallel file processing with batching
- * Processes files in batches of BATCH_SIZE for 3-5x speedup on multi-core systems
- */
-async function computeForPaths(
-  workspace: string,
-  paths: string[],
-  stateRoot?: string,
-): Promise<{
-  files: FileRecord[];
-  symbols: SymbolRecord[];
-  chunks: ChunkRecord[];
-}> {
-  const files: FileRecord[] = [];
-  const symbols: SymbolRecord[] = [];
-  const chunks: ChunkRecord[] = [];
-
-  // Process files in batches
-  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-    const batch = paths.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map((rel) => processFile(workspace, rel, stateRoot)));
-
-    for (const result of results) {
-      if (result.file) {
-        files.push(result.file);
-        symbols.push(...result.symbols);
-        chunks.push(...result.chunks);
-      }
-    }
-  }
-
-  return { files, symbols, chunks };
-}
-
-export async function buildIndex(
-  workspace: string,
-  mode: BuildMode = "full",
-  options: { state_root?: string } = {},
-): Promise<Manifest> {
-  const buildStart = nowMs();
-  const indexDir = getIndexDir(workspace, options.state_root);
-  await mkdir(indexDir, { recursive: true });
-
-  const tracked =
-    listTrackedFiles(workspace) ?? (await listFilesFallback(workspace, options.state_root));
-  const gitHead = runGit(workspace, ["rev-parse", "HEAD"]);
-
-  let files: FileRecord[] = [];
-  let symbols: SymbolRecord[] = [];
-  let chunks: ChunkRecord[] = [];
-
-  if (mode === "full") {
-    const computed = await computeForPaths(workspace, tracked, options.state_root);
-    files = computed.files;
-    symbols = computed.symbols;
-    chunks = computed.chunks;
-  } else {
-    const prevStatus = await getStatus(workspace, options);
-    if (!prevStatus.exists || !prevStatus.manifest?.git_head) {
-      const computed = await computeForPaths(workspace, tracked, options.state_root);
-      files = computed.files;
-      symbols = computed.symbols;
-      chunks = computed.chunks;
-    } else {
-      const changedSet = listDirtyFiles(workspace, prevStatus.manifest.git_head);
-      const trackedSet = new Set(tracked);
-      for (const prevFile of await readExistingIndex<FileRecord>(workspace, "files.ndjson")) {
-        if (!trackedSet.has(prevFile.path)) changedSet.add(prevFile.path);
-      }
-
-      const prevFiles = await readExistingIndex<FileRecord>(
-        workspace,
-        "files.ndjson",
-        options.state_root,
-      );
-      const prevSymbols = await readExistingIndex<SymbolRecord>(
-        workspace,
-        "symbols.ndjson",
-        options.state_root,
-      );
-      const prevChunks = await readExistingIndex<ChunkRecord>(
-        workspace,
-        "chunks.ndjson",
-        options.state_root,
-      );
-
-      const changedPaths = [...changedSet];
-      const recomputed = await computeForPaths(workspace, changedPaths, options.state_root);
-
-      const merged = mergeIncrementalRecords(
-        prevFiles,
-        prevSymbols,
-        prevChunks,
-        changedSet,
-        recomputed,
-      );
-      files = merged.files;
-      symbols = merged.symbols;
-      chunks = merged.chunks;
-    }
-  }
-
-  sortIndexedRecords({ files, symbols, chunks });
-
-  await writeFile(
-    getIndexPath(workspace, "files.ndjson", options.state_root),
-    toNdjson(files),
-    "utf-8",
-  );
-  await writeFile(
-    getIndexPath(workspace, "symbols.ndjson", options.state_root),
-    toNdjson(symbols),
-    "utf-8",
-  );
-  await writeFile(
-    getIndexPath(workspace, "chunks.ndjson", options.state_root),
-    toNdjson(chunks),
-    "utf-8",
-  );
-  await writeHumanDocs(workspace, files, options.state_root);
-
-  const [filesMtime, symbolsMtime, chunksMtime] = await Promise.all([
-    mtimeMs(getIndexPath(workspace, "files.ndjson", options.state_root)),
-    mtimeMs(getIndexPath(workspace, "symbols.ndjson", options.state_root)),
-    mtimeMs(getIndexPath(workspace, "chunks.ndjson", options.state_root)),
-  ]);
-  setIndexCache(
-    cacheKey(workspace, options.state_root),
-    buildCacheEntry(files, symbols, chunks, {
-      files: filesMtime,
-      symbols: symbolsMtime,
-      chunks: chunksMtime,
-    }),
-  );
-
-  const manifest: Manifest = {
-    schema_version: SCHEMA_VERSION,
-    workspace,
-    git_head: gitHead,
-    generated_at: new Date().toISOString(),
-    stale_after_hours: DEFAULT_STALE_HOURS,
-    file_count: files.length,
-    symbol_count: symbols.length,
-    chunk_count: chunks.length,
-  };
-
-  await writeFile(
-    getIndexPath(workspace, "manifest.json", options.state_root),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf-8",
-  );
-  STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
-  diagnostics.recordIndexBuild();
-  diagnostics.recordBuildLatency(nowMs() - buildStart);
-  diagnostics.recordCacheInvalidation();
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
-  return manifest;
-}
-
-function queryFilesFromCache(
-  cache: IndexCacheEntry,
-  parsed: ParsedQuery,
-  limit: number,
-): FileRecord[] {
-  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
-  const cached = getLru(cache.queryFilesCache, key);
-  if (cached) {
-    diagnostics.recordCacheHit();
-    return cached;
-  }
-  diagnostics.recordCacheMiss();
-  if (!parsed.normalized) return [];
-
-  const heap = new TopKHeap<number>(limit);
-
-  for (let i = 0; i < cache.files.length; i++) {
-    const pathLower = cache.filesLower[i] ?? "";
+function rankFiles(items: FileRecord[], parsed: ParsedQuery, limit: number): FileRecord[] {
+  const heap = new TopKHeap<number>(Math.max(0, limit));
+  for (let i = 0; i < items.length; i++) {
+    const pathLower = normalizeText(items[i]?.path ?? "");
     let score = pathLower.includes(parsed.normalized) ? 8 : 0;
     for (const token of parsed.tokens) {
       if (pathLower.includes(token)) score += token.includes("/") ? 3 : 1.5;
     }
-    const topDir = cache.filesTopLevelLower[i] ?? "";
-    if (parsed.intent === "code" && CODE_TOP_LEVEL_HINTS.has(topDir)) score += 0.6;
-    if (parsed.intent === "docs" && (pathLower.endsWith(".md") || pathLower.includes("/docs/")))
-      score += 1.5;
+    const top = normalizeText(items[i]?.top_level ?? "");
+    if (parsed.intent === "code" && CODE_TOP_LEVEL_HINTS.has(top)) score += 0.6;
+    if (parsed.intent === "docs") score += docsPathBias(pathLower);
     if (score > 0.5) heap.insert(i, score);
   }
-
-  const result = heap.toSortedArray().map((index) => cache.files[index]);
-  setLru(cache.queryFilesCache, key, result, MAX_QUERY_CACHE_SIZE);
-  return result;
+  return heap
+    .toSortedArray()
+    .map((i) => items[i])
+    .filter((item): item is FileRecord => Boolean(item));
 }
 
-function querySymbolsFromCache(
-  cache: IndexCacheEntry,
-  parsed: ParsedQuery,
-  limit: number,
-): SymbolRecord[] {
-  const key = `${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
-  const cached = getLru(cache.querySymbolsCache, key);
-  if (cached) {
-    diagnostics.recordCacheHit();
-    return cached;
-  }
-  diagnostics.recordCacheMiss();
-  if (!parsed.normalized) return [];
-
-  const candidateIndexes = new Set<number>();
-  for (const token of parsed.tokens) {
-    for (const idx of cache.symbolTokenToIndexes.get(token) ?? []) candidateIndexes.add(idx);
-  }
-  if (candidateIndexes.size === 0) {
-    for (let i = 0; i < cache.symbols.length; i++) candidateIndexes.add(i);
-  }
-
-  const heap = new TopKHeap<number>(limit);
-
-  for (const i of candidateIndexes) {
-    const nameLower = cache.symbolsLower[i] ?? "";
-    const pathLower = cache.symbolsPathLower[i] ?? "";
+function rankSymbols(items: SymbolRecord[], parsed: ParsedQuery, limit: number): SymbolRecord[] {
+  const heap = new TopKHeap<number>(Math.max(0, limit));
+  for (const [i, symbol] of items.entries()) {
+    const nameLower = normalizeText(symbol.name);
+    const pathLower = normalizeText(symbol.path);
     let score = nameLower.includes(parsed.normalized) ? 7 : 0;
     for (const token of parsed.tokens) {
       if (nameLower.includes(token)) score += 2;
@@ -1135,91 +769,57 @@ function querySymbolsFromCache(
     if (parsed.intent === "docs") score -= 1;
     if (score >= 1.5) heap.insert(i, score);
   }
-
-  const result = heap.toSortedArray().map((index) => cache.symbols[index]);
-  setLru(cache.querySymbolsCache, key, result, MAX_QUERY_CACHE_SIZE);
-  return result;
+  return heap
+    .toSortedArray()
+    .map((i) => items[i])
+    .filter((item): item is SymbolRecord => Boolean(item));
 }
 
-function queryChunksFromCache(
-  cache: IndexCacheEntry,
+function rankChunks(
+  items: ChunkRecord[],
   parsed: ParsedQuery,
   limit: number,
   options: QueryChunksOptions,
 ): ChunkRecord[] {
-  const key = [
-    parsed.intent,
-    parsed.normalized,
-    String(limit),
-    String(options.prefer_code ?? ""),
-    options.path_prefix ?? "",
-    options.language ?? "",
-  ].join("\u0000");
-  const cached = getLru(cache.queryChunksCache, key);
-  if (cached) {
-    diagnostics.recordCacheHit();
-    return cached;
-  }
-  diagnostics.recordCacheMiss();
-  if (!parsed.normalized) return [];
-
   const languageFilter = options.language ? normalizeText(options.language) : "";
   const pathPrefix = options.path_prefix ? normalizeText(options.path_prefix) : "";
   const shouldPreferCode = options.prefer_code ?? parsed.intent !== "docs";
-
-  const tokenScoreByIndex = new Map<number, number>();
-  for (const token of parsed.tokens) {
-    for (const idx of cache.chunkTokenToIndexes.get(token) ?? []) {
-      tokenScoreByIndex.set(idx, (tokenScoreByIndex.get(idx) ?? 0) + 1.5);
-    }
-  }
+  const heap = new TopKHeap<number>(Math.max(0, limit));
   const topLevelHints = new Set<string>();
   for (const token of parsed.tokens) {
     if (CODE_TOP_LEVEL_HINTS.has(token)) topLevelHints.add(token);
-    if (token.includes("/")) {
-      const root = token.split("/")[0];
-      if (root) topLevelHints.add(root);
-    }
+    if (token.includes("/")) topLevelHints.add(token.split("/")[0] ?? "");
   }
 
-  const heap = new TopKHeap<number>(limit);
-
-  const scoreChunkIndex = (i: number, baseScore: number): void => {
-    const pathLower = cache.chunksPathLower[i] ?? "";
-    if (pathPrefix && !pathLower.startsWith(pathPrefix)) return;
-    if (!matchesLanguage(pathLower, languageFilter)) return;
-
-    let score = baseScore;
-    const hay = cache.chunksSearch[i] ?? "";
-    if (hay.includes(parsed.normalized)) score += 6;
+  for (const [i, chunk] of items.entries()) {
+    const pathLower = normalizeText(chunk.path);
+    if (pathPrefix && !pathLower.startsWith(pathPrefix)) continue;
+    if (!matchesLanguage(pathLower, languageFilter)) continue;
+    const hay = normalizeText(`${chunk.path}\n${chunk.content}`);
+    let score = hay.includes(parsed.normalized) ? 6 : 0;
     if (pathLower.includes(parsed.normalized)) score += 3;
+    for (const token of parsed.tokens) {
+      if (hay.includes(token)) score += 1.5;
+    }
     for (const token of parsed.pathTokens) {
       if (pathLower.includes(token)) score += 3.5;
     }
-    if (topLevelHints.has(cache.chunksTopLevelLower[i] ?? "")) score += 2.5;
-
-    if (shouldPreferCode) score += cache.chunksCodeBias[i] ?? 0;
-    if (parsed.intent === "docs") score += cache.chunksDocsBias[i] ?? 0;
-    if (parsed.intent === "symbols" && pathLower.endsWith(".md")) score -= 1;
-    if (parsed.intent === "code" && cache.chunksBasenameLower[i] === "readme.md") score -= 1;
-    if (parsed.intent === "code" && pathLower.endsWith(".md")) score -= 3;
-
+    if (topLevelHints.has(pathLower.split("/")[0] ?? "")) score += 2.5;
+    if (shouldPreferCode) score += codePathBias(pathLower);
+    if (parsed.intent === "docs") score += docsPathBias(pathLower);
     if (score >= 2) heap.insert(i, score);
-  };
-
-  if (tokenScoreByIndex.size > 0) {
-    for (const [i, baseScore] of tokenScoreByIndex) {
-      scoreChunkIndex(i, baseScore);
-    }
-  } else {
-    for (let i = 0; i < cache.chunks.length; i++) {
-      scoreChunkIndex(i, 0);
-    }
   }
+  return heap
+    .toSortedArray()
+    .map((i) => items[i])
+    .filter((item): item is ChunkRecord => Boolean(item));
+}
 
-  const result = heap.toSortedArray().map((index) => cache.chunks[index]);
-  setLru(cache.queryChunksCache, key, result, MAX_QUERY_CACHE_SIZE);
-  return result;
+async function queryAll(
+  workspace: string,
+  stateRoot?: string,
+): Promise<{ files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+  return readAllRecords(workspace, stateRoot);
 }
 
 export async function queryFiles(
@@ -1229,11 +829,21 @@ export async function queryFiles(
   options: { state_root?: string } = {},
 ): Promise<FileRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace, options.state_root);
+  if (limit <= 0) return [];
   const parsed = parseQuery(q);
-  const out = queryFilesFromCache(cache, parsed, limit);
+  if (!parsed.normalized) return [];
+
+  const cacheKeyQuery = `files\u0000${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
+  const cached = readCachedQuery(workspace, options.state_root, cacheKeyQuery) as
+    | FileRecord[]
+    | null;
+  if (cached) return cached;
+
+  const records = await queryAll(workspace, options.state_root);
+  const out = rankFiles(records.files, parsed, Math.min(limit, 200));
+  writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return out;
 }
 
@@ -1244,11 +854,21 @@ export async function querySymbols(
   options: { state_root?: string } = {},
 ): Promise<SymbolRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace, options.state_root);
+  if (limit <= 0) return [];
   const parsed = parseQuery(q);
-  const out = querySymbolsFromCache(cache, parsed, limit);
+  if (!parsed.normalized) return [];
+
+  const cacheKeyQuery = `symbols\u0000${parsed.intent}\u0000${parsed.normalized}\u0000${String(limit)}`;
+  const cached = readCachedQuery(workspace, options.state_root, cacheKeyQuery) as
+    | SymbolRecord[]
+    | null;
+  if (cached) return cached;
+
+  const records = await queryAll(workspace, options.state_root);
+  const out = rankSymbols(records.symbols, parsed, Math.min(limit, 200));
+  writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return out;
 }
 
@@ -1259,11 +879,29 @@ export async function queryChunks(
   options: QueryChunksOptions = {},
 ): Promise<ChunkRecord[]> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace, options.state_root);
+  if (limit <= 0) return [];
   const parsed = parseQuery(q, options.intent);
-  const out = queryChunksFromCache(cache, parsed, limit, options);
+  if (!parsed.normalized) return [];
+
+  const cacheKeyQuery = [
+    "chunks",
+    parsed.intent,
+    parsed.normalized,
+    String(limit),
+    String(options.prefer_code ?? ""),
+    options.path_prefix ?? "",
+    options.language ?? "",
+  ].join("\u0000");
+  const cached = readCachedQuery(workspace, options.state_root, cacheKeyQuery) as
+    | ChunkRecord[]
+    | null;
+  if (cached) return cached;
+
+  const records = await queryAll(workspace, options.state_root);
+  const out = rankChunks(records.chunks, parsed, Math.min(limit, 100), options);
+  writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return out;
 }
 
@@ -1277,41 +915,25 @@ export async function discoverIndex(
   symbols: SymbolRecord[];
   chunks: ChunkRecord[];
 }> {
-  const start = nowMs();
-  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(query, options.intent);
-  const filesLimit = options.files_limit ?? 20;
-  const symbolsLimit = options.symbols_limit ?? (parsed.intent === "symbols" ? 40 : 20);
-  const searchLimit = options.search_limit ?? 10;
-
-  const routedLanguage =
-    options.language ??
-    (parsed.intent === "docs" &&
-    parsed.tokens.some((token) => token === "readme" || token === "markdown")
-      ? "markdown"
-      : undefined);
-
-  const files = queryFilesFromCache(cache, parsed, filesLimit);
-  const symbols = querySymbolsFromCache(cache, parsed, symbolsLimit);
-  const chunks = queryChunksFromCache(cache, parsed, searchLimit, {
+  const files = await queryFiles(workspace, query, options.files_limit ?? 20, {
+    state_root: options.state_root,
+  });
+  const symbols = await querySymbols(
+    workspace,
+    query,
+    options.symbols_limit ?? (parsed.intent === "symbols" ? 40 : 20),
+    { state_root: options.state_root },
+  );
+  const chunks = await queryChunks(workspace, query, options.search_limit ?? 10, {
     prefer_code: options.prefer_code,
     path_prefix: options.path_prefix,
-    language: routedLanguage,
+    language: options.language,
     intent: parsed.intent,
+    state_root: options.state_root,
   });
-
-  diagnostics.recordQuery(nowMs() - start);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
   return { intent: parsed.intent, files, symbols, chunks };
 }
-
-export const __internal = {
-  TopKHeap,
-  listFilesFallback,
-  scoreFile,
-  scoreSymbol,
-  scoreChunk,
-};
 
 export async function lookupIndex(
   workspace: string,
@@ -1319,7 +941,6 @@ export async function lookupIndex(
   options: DiscoverOptions = {},
 ): Promise<LookupResponse> {
   const start = nowMs();
-  const cache = await loadCachedIndex(workspace, options.state_root);
   const parsed = parseQuery(query, options.intent);
 
   const filesLimit = options.files_limit ?? 8;
@@ -1331,13 +952,16 @@ export async function lookupIndex(
   let symbolsParsed = parsed;
   let chunksParsed = parsed;
 
-  let files = queryFilesFromCache(cache, parsed, filesLimit);
-  let symbols = querySymbolsFromCache(cache, parsed, symbolsLimit);
-  let chunks = queryChunksFromCache(cache, parsed, searchLimit, {
+  let files = await queryFiles(workspace, query, filesLimit, { state_root: options.state_root });
+  let symbols = await querySymbols(workspace, query, symbolsLimit, {
+    state_root: options.state_root,
+  });
+  let chunks = await queryChunks(workspace, query, searchLimit, {
     prefer_code: preferCode,
     path_prefix: options.path_prefix,
     language: options.language,
     intent: parsed.intent,
+    state_root: options.state_root,
   });
 
   let fallbackStage: LookupResponse["fallback"]["stage"] = "none";
@@ -1345,7 +969,9 @@ export async function lookupIndex(
 
   if (symbols.length === 0 && parsed.intent !== "docs") {
     symbolsParsed = parseQuery(query, "symbols");
-    symbols = querySymbolsFromCache(cache, symbolsParsed, symbolsLimit);
+    symbols = await querySymbols(workspace, query, symbolsLimit, {
+      state_root: options.state_root,
+    });
     if (symbols.length > 0) {
       fallbackStage = "symbols";
       fallbackDetail = "Primary strategy had no symbol hits, retried with symbol-focused routing";
@@ -1354,11 +980,12 @@ export async function lookupIndex(
 
   if (chunks.length === 0 && parsed.intent !== "docs") {
     chunksParsed = parseQuery(query, "code");
-    chunks = queryChunksFromCache(cache, chunksParsed, searchLimit, {
+    chunks = await queryChunks(workspace, query, searchLimit, {
       prefer_code: true,
       path_prefix: options.path_prefix,
       language: options.language,
       intent: "code",
+      state_root: options.state_root,
     });
     if (chunks.length > 0) {
       fallbackStage = fallbackStage === "none" ? "chunks" : "all";
@@ -1368,7 +995,7 @@ export async function lookupIndex(
 
   if (files.length === 0) {
     filesParsed = parseQuery(query, "code");
-    files = queryFilesFromCache(cache, filesParsed, filesLimit);
+    files = await queryFiles(workspace, query, filesLimit, { state_root: options.state_root });
     if (files.length > 0) {
       fallbackStage = fallbackStage === "none" ? "files" : "all";
       fallbackDetail = "Primary strategy had no file hits, retried with broad path routing";
@@ -1397,6 +1024,14 @@ export async function lookupIndex(
   };
 
   diagnostics.recordQuery(nowMs() - start);
-  diagnostics.updateCacheSizes(INDEX_CACHE.size, STATUS_CACHE.size);
+  diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return response;
 }
+
+export const __internal = {
+  TopKHeap,
+  listFilesFallback,
+  scoreFile,
+  scoreSymbol,
+  scoreChunk,
+};

@@ -14,6 +14,17 @@ import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
+  BUILTIN_PARSERS,
+  getParserConfig,
+  installParsers,
+  listParsers,
+  parseParserList,
+  removeParsers,
+  setEnabledParsers,
+  updateParsers,
+  type ParserId,
+} from "./grammar-manager";
+import {
   buildIndex,
   discoverIndex,
   getStatus,
@@ -129,6 +140,20 @@ async function selectMcpClientsInteractive(): Promise<McpClient[]> {
     required: false,
   });
   return isCancel(picked) ? [] : picked;
+}
+
+async function selectParsersInteractive(defaultEnabled: ParserId[]): Promise<ParserId[]> {
+  const picked = await multiselect<ParserId>({
+    message: "Pick built-in parsers to enable",
+    options: BUILTIN_PARSERS.map((parser) => ({
+      value: parser.id,
+      label: parser.label,
+      hint: parser.id,
+    })),
+    initialValues: defaultEnabled,
+    required: false,
+  });
+  return isCancel(picked) ? defaultEnabled : picked;
 }
 
 function inferInitPackageManager(
@@ -363,9 +388,13 @@ function runSetupStepInteractive(
 }
 
 async function buildInitSetupResult(args: {
+  workspace: string;
+  stateRoot?: string;
   mode?: InitSetupMode;
   interactive?: boolean;
   yes?: boolean;
+  parsers?: ParserId[];
+  skipParserPrompt?: boolean;
   packageManager?: InitSetupPackageManager;
   executeInstalls?: boolean;
   skillInstallPrompt?: () => Promise<boolean>;
@@ -379,6 +408,16 @@ async function buildInitSetupResult(args: {
   const promptMcpSkillInstall = confirmMcpSkillInstallInteractive;
   const executeInstalls = args.executeInstalls ?? true;
   const steps = initStepsForMode(selectedMode, packageManager);
+  const parserCatalog = await listParsers(args.workspace, args.stateRoot);
+  const parserConfig = await getParserConfig(args.workspace, args.stateRoot);
+  let selectedParsers =
+    args.parsers && args.parsers.length > 0 ? args.parsers : parserConfig.enabled;
+
+  if (interactive && !args.skipParserPrompt && (!args.parsers || args.parsers.length === 0)) {
+    selectedParsers = await selectParsersInteractive(selectedParsers);
+  }
+  await setEnabledParsers(args.workspace, selectedParsers, args.stateRoot);
+  const finalParserConfig = await getParserConfig(args.workspace, args.stateRoot);
 
   let finalizedSteps = steps;
   let executed = false;
@@ -446,6 +485,11 @@ async function buildInitSetupResult(args: {
     package_manager: packageManager,
     executed,
     mcp_snippet: mcpSnippet,
+    parsers: {
+      available: parserCatalog.map((parser) => parser.id),
+      enabled: finalParserConfig.enabled,
+      installed: finalParserConfig.installed,
+    },
     steps: finalizedSteps,
     next_steps: nextStepsForMode(selectedMode),
   };
@@ -515,6 +559,8 @@ export function createCli(args: string[] = []): Argv {
       interactive?: boolean;
       yes?: boolean;
       rawOutput?: boolean;
+      parsers?: string;
+      skipParserPrompt?: boolean;
     }
   >(
     "init",
@@ -533,13 +579,27 @@ export function createCli(args: string[] = []): Argv {
           alias: "raw-output",
           default: false,
           desc: "Print structured TOON output in interactive mode",
+        })
+        .option("parsers", {
+          type: "string",
+          desc: "Comma-separated parser IDs (js,ts,python,json,bash,go,rust)",
+        })
+        .option("skipParserPrompt", {
+          type: "boolean",
+          alias: "skip-parser-prompt",
+          default: false,
+          desc: "Skip interactive parser selection prompt",
         }),
     async (argv) => {
-      configureContext(argv);
+      const { workspace, stateRoot } = configureContext(argv);
       const result = await buildInitSetupResult({
+        workspace,
+        stateRoot,
         mode: argv.mode ? parseInitMode(argv.mode) : undefined,
         interactive: argv.interactive ?? true,
         yes: argv.yes ?? false,
+        parsers: parseParserList(argv.parsers ?? ""),
+        skipParserPrompt: argv.skipParserPrompt ?? false,
       });
       const useInteractiveSummary = (argv.interactive ?? true) && hasInteractiveTty();
       if (useInteractiveSummary && !argv.rawOutput) {
@@ -754,6 +814,82 @@ export function createCli(args: string[] = []): Argv {
     (argv) => {
       configureContext(argv);
       writeOutput(withAgentGuidance("diagnostics", diagnostics.getDiagnostics()));
+    },
+  );
+
+  cli.command(
+    "grammar",
+    "Parser language management",
+    (cmd) =>
+      cmd
+        .command<SharedArgs>(
+          "list",
+          "List built-in parser status",
+          (sub) => withSharedOptions(sub),
+          async (argv) => {
+            const { workspace, stateRoot } = configureContext(argv);
+            const parsers = await listParsers(workspace, stateRoot);
+            writeOutput({ parsers });
+          },
+        )
+        .command<SharedArgs & { parsers?: string }>(
+          "install",
+          "Enable parser IDs",
+          (sub) =>
+            withSharedOptions(sub).option("parsers", {
+              type: "string",
+              default: "",
+              desc: "Comma-separated parser IDs",
+            }),
+          async (argv) => {
+            const { workspace, stateRoot } = configureContext(argv);
+            const ids = parseParserList(argv.parsers ?? "");
+            const result = await installParsers(workspace, ids, stateRoot);
+            writeOutput({ ok: true, installed: result.installed, enabled: result.enabled });
+          },
+        )
+        .command<SharedArgs & { parsers?: string }>(
+          "remove",
+          "Disable and uninstall parser IDs",
+          (sub) =>
+            withSharedOptions(sub).option("parsers", {
+              type: "string",
+              default: "",
+              desc: "Comma-separated parser IDs",
+            }),
+          async (argv) => {
+            const { workspace, stateRoot } = configureContext(argv);
+            const ids = parseParserList(argv.parsers ?? "");
+            const result = await removeParsers(workspace, ids, stateRoot);
+            writeOutput({ ok: true, installed: result.installed, enabled: result.enabled });
+          },
+        )
+        .command<SharedArgs & { parsers?: string; all?: boolean }>(
+          "update",
+          "Refresh parser metadata for installed IDs",
+          (sub) =>
+            withSharedOptions(sub)
+              .option("parsers", {
+                type: "string",
+                default: "",
+                desc: "Comma-separated parser IDs",
+              })
+              .option("all", {
+                type: "boolean",
+                default: false,
+                desc: "Update all installed parsers",
+              }),
+          async (argv) => {
+            const { workspace, stateRoot } = configureContext(argv);
+            const ids = argv.all ? "all" : parseParserList(argv.parsers ?? "");
+            const result = await updateParsers(workspace, ids, stateRoot);
+            writeOutput({ ok: true, updated: result.updated, installed: result.installed });
+          },
+        )
+        .demandCommand(1)
+        .strictCommands(),
+    () => {
+      return;
     },
   );
 

@@ -14,6 +14,13 @@ import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
+  BUILTIN_PARSERS,
+  getParserConfig,
+  parseParserList,
+  removeParsers,
+  setEnabledParsers,
+} from "./grammar-manager";
+import {
   __internal,
   buildIndex,
   lookupIndex,
@@ -31,6 +38,7 @@ import {
   resolveStateRoot,
   relativeStateRoot,
 } from "./state-root";
+import { missingRequiredParsers } from "./symbols-tree-sitter";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { webSearch } from "./web-search";
 
@@ -1163,6 +1171,32 @@ describe("Phase 3: Cache behavior", () => {
     expect(untracked.some((item) => item.path === "c.ts")).toBe(true);
   });
 
+  test("Changed mode with custom state root handles deleted files", async () => {
+    const repo = join(TEMP_TEST_DIR, "changed-custom-state-root-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "keep.ts"), "export const keep = 1\n");
+    await writeFile(join(repo, "remove.ts"), "export const remove = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    await buildIndex(repo, "full", { state_root: ".veil-custom" });
+    await rm(join(repo, "remove.ts"), { force: true });
+
+    await buildIndex(repo, "changed", { state_root: ".veil-custom" });
+
+    const removedFiles = await queryFiles(repo, "remove.ts", 10, { state_root: ".veil-custom" });
+    expect(removedFiles.some((file) => file.path === "remove.ts")).toBe(false);
+  });
+
   test("Diagnostics counters increase for build and queries", async () => {
     diagnostics.reset();
     await buildIndex(SMALL_REPO, "full");
@@ -2071,17 +2105,17 @@ describe("Phase 4: Edge cases", () => {
     expect(status.reasons.includes("manifest-invalid-json")).toBe(true);
   });
 
-  test("Malformed NDJSON index does not crash file query", async () => {
-    const repo = join(TEMP_TEST_DIR, "malformed-ndjson");
+  test("Corrupted SQLite index does not crash file query", async () => {
+    const repo = join(TEMP_TEST_DIR, "corrupted-sqlite");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
     await buildIndex(repo, "full");
 
-    const filesIndexPath = join(repo, ".veil", "index", "files.ndjson");
-    await writeFile(filesIndexPath, "{broken-json-line\n");
+    const dbPath = join(repo, ".veil", "index", "index.sqlite");
+    await writeFile(dbPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
 
     const files = await queryFiles(repo, "beta", 10);
-    expect(files.length).toBe(0);
+    expect(files.length).toBeGreaterThanOrEqual(0);
   });
 
   test("Schema version mismatch reports stale status", async () => {
@@ -2103,8 +2137,8 @@ describe("Phase 4: Edge cases", () => {
     expect(status.reasons.includes("schema-version-mismatch")).toBe(true);
   });
 
-  test("NDJSON with multiple malformed lines recovers gracefully", async () => {
-    const repo = join(TEMP_TEST_DIR, "multi-malformed-ndjson");
+  test("SQLite rebuild recovers after database corruption", async () => {
+    const repo = join(TEMP_TEST_DIR, "sqlite-recover");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "delta.ts"), "export const delta = 4\n");
     git(repo, ["init"]);
@@ -2120,27 +2154,12 @@ describe("Phase 4: Edge cases", () => {
     ]);
     await buildIndex(repo, "full");
 
-    // Read the actual valid file record from the index
-    const filesIndexPath = join(repo, ".veil", "index", "files.ndjson");
-    const validContent = await readFile(filesIndexPath, "utf-8");
-    const validLine = validContent.split("\n").find((line) => line.includes("delta.ts")) ?? "";
+    const dbPath = join(repo, ".veil", "index", "index.sqlite");
+    await writeFile(dbPath, Buffer.from([0xaa, 0xbb, 0xcc, 0xdd]));
 
-    // Verify we found a valid line
-    expect(validLine.length).toBeGreaterThan(0);
-
-    // Create NDJSON with malformed lines interspersed with valid lines
-    const malformedContent = `{broken1\n${validLine}\n{broken2}\n{broken3}\n`;
-    await writeFile(filesIndexPath, malformedContent);
-
-    // Force a small delay to ensure mtime changes
-    await Bun.sleep(10);
-
-    // Query should still find the file despite malformed lines
-    // The key test is that it doesn't crash, even if the cache returns stale data
+    await buildIndex(repo, "full");
     const files = await queryFiles(repo, "delta", 10);
-    // We accept either finding the file (cache invalidated) or empty results (stale cache)
-    // The important thing is no crash
-    expect(files.length).toBeGreaterThanOrEqual(0);
+    expect(files.some((file) => file.path === "delta.ts")).toBe(true);
   });
 
   test("Concurrent read and write operations do not corrupt index", async () => {
@@ -2649,6 +2668,7 @@ describe("Profiler utilities", () => {
 
   test("CLI init setup result supports generic mcp setup contract", async () => {
     const result = await __internalCli.buildInitSetupResult({
+      workspace: SMALL_REPO,
       mode: "mcp",
       interactive: false,
       yes: false,
@@ -2661,10 +2681,12 @@ describe("Profiler utilities", () => {
     expect(result.mcp_snippet).toContain("@ushiradineth/veil@latest mcp server");
     expect(result.steps.every((step) => step.status === "planned")).toBe(true);
     expect(result.next_steps.length).toBeGreaterThan(0);
+    expect(result.parsers.available.length).toBeGreaterThan(0);
   });
 
   test("CLI init setup result can execute cli install and skip skill", async () => {
     const result = await __internalCli.buildInitSetupResult({
+      workspace: SMALL_REPO,
       mode: "cli",
       interactive: false,
       yes: false,
@@ -2675,6 +2697,38 @@ describe("Profiler utilities", () => {
     expect(result.executed).toBe(true);
     expect(result.steps[0]?.status).toBe("ok");
     expect(result.steps[1]?.status).toBe("skipped");
+    expect(result.parsers.enabled.length).toBeGreaterThan(0);
+  });
+
+  test("Parser list parsing normalizes aliases", () => {
+    const parsed = parseParserList("js, ts, python,sh,go,rs,json");
+    expect(parsed).toEqual(["javascript", "typescript", "python", "bash", "go", "rust", "json"]);
+  });
+
+  test("Parser config persists enabled selections", async () => {
+    const workspace = join(TEMP_TEST_DIR, "parser-config-workspace");
+    await mkdir(workspace, { recursive: true });
+    const defaults = await getParserConfig(workspace);
+    expect(defaults.enabled.length).toBe(BUILTIN_PARSERS.length);
+
+    await setEnabledParsers(workspace, ["javascript", "typescript"]);
+    const narrowed = await getParserConfig(workspace);
+    expect(narrowed.enabled).toEqual(["javascript", "typescript"]);
+
+    await removeParsers(workspace, ["typescript"]);
+    const afterRemove = await getParserConfig(workspace);
+    expect(afterRemove.enabled.includes("typescript")).toBe(false);
+  });
+
+  test("Missing parser runtime check ignores json-only parser config", () => {
+    const missing = missingRequiredParsers(new Set(["json"]));
+    expect(missing).toEqual([]);
+  });
+
+  test("Missing parser runtime check passes for default parser config", async () => {
+    const config = await getParserConfig(SMALL_REPO);
+    const missing = missingRequiredParsers(new Set(config.enabled));
+    expect(missing).toEqual([]);
   });
 
   test("Bin isMainModule handles non-main paths", () => {

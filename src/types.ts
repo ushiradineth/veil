@@ -115,6 +115,11 @@ export type InitSetupResult = {
   package_manager: InitSetupPackageManager;
   executed: boolean;
   mcp_snippet: string | null;
+  parsers: {
+    available: string[];
+    enabled: string[];
+    installed: string[];
+  };
   steps: InitSetupStep[];
   next_steps: string[];
 };

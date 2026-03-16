@@ -75,6 +75,12 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
     examples: ["veil fetch-url --url https://www.iana.org/domains/reserved --format markdown"],
   },
   {
+    name: "grammar",
+    description: CLI_COMMAND_DESCRIPTIONS.grammar,
+    usage: "veil grammar <list|install|remove|update> [--parsers <ids>]",
+    examples: ["veil grammar list", "veil grammar install --parsers js,ts,python"],
+  },
+  {
     name: "diagnostics",
     description: CLI_COMMAND_DESCRIPTIONS.diagnostics,
     usage: "veil diagnostics",

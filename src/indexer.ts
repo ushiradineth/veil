@@ -631,11 +631,11 @@ export async function buildIndex(
 
 export async function getStatus(
   workspace: string,
-  options: { state_root?: string } = {},
+  options: { state_root?: string; bypass_cache?: boolean } = {},
 ): Promise<IndexStatus> {
   const key = cacheKey(workspace, options.state_root);
   const cached = STATUS_CACHE.get(key);
-  if (cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
+  if (!options.bypass_cache && cached && Date.now() - cached.ts < STATUS_CACHE_TTL_MS) {
     diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
     return cached.value;
   }
@@ -706,9 +706,18 @@ export function shouldRefreshDiscover(status: IndexStatus): boolean {
 
 export async function initWorkspaceIndex(
   workspace: string,
-  options: { state_root?: string; mode?: BuildMode; refresh_if_stale?: boolean } = {},
+  options: {
+    state_root?: string;
+    mode?: BuildMode;
+    refresh_if_stale?: boolean;
+    strict_query_freshness?: boolean;
+  } = {},
 ): Promise<InitWorkspaceIndexResult> {
-  const statusBefore = await getStatus(workspace, { state_root: options.state_root });
+  const strictQueryFreshness = options.strict_query_freshness === true;
+  const statusBefore = await getStatus(workspace, {
+    state_root: options.state_root,
+    bypass_cache: strictQueryFreshness,
+  });
   const refreshIfStale = options.refresh_if_stale ?? true;
   const mode = options.mode ?? "changed";
 
@@ -734,7 +743,7 @@ export async function initWorkspaceIndex(
       manifest: statusBefore.manifest,
     };
   }
-  if (!shouldRefreshDiscover(statusBefore)) {
+  if (!strictQueryFreshness && !shouldRefreshDiscover(statusBefore)) {
     return {
       workspace,
       refreshed: false,
@@ -748,7 +757,10 @@ export async function initWorkspaceIndex(
 
   const manifest = await buildIndex(workspace, mode, { state_root: options.state_root });
   STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
-  const statusAfter = await getStatus(workspace, { state_root: options.state_root });
+  const statusAfter = await getStatus(workspace, {
+    state_root: options.state_root,
+    bypass_cache: strictQueryFreshness,
+  });
   return {
     workspace,
     refreshed: true,

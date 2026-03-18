@@ -161,46 +161,77 @@ function nowMs(): number {
   return Date.now();
 }
 
-async function runGit(workspace: string, args: string[], timeoutMs = 5000): Promise<string | null> {
+type GitProbeResult = { ok: true; stdout: string } | { ok: false; timedOut: boolean };
+
+async function runGit(
+  workspace: string,
+  args: string[],
+  timeoutMs = 5000,
+): Promise<GitProbeResult> {
   return await new Promise((resolve) => {
+    let resolved = false;
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
     const child = spawn("git", ["-C", workspace, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
+    const resolveOnce = (value: GitProbeResult): void => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
     });
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      resolve(null);
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 150);
     }, timeoutMs);
     child.on("error", () => {
       clearTimeout(timer);
-      resolve(null);
+      if (killTimer) clearTimeout(killTimer);
+      resolveOnce({ ok: false, timedOut });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) {
-        resolve(null);
+      if (killTimer) clearTimeout(killTimer);
+      if (timedOut || code !== 0) {
+        resolveOnce({ ok: false, timedOut });
         return;
       }
-      resolve(stdout.trim());
+      resolveOnce({ ok: true, stdout: stdout.trim() });
     });
   });
 }
 
-async function hasDirtyWorkspace(workspace: string): Promise<boolean> {
+async function hasDirtyWorkspace(
+  workspace: string,
+): Promise<{ dirty: boolean; degraded: boolean }> {
   const raw = await runGit(workspace, ["status", "--porcelain"]);
-  if (raw === null) return false;
-  return raw.length > 0;
+  if (!raw.ok) {
+    return { dirty: true, degraded: true };
+  }
+  return { dirty: raw.stdout.length > 0, degraded: false };
 }
 
-async function listDirtyFiles(workspace: string, baseHead: string | null): Promise<Set<string>> {
+async function listDirtyFiles(
+  workspace: string,
+  baseHead: string | null,
+): Promise<{ files: Set<string>; degraded: boolean }> {
   const out = new Set<string>();
-  const addLines = (raw: string | null): void => {
-    if (!raw) return;
-    for (const line of raw.split("\n")) {
+  let degraded = false;
+  const addLines = (probe: GitProbeResult): void => {
+    if (!probe.ok) {
+      degraded = true;
+      return;
+    }
+    for (const line of probe.stdout.split("\n")) {
       const trimmed = line.trim();
       if (trimmed) out.add(trimmed);
     }
@@ -210,7 +241,7 @@ async function listDirtyFiles(workspace: string, baseHead: string | null): Promi
   addLines(await runGit(workspace, ["diff", "--name-only"]));
   addLines(await runGit(workspace, ["diff", "--cached", "--name-only"]));
   addLines(await runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
-  return out;
+  return { files: out, degraded };
 }
 
 function normalizeText(input: string): string {
@@ -595,7 +626,8 @@ export async function buildIndex(
   }
 
   const tracked = await listIndexableFiles(workspace, options.state_root);
-  const gitHead = await runGit(workspace, ["rev-parse", "HEAD"]);
+  const gitHeadProbe = await runGit(workspace, ["rev-parse", "HEAD"]);
+  const gitHead = gitHeadProbe.ok ? gitHeadProbe.stdout : null;
   let shouldWriteDocs = mode === "full";
 
   if (mode === "full") {
@@ -617,19 +649,28 @@ export async function buildIndex(
       await replaceAllRecords(workspace, computed, options.state_root);
       shouldWriteDocs = true;
     } else {
-      const changedSet = await listDirtyFiles(workspace, prevStatus.manifest.git_head);
+      const dirtyProbe = await listDirtyFiles(workspace, prevStatus.manifest.git_head);
       const trackedSet = new Set(tracked);
       for (const prevPath of await getAllFilePaths(workspace, options.state_root)) {
-        if (!trackedSet.has(prevPath)) changedSet.add(prevPath);
+        if (!trackedSet.has(prevPath)) dirtyProbe.files.add(prevPath);
       }
-      if (changedSet.size > 0) {
-        const recomputed = await computeForPaths(
+      if (dirtyProbe.degraded) {
+        const recomputedAll = await computeForPaths(
           workspace,
-          [...changedSet],
+          tracked,
           enabledParsers,
           options.state_root,
         );
-        await applyChangedRecords(workspace, changedSet, recomputed, options.state_root);
+        await replaceAllRecords(workspace, recomputedAll, options.state_root);
+        shouldWriteDocs = true;
+      } else if (dirtyProbe.files.size > 0) {
+        const recomputed = await computeForPaths(
+          workspace,
+          [...dirtyProbe.files],
+          enabledParsers,
+          options.state_root,
+        );
+        await applyChangedRecords(workspace, dirtyProbe.files, recomputed, options.state_root);
         shouldWriteDocs = true;
       }
     }
@@ -670,13 +711,15 @@ export async function getStatus(
     return cached.value;
   }
 
-  const currentHead = await runGit(workspace, ["rev-parse", "HEAD"]);
+  const currentHeadProbe = await runGit(workspace, ["rev-parse", "HEAD"]);
+  const currentHead = currentHeadProbe.ok ? currentHeadProbe.stdout : null;
   const manifestPath = join(resolveIndexDir(workspace, options.state_root), "manifest.json");
   const hasDb = indexDbExists(workspace, options.state_root);
 
   if (!existsSync(manifestPath) || !hasDb) {
     const reasons = [!existsSync(manifestPath) ? "manifest-missing" : "index-db-missing"];
-    if (await hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
+    const workspaceState = await hasDirtyWorkspace(workspace);
+    if (workspaceState.dirty) reasons.push("workspace-dirty");
     const status: IndexStatus = {
       exists: false,
       stale: true,
@@ -700,7 +743,8 @@ export async function getStatus(
       manifest: null,
       current_git_head: currentHead,
     };
-    if (await hasDirtyWorkspace(workspace)) malformed.reasons.push("workspace-dirty");
+    const workspaceState = await hasDirtyWorkspace(workspace);
+    if (workspaceState.dirty) malformed.reasons.push("workspace-dirty");
     setStatusCache(key, malformed);
     diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
     return malformed;
@@ -710,7 +754,8 @@ export async function getStatus(
   if (await isIndexDbCorrupt(workspace, options.state_root)) reasons.push(INDEX_DB_CORRUPT_REASON);
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");
   if (manifest.git_head !== currentHead) reasons.push("git-head-mismatch");
-  if (await hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
+  const workspaceState = await hasDirtyWorkspace(workspace);
+  if (workspaceState.dirty) reasons.push("workspace-dirty");
 
   const generatedAt = Date.parse(manifest.generated_at);
   const ageMs = Date.now() - generatedAt;

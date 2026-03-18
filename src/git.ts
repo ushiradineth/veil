@@ -24,6 +24,8 @@ type RunResult = {
   stderr: string;
   code: number | null;
   timedOut: boolean;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   error?: string;
   errorCode?: string;
 };
@@ -36,6 +38,8 @@ type RunnerOptions = {
 const DEFAULT_MAX_BYTES = 64_000;
 const MAX_BYTES_CAP = 500_000;
 const REPO_CONTEXT_MARKER = ".veil-repo-context";
+const RUNNER_CAPTURE_MAX_BYTES = 2_000_000;
+const TIMEOUT_KILL_GRACE_MS = 150;
 
 function nowMs(bunRef?: { nanoseconds?: () => number }): number {
   const runtimeBun = bunRef ?? (globalThis as { Bun?: { nanoseconds?: () => number } }).Bun;
@@ -58,47 +62,83 @@ async function runCommand(
   cwd: string,
   timeoutMs: number,
 ): Promise<RunResult> {
-  const started = nowMs();
   return await new Promise((resolveResult) => {
     let resolved = false;
+    let timedOut = false;
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const resolveOnce = (result: RunResult): void => {
+      if (resolved) return;
+      resolved = true;
+      resolveResult(result);
+    };
+
+    const appendWithCap = (
+      chunk: string,
+      current: string,
+      currentBytes: number,
+    ): { next: string; bytes: number; truncated: boolean } => {
+      if (currentBytes >= RUNNER_CAPTURE_MAX_BYTES) {
+        return { next: current, bytes: currentBytes, truncated: true };
+      }
+      const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+      const nextBytes = currentBytes + chunkBytes;
+      if (nextBytes <= RUNNER_CAPTURE_MAX_BYTES) {
+        return { next: current + chunk, bytes: nextBytes, truncated: false };
+      }
+      const allowed = RUNNER_CAPTURE_MAX_BYTES - currentBytes;
+      const clipped = Buffer.from(chunk, "utf-8").subarray(0, allowed).toString("utf-8");
+      return {
+        next: current + clipped,
+        bytes: RUNNER_CAPTURE_MAX_BYTES,
+        truncated: true,
+      };
+    };
+
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      const next = appendWithCap(chunk, stdout, stdoutBytes);
+      stdout = next.next;
+      stdoutBytes = next.bytes;
+      if (next.truncated) stdoutTruncated = true;
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      const next = appendWithCap(chunk, stderr, stderrBytes);
+      stderr = next.next;
+      stderrBytes = next.bytes;
+      if (next.truncated) stderrTruncated = true;
     });
 
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      if (resolved) return;
-      resolved = true;
-      resolveResult({
-        ok: false,
-        stdout,
-        stderr,
-        code: null,
-        timedOut: true,
-      });
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, TIMEOUT_KILL_GRACE_MS);
     }, timeoutMs);
 
     child.on("error", (error: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      if (resolved) return;
-      resolved = true;
-      resolveResult({
+      if (killTimer) clearTimeout(killTimer);
+      resolveOnce({
         ok: false,
         stdout,
         stderr,
         code: null,
-        timedOut: false,
+        timedOut,
+        stdoutTruncated,
+        stderrTruncated,
         error: error.message,
         errorCode: error.code,
       });
@@ -106,16 +146,15 @@ async function runCommand(
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (resolved) return;
-      resolved = true;
-      const elapsed = nowMs() - started;
-      const timedOut = elapsed > timeoutMs;
-      resolveResult({
+      if (killTimer) clearTimeout(killTimer);
+      resolveOnce({
         ok: code === 0 && !timedOut,
         stdout,
         stderr,
         code,
         timedOut,
+        stdoutTruncated,
+        stderrTruncated,
       });
     });
   });
@@ -456,13 +495,27 @@ function finish<T>(
   started: number,
   data: T,
   truncation: { truncated: boolean; warning?: string },
+  additionalWarnings: string[] = [],
 ): GitToolResponse<T> {
-  const warnings = truncation.warning ? [truncation.warning] : [];
+  const warnings = truncation.warning
+    ? [truncation.warning, ...additionalWarnings]
+    : additionalWarnings;
   return {
     meta: responseMeta(workspace, tool, started, truncation.truncated, warnings),
     data,
     error: null,
   };
+}
+
+function captureWarnings(result: RunResult): string[] {
+  const warnings: string[] = [];
+  if (result.stdoutTruncated) {
+    warnings.push(`stdout capture capped at ${String(RUNNER_CAPTURE_MAX_BYTES)} bytes`);
+  }
+  if (result.stderrTruncated) {
+    warnings.push(`stderr capture capped at ${String(RUNNER_CAPTURE_MAX_BYTES)} bytes`);
+  }
+  return warnings;
 }
 
 function recordDiagnostics(
@@ -593,7 +646,14 @@ export async function gitLog(
 
   const entries = parseLog(out.stdout);
   recordDiagnostics("git_log", started, true, false);
-  return finish(workspace, "git_log", started, { limit, entries }, { truncated: false });
+  return finish(
+    workspace,
+    "git_log",
+    started,
+    { limit, entries },
+    { truncated: false },
+    captureWarnings(out),
+  );
 }
 
 export async function gitDiff(
@@ -670,7 +730,7 @@ export async function gitDiff(
     text: truncation.text,
   };
   recordDiagnostics("git_diff", started, true, false);
-  return finish(workspace, "git_diff", started, data, truncation);
+  return finish(workspace, "git_diff", started, data, truncation, captureWarnings(out));
 }
 
 export async function gitShow(
@@ -745,7 +805,7 @@ export async function gitShow(
     text: truncation.text,
   };
   recordDiagnostics("git_show", started, true, false);
-  return finish(workspace, "git_show", started, data, truncation);
+  return finish(workspace, "git_show", started, data, truncation, captureWarnings(out));
 }
 
 export async function ghLookup(
@@ -936,6 +996,10 @@ export async function ghLookup(
               stderr: `${remote.stderr}\n${fetch.stderr}\n${reset.stderr}`,
               code: 1,
               timedOut: remote.timedOut || fetch.timedOut || reset.timedOut,
+              stdoutTruncated:
+                remote.stdoutTruncated || fetch.stdoutTruncated || reset.stdoutTruncated,
+              stderrTruncated:
+                remote.stderrTruncated || fetch.stderrTruncated || reset.stderrTruncated,
             }
           : reset;
     }
@@ -964,7 +1028,14 @@ export async function ghLookup(
         status_exists: status.exists,
       };
       recordDiagnostics("gh_lookup", started, true, false);
-      return finish(workspace, "gh_lookup", started, data, { truncated: false });
+      return finish(
+        workspace,
+        "gh_lookup",
+        started,
+        data,
+        { truncated: false },
+        captureWarnings(syncOut),
+      );
     } catch (error) {
       recordDiagnostics("gh_lookup", started, false, false);
       return fail(workspace, "gh_lookup", started, {
@@ -1011,5 +1082,5 @@ export async function ghLookup(
     repo_url: repoRef.url,
   };
   recordDiagnostics("gh_lookup", started, true, false);
-  return finish(workspace, "gh_lookup", started, data, truncation);
+  return finish(workspace, "gh_lookup", started, data, truncation, captureWarnings(out));
 }

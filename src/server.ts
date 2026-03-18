@@ -804,6 +804,47 @@ export async function startServer(): Promise<void> {
 
 let httpServerStarted = false;
 let startHttpServerPromise: Promise<void> | null = null;
+let httpNodeServer: ReturnType<typeof createServer> | null = null;
+let httpTransport: StreamableHTTPServerTransport | null = null;
+let httpMcpServer: McpServer | null = null;
+
+export async function stopHttpServer(): Promise<void> {
+  if (startHttpServerPromise) {
+    try {
+      await startHttpServerPromise;
+    } catch {
+      // startup failed; resources are cleaned by startup handler
+    }
+  }
+
+  const nodeServer = httpNodeServer;
+  const transport = httpTransport;
+  const mcpServer = httpMcpServer;
+
+  startHttpServerPromise = null;
+  httpServerStarted = false;
+  httpNodeServer = null;
+  httpTransport = null;
+  httpMcpServer = null;
+
+  if (nodeServer) {
+    await new Promise<void>((resolve, reject) => {
+      nodeServer.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+  if (transport) {
+    await transport.close();
+  }
+  if (mcpServer) {
+    await mcpServer.close();
+  }
+}
 
 export async function startHttpServer(options: HttpServerOptions = {}): Promise<void> {
   if (httpServerStarted) return;
@@ -822,6 +863,8 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
     enableJsonResponse: true,
   });
   await mcpServer.connect(transport);
+  httpTransport = transport;
+  httpMcpServer = mcpServer;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -861,6 +904,7 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
       }
     }
   });
+  httpNodeServer = server;
 
   startHttpServerPromise = new Promise<void>((resolve, reject) => {
     server.on("error", reject);
@@ -873,6 +917,9 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
   try {
     await startHttpServerPromise;
   } catch (error) {
+    httpNodeServer = null;
+    httpTransport = null;
+    httpMcpServer = null;
     startHttpServerPromise = null;
     await transport.close();
     await mcpServer.close();
@@ -887,6 +934,7 @@ export const __internalServer = {
   responseErrorMessage,
   parseRequestBody,
   maxHttpRequestBodyBytes: MAX_HTTP_REQUEST_BODY_BYTES,
+  stopHttpServer,
 };
 
 const meta = import.meta as unknown as Record<string, unknown>;

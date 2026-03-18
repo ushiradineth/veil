@@ -1168,6 +1168,11 @@ export async function queryChunkById(
 export const __internal = {
   TopKHeap,
   listFilesFallback,
+  parseQuery,
+  queryTerms,
+  rankFiles,
+  rankSymbols,
+  rankChunks,
   scoreFile,
   scoreSymbol,
   scoreChunk,

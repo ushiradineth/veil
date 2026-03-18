@@ -18,10 +18,10 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 ## Latest Run
 
-- Run directory: `benchmarks/results/20260316-103430Z`
-- Result JSON: `benchmarks/results/20260316-103430Z/results.json`
-- Summary markdown: `benchmarks/results/20260316-103430Z/SUMMARY.md`
-- Generated: `2026-03-16T10:34:35.478Z`
+- Run directory: `benchmarks/results/20260316-201305Z`
+- Result JSON: `benchmarks/results/20260316-201305Z/results.json`
+- Summary markdown: `benchmarks/results/20260316-201305Z/SUMMARY.md`
+- Generated: `2026-03-16T20:13:10.629Z`
 - Workspace: `/Users/shu/Code/veil`
 - Profile: `smoke`
 - Agents: `veil,firecrawl`
@@ -46,25 +46,25 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 | Scenario | veil (mcp_transport) | veil (cli_skill) | firecrawl (mcp_transport) | firecrawl (cli_skill) |
 | --- | --- | --- | --- | --- |
-| status-bootstrap | 334.6200 / 334.6200 | 259.0540 / 259.0540 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| files-homebrew | 328.6357 / 328.6357 | 259.3834 / 259.3834 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| symbols-build | 331.4048 / 331.4048 | 265.1192 / 265.1192 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| search-pnpm-install | 342.9068 / 342.9068 | 271.4266 / 271.4266 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| lookup-build-index | 342.9462 / 342.9462 | 256.4105 / 256.4105 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| discover-combined | 347.8771 / 347.8771 | 283.7451 / 283.7451 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
-| git-status-check | 342.8333 / 342.8333 | 282.4903 / 282.4903 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| status-bootstrap | 365.7860 / 365.7860 | 266.8455 / 266.8455 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| files-homebrew | 345.1810 / 345.1810 | 277.1895 / 277.1895 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| symbols-build | 341.7818 / 341.7818 | 290.8063 / 290.8063 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| search-pnpm-install | 360.3892 / 360.3892 | 278.6475 / 278.6475 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| lookup-build-index | 370.5873 / 370.5873 | 270.4212 / 270.4212 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| discover-combined | 436.5554 / 436.5554 | 325.9891 / 325.9891 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
+| git-status-check | 399.7720 / 399.7720 | 578.6643 / 578.6643 | unsupported: missing FIRECRAWL_API_KEY for firecrawl MCP | unsupported: firecrawl unavailable: Executable not found ... |
 
 ## A/B Signals (schema_overhead_tokens / first_useful_action_ms / fallback_rate)
 
 | Scenario | veil (mcp_transport) | veil (cli_skill) | firecrawl (mcp_transport) | firecrawl (cli_skill) |
 | --- | --- | --- | --- | --- |
-| status-bootstrap | 12000 / 334.6200 / 1.00 | 400 / 259.0540 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| files-homebrew | 12000 / 328.6357 / 1.00 | 400 / 259.3834 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| symbols-build | 12000 / 331.4048 / 1.00 | 400 / 265.1192 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| search-pnpm-install | 12000 / 342.9068 / 1.00 | 400 / 271.4266 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| lookup-build-index | 12000 / 342.9462 / 1.00 | 400 / 256.4105 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| discover-combined | 12000 / 347.8771 / 1.00 | 400 / 283.7451 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
-| git-status-check | 12000 / 342.8333 / 1.00 | 400 / 282.4903 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| status-bootstrap | 12000 / 365.7860 / 1.00 | 400 / 266.8455 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| files-homebrew | 12000 / 345.1810 / 1.00 | 400 / 277.1895 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| symbols-build | 12000 / 341.7818 / 1.00 | 400 / 290.8063 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| search-pnpm-install | 12000 / 360.3892 / 1.00 | 400 / 278.6475 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| lookup-build-index | 12000 / 370.5873 / 1.00 | 400 / 270.4212 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| discover-combined | 12000 / 436.5554 / 1.00 | 400 / 325.9891 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
+| git-status-check | 12000 / 399.7720 / 1.00 | 400 / 578.6643 / 0.00 | 12000 / 0.0000 / 1.00 | 400 / 0.0000 / 1.00 |
 
 ## Preflight
 

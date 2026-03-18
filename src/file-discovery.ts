@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
@@ -6,12 +6,33 @@ import ignore from "ignore";
 
 import { relativeStateRoot } from "./state-root";
 
-function runGit(workspace: string, args: string[]): string | null {
-  const result = spawnSync("git", ["-C", workspace, ...args], {
-    encoding: "utf-8",
+async function runGit(workspace: string, args: string[], timeoutMs = 5000): Promise<string | null> {
+  return await new Promise((resolve) => {
+    const child = spawn("git", ["-C", workspace, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      resolve(null);
+    }, timeoutMs);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      resolve(stdout.trim());
+    });
   });
-  if (result.status !== 0) return null;
-  return result.stdout.trim();
 }
 
 function uniqueSorted(values: string[]): string[] {
@@ -67,7 +88,7 @@ async function listFilesFallbackWithGitignore(
 
 export async function listIndexableFiles(workspace: string, stateRoot?: string): Promise<string[]> {
   const stateRootRel = relativeStateRoot(workspace, stateRoot);
-  const trackedAndUntracked = runGit(workspace, [
+  const trackedAndUntracked = await runGit(workspace, [
     "ls-files",
     "--cached",
     "--others",

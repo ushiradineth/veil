@@ -24,6 +24,7 @@ import {
   queryFiles,
   querySymbols,
 } from "./indexer";
+import { compactStatusSummary } from "./shared/orchestration";
 import { diagnosticsStatePath } from "./state-root";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { VEIL_VERSION } from "./version";
@@ -79,6 +80,15 @@ type HttpServerOptions = {
   allow_remote?: boolean;
 };
 
+const MAX_HTTP_REQUEST_BODY_BYTES = 1024 * 1024;
+
+class HttpBodyTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HttpBodyTooLargeError";
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -116,15 +126,6 @@ function errorResult(message: string, details?: unknown): CallToolResult {
   return {
     content: [{ type: "text", text: toToon(payload) }],
     isError: true,
-  };
-}
-
-function compactStatusSummary(value: unknown): Record<string, unknown> {
-  const status = asRecord(value);
-  return {
-    exists: status.exists === true,
-    stale: status.stale === true,
-    reasons: Array.isArray(status.reasons) ? status.reasons : [],
   };
 }
 
@@ -489,10 +490,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       timeout_ms: z.number().int().positive().max(10000).optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
-    handler: (args) =>
+    handler: async (args) =>
       withAgentGuidanceCompact(
         "git_status",
-        gitStatus(asString(args.workspace) ?? process.cwd(), {
+        await gitStatus(asString(args.workspace) ?? process.cwd(), {
           timeout_ms: asNumber(args.timeout_ms),
         }),
       ),
@@ -510,10 +511,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       timeout_ms: z.number().int().positive().max(12000).optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
-    handler: (args) =>
+    handler: async (args) =>
       withAgentGuidanceCompact(
         "git_log",
-        gitLog(asString(args.workspace) ?? process.cwd(), {
+        await gitLog(asString(args.workspace) ?? process.cwd(), {
           limit: asNumber(args.limit),
           since: asString(args.since),
           author: asString(args.author),
@@ -537,10 +538,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       max_bytes: z.number().int().positive().max(500000).optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
-    handler: (args) =>
+    handler: async (args) =>
       withAgentGuidanceCompact(
         "git_diff",
-        gitDiff(asString(args.workspace) ?? process.cwd(), {
+        await gitDiff(asString(args.workspace) ?? process.cwd(), {
           staged: asBoolean(args.staged),
           path: asString(args.path),
           base: asString(args.base),
@@ -564,10 +565,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       max_bytes: z.number().int().positive().max(500000).optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
-    handler: (args) =>
+    handler: async (args) =>
       withAgentGuidanceCompact(
         "git_show",
-        gitShow(asString(args.workspace) ?? process.cwd(), {
+        await gitShow(asString(args.workspace) ?? process.cwd(), {
           rev: asString(args.rev) ?? "",
           path: asString(args.path),
           patch: asBoolean(args.patch),
@@ -733,23 +734,46 @@ function validateHttpRequest(
   return null;
 }
 
-async function parseRequestBody(req: IncomingMessage): Promise<unknown> {
+async function parseRequestBody(
+  req: IncomingMessage,
+  maxBytes = MAX_HTTP_REQUEST_BODY_BYTES,
+): Promise<unknown> {
   if (req.method !== "POST") return undefined;
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
     if (typeof chunk === "string") {
-      chunks.push(Buffer.from(chunk));
+      const buffer = Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new HttpBodyTooLargeError(`Request body exceeds ${String(maxBytes)} bytes maximum`);
+      }
+      chunks.push(buffer);
       continue;
     }
     if (Buffer.isBuffer(chunk)) {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new HttpBodyTooLargeError(`Request body exceeds ${String(maxBytes)} bytes maximum`);
+      }
       chunks.push(chunk);
       continue;
     }
     if (chunk instanceof Uint8Array) {
-      chunks.push(Buffer.from(chunk));
+      const buffer = Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new HttpBodyTooLargeError(`Request body exceeds ${String(maxBytes)} bytes maximum`);
+      }
+      chunks.push(buffer);
       continue;
     }
-    chunks.push(Buffer.from(String(chunk)));
+    const buffer = Buffer.from(String(chunk));
+    totalBytes += buffer.byteLength;
+    if (totalBytes > maxBytes) {
+      throw new HttpBodyTooLargeError(`Request body exceeds ${String(maxBytes)} bytes maximum`);
+    }
+    chunks.push(buffer);
   }
   if (chunks.length === 0) return undefined;
   const raw = Buffer.concat(chunks).toString("utf-8").trim();
@@ -762,25 +786,42 @@ async function parseRequestBody(req: IncomingMessage): Promise<unknown> {
 }
 
 let started = false;
+let startServerPromise: Promise<void> | null = null;
 
 export async function startServer(): Promise<void> {
   if (started) return;
-  started = true;
-  const server = createMcpServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  startServerPromise ??= (async () => {
+    const server = createMcpServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    started = true;
+  })().catch((error: unknown) => {
+    startServerPromise = null;
+    throw error;
+  });
+  await startServerPromise;
 }
 
 let httpServerStarted = false;
+let startHttpServerPromise: Promise<void> | null = null;
 
 export async function startHttpServer(options: HttpServerOptions = {}): Promise<void> {
   if (httpServerStarted) return;
-  httpServerStarted = true;
+  if (startHttpServerPromise) {
+    await startHttpServerPromise;
+    return;
+  }
 
   const host = options.host?.trim() ?? "127.0.0.1";
   const port = Number.isFinite(options.port) ? Number(options.port) : 8765;
   const path = options.path?.trim() ?? "/mcp";
   const allowRemote = options.allow_remote === true;
+  const mcpServer = createMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  await mcpServer.connect(transport);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -804,20 +845,15 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
       }
 
       const parsedBody = await parseRequestBody(req);
-      const mcpServer = createMcpServer();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      });
-
-      res.on("close", () => {
-        void transport.close();
-        void mcpServer.close();
-      });
-
-      await mcpServer.connect(transport);
       await transport.handleRequest(req, res, parsedBody);
     } catch (error) {
+      if (error instanceof HttpBodyTooLargeError) {
+        if (!res.headersSent) {
+          res.statusCode = 413;
+          res.end(error.message);
+        }
+        return;
+      }
       if (!res.headersSent) {
         res.statusCode = 500;
         const message = error instanceof Error ? error.message : String(error);
@@ -826,12 +862,22 @@ export async function startHttpServer(options: HttpServerOptions = {}): Promise<
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
+  startHttpServerPromise = new Promise<void>((resolve, reject) => {
     server.on("error", reject);
     server.listen(port, host, () => {
+      httpServerStarted = true;
       resolve();
     });
   });
+
+  try {
+    await startHttpServerPromise;
+  } catch (error) {
+    startHttpServerPromise = null;
+    await transport.close();
+    await mcpServer.close();
+    throw error;
+  }
 }
 
 export const __internalServer = {
@@ -839,6 +885,8 @@ export const __internalServer = {
   toolNames: TOOL_DEFINITIONS.map((definition) => definition.name),
   toolDefinitions: TOOL_DEFINITIONS,
   responseErrorMessage,
+  parseRequestBody,
+  maxHttpRequestBodyBytes: MAX_HTTP_REQUEST_BODY_BYTES,
 };
 
 const meta = import.meta as unknown as Record<string, unknown>;

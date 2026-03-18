@@ -657,6 +657,7 @@ export function createCli(args: string[] = []): Argv {
       const initResult = await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
         refresh_if_stale: argv.refreshIfStale ?? true,
+        strict_query_freshness: true,
       });
       const discovered = await discoverIndex(workspace, query, {
         prefer_code: true,
@@ -711,6 +712,11 @@ export function createCli(args: string[] = []): Argv {
     async (argv) => {
       const { workspace, stateRoot } = configureContext(argv);
       const query = argv.query ?? "";
+      await initWorkspaceIndex(workspace, {
+        state_root: stateRoot,
+        refresh_if_stale: true,
+        strict_query_freshness: true,
+      });
       const result = await lookupIndex(workspace, query, {
         intent: parseIntent(argv.intent),
         prefer_code: true,
@@ -738,6 +744,7 @@ export function createCli(args: string[] = []): Argv {
       await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
         refresh_if_stale: argv.refreshIfStale ?? true,
+        strict_query_freshness: true,
       });
       const id = argv.id ?? "";
       const item = await queryChunkById(workspace, id, {
@@ -763,6 +770,7 @@ export function createCli(args: string[] = []): Argv {
       await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
         refresh_if_stale: argv.refreshIfStale ?? true,
+        strict_query_freshness: true,
       });
       const items = await queryFiles(workspace, query, argv.limit ?? 20, { state_root: stateRoot });
       writeOutput(withAgentGuidanceCompact("files", { items }, { query }));
@@ -783,6 +791,7 @@ export function createCli(args: string[] = []): Argv {
       await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
         refresh_if_stale: argv.refreshIfStale ?? true,
+        strict_query_freshness: true,
       });
       const items = await querySymbols(workspace, query, argv.limit ?? 20, {
         state_root: stateRoot,
@@ -830,6 +839,7 @@ export function createCli(args: string[] = []): Argv {
       await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
         refresh_if_stale: argv.refreshIfStale ?? true,
+        strict_query_freshness: true,
       });
       const items = await queryChunks(workspace, query, argv.limit ?? 10, {
         include_content: argv.includeContent ?? false,

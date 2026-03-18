@@ -1161,6 +1161,71 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.reason).toBe("dirty-only");
   });
 
+  test("initWorkspaceIndex strict query freshness refreshes dirty-only state", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-dirty-only-strict");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "beta.ts"), "export const beta = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(repo, "full");
+    await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
+
+    const result = await initWorkspaceIndex(repo, {
+      refresh_if_stale: true,
+      strict_query_freshness: true,
+    });
+    expect(result.refreshed).toBe(true);
+    expect(result.reason).toBe("refreshed");
+
+    const chunks = await queryChunks(repo, "beta = 2", 5);
+    expect(chunks.length).toBeGreaterThan(0);
+  });
+
+  test("strict query freshness bypasses status cache masking", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-status-cache-strict");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "gamma.ts"), "export const gamma = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(repo, "full");
+
+    const initial = await getStatus(repo);
+    expect(initial.stale).toBe(false);
+
+    await writeFile(join(repo, "gamma.ts"), "export const gamma = 99\n");
+
+    const bypassed = await getStatus(repo, { bypass_cache: true });
+    expect(bypassed.reasons.includes("workspace-dirty")).toBe(true);
+
+    const result = await initWorkspaceIndex(repo, {
+      refresh_if_stale: true,
+      strict_query_freshness: true,
+    });
+    expect(result.refreshed).toBe(true);
+    expect(result.reason).toBe("refreshed");
+
+    const chunks = await queryChunks(repo, "gamma = 99", 5);
+    expect(chunks.length).toBeGreaterThan(0);
+  });
+
   test("Warm query path stays within expected latency range", async () => {
     const sample = async (): Promise<number> => {
       const start = Bun.nanoseconds();

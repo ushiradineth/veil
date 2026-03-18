@@ -150,6 +150,7 @@ async function initQueryWorkspace(args: QueryInitArgs): Promise<string> {
   await initWorkspaceIndex(ws, {
     state_root: args.state_root,
     refresh_if_stale: args.refresh_if_stale ?? true,
+    strict_query_freshness: true,
   });
   return ws;
 }
@@ -364,6 +365,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const initResult = await initWorkspaceIndex(ws, {
         state_root: stateRoot,
         refresh_if_stale: asBoolean(args.refresh_if_stale) ?? true,
+        strict_query_freshness: true,
       });
       const discovered = await discoverIndex(ws, query, {
         files_limit: asNumber(args.files_limit),

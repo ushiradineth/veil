@@ -1639,6 +1639,31 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.meta.warnings.length).toBeGreaterThan(0);
   });
 
+  test("Git diff reports runner capture cap warnings for very large output", async () => {
+    const repo = join(TEMP_TEST_DIR, "git-capture-cap-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "huge.ts"), "export const huge = 'a'\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    await writeFile(join(repo, "huge.ts"), `${"x".repeat(2_400_000)}\n`);
+
+    const result = await gitDiff(repo, { path: "huge.ts", max_bytes: 500_000 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.meta.warnings.some((warning) => warning.includes("stdout capture capped"))).toBe(
+      true,
+    );
+  });
+
   test("Git status reports git-unavailable when command is missing", async () => {
     const result = await gitStatus(SMALL_REPO, { command: "git-missing-binary" });
     expect(result.meta.ok).toBe(false);

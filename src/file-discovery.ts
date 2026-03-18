@@ -6,31 +6,51 @@ import ignore from "ignore";
 
 import { relativeStateRoot } from "./state-root";
 
-async function runGit(workspace: string, args: string[], timeoutMs = 5000): Promise<string | null> {
+type GitProbeResult = { ok: true; stdout: string } | { ok: false; timedOut: boolean };
+
+async function runGit(
+  workspace: string,
+  args: string[],
+  timeoutMs = 5000,
+): Promise<GitProbeResult> {
   return await new Promise((resolve) => {
+    let resolved = false;
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
     const child = spawn("git", ["-C", workspace, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
+    const resolveOnce = (value: GitProbeResult): void => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
     });
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      resolve(null);
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 150);
     }, timeoutMs);
     child.on("error", () => {
       clearTimeout(timer);
-      resolve(null);
+      if (killTimer) clearTimeout(killTimer);
+      resolveOnce({ ok: false, timedOut });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) {
-        resolve(null);
+      if (killTimer) clearTimeout(killTimer);
+      if (timedOut || code !== 0) {
+        resolveOnce({ ok: false, timedOut });
         return;
       }
-      resolve(stdout.trim());
+      resolveOnce({ ok: true, stdout: stdout.trim() });
     });
   });
 }
@@ -94,8 +114,8 @@ export async function listIndexableFiles(workspace: string, stateRoot?: string):
     "--others",
     "--exclude-standard",
   ]);
-  if (trackedAndUntracked !== null) {
-    const values = trackedAndUntracked
+  if (trackedAndUntracked.ok) {
+    const values = trackedAndUntracked.stdout
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => !shouldSkip(line, stateRootRel));

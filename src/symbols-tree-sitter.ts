@@ -32,85 +32,79 @@ let LAST_BUN_PREBUILD_RECOVERY: BunPrebuildRecovery = {
   reason: "not-bun",
 };
 
+type BunPrebuildDeps = {
+  isBun: boolean;
+  platform: string;
+  arch: string;
+  resolvePackage: () => string;
+  exists: (path: string) => boolean;
+  mkdir: (path: string) => void;
+  symlink: (target: string, path: string) => void;
+  copy: (from: string, to: string) => void;
+  relativePath: (from: string, to: string) => string;
+};
+
 function permissionDenied(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
   return code === "EACCES" || code === "EPERM" || code === "EROFS";
 }
 
-function ensureBunTreeSitterPrebuild(): BunPrebuildRecovery {
-  if (typeof process.versions.bun !== "string") {
-    const status: BunPrebuildRecovery = { attempted: false, ok: false, reason: "not-bun" };
-    LAST_BUN_PREBUILD_RECOVERY = status;
-    return status;
+function ensureBunTreeSitterPrebuildWith(deps: BunPrebuildDeps): BunPrebuildRecovery {
+  if (!deps.isBun) {
+    return { attempted: false, ok: false, reason: "not-bun" };
   }
   try {
-    const pkg = require.resolve("tree-sitter/package.json");
+    const pkg = deps.resolvePackage();
     const root = dirname(pkg);
-    const expectedDir = join(root, "prebuilds", `${process.platform}-${process.arch}`);
+    const expectedDir = join(root, "prebuilds", `${deps.platform}-${deps.arch}`);
     const expectedFile = join(expectedDir, "tree-sitter.node");
-    if (existsSync(expectedFile)) {
-      const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "already-present" };
-      LAST_BUN_PREBUILD_RECOVERY = status;
-      return status;
-    }
+    if (deps.exists(expectedFile)) return { attempted: true, ok: true, reason: "already-present" };
 
     const candidate = join(root, "build", "Release", "tree_sitter_runtime_binding.node");
-    if (!existsSync(candidate)) {
-      const status: BunPrebuildRecovery = {
-        attempted: true,
-        ok: false,
-        reason: "missing-candidate",
-      };
-      LAST_BUN_PREBUILD_RECOVERY = status;
-      return status;
-    }
+    if (!deps.exists(candidate)) return { attempted: true, ok: false, reason: "missing-candidate" };
 
     try {
-      mkdirSync(expectedDir, { recursive: true });
+      deps.mkdir(expectedDir);
     } catch (error) {
-      if (permissionDenied(error)) {
-        const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "readonly" };
-        LAST_BUN_PREBUILD_RECOVERY = status;
-        return status;
-      }
+      if (permissionDenied(error)) return { attempted: true, ok: false, reason: "readonly" };
       throw error;
     }
 
     try {
-      symlinkSync(relative(expectedDir, candidate), expectedFile);
-      const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "linked" };
-      LAST_BUN_PREBUILD_RECOVERY = status;
-      return status;
+      deps.symlink(deps.relativePath(expectedDir, candidate), expectedFile);
+      return { attempted: true, ok: true, reason: "linked" };
     } catch {
       try {
-        if (!existsSync(expectedFile)) {
-          copyFileSync(candidate, expectedFile);
-          const status: BunPrebuildRecovery = { attempted: true, ok: true, reason: "copied" };
-          LAST_BUN_PREBUILD_RECOVERY = status;
-          return status;
+        if (!deps.exists(expectedFile)) {
+          deps.copy(candidate, expectedFile);
+          return { attempted: true, ok: true, reason: "copied" };
         }
-        const status: BunPrebuildRecovery = {
-          attempted: true,
-          ok: true,
-          reason: "already-present",
-        };
-        LAST_BUN_PREBUILD_RECOVERY = status;
-        return status;
+        return { attempted: true, ok: true, reason: "already-present" };
       } catch (error) {
-        if (permissionDenied(error)) {
-          const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "readonly" };
-          LAST_BUN_PREBUILD_RECOVERY = status;
-          return status;
-        }
+        if (permissionDenied(error)) return { attempted: true, ok: false, reason: "readonly" };
         throw error;
       }
     }
   } catch {
-    const status: BunPrebuildRecovery = { attempted: true, ok: false, reason: "resolution-failed" };
-    LAST_BUN_PREBUILD_RECOVERY = status;
-    return status;
+    return { attempted: true, ok: false, reason: "resolution-failed" };
   }
+}
+
+function ensureBunTreeSitterPrebuild(): BunPrebuildRecovery {
+  const status = ensureBunTreeSitterPrebuildWith({
+    isBun: typeof process.versions.bun === "string",
+    platform: process.platform,
+    arch: process.arch,
+    resolvePackage: () => require.resolve("tree-sitter/package.json"),
+    exists: existsSync,
+    mkdir: (path) => mkdirSync(path, { recursive: true }),
+    symlink: symlinkSync,
+    copy: copyFileSync,
+    relativePath: relative,
+  });
+  LAST_BUN_PREBUILD_RECOVERY = status;
+  return status;
 }
 
 function loadParserClass(): ParserCtor | undefined {
@@ -338,3 +332,8 @@ export function missingRequiredParsers(enabledParsers: Set<ParserId>): ParserId[
   }
   return missing;
 }
+
+export const __internalSymbols = {
+  permissionDenied,
+  ensureBunTreeSitterPrebuildWith,
+};

@@ -22,6 +22,7 @@ import {
   removeParsers,
   setEnabledParsers,
 } from "./grammar-manager";
+import { readAllRecords } from "./index-db";
 import {
   __internal,
   buildIndex,
@@ -41,7 +42,11 @@ import {
   resolveStateRoot,
   relativeStateRoot,
 } from "./state-root";
-import { getBunPrebuildRecoveryStatus, missingRequiredParsers } from "./symbols-tree-sitter";
+import {
+  __internalSymbols,
+  getBunPrebuildRecoveryStatus,
+  missingRequiredParsers,
+} from "./symbols-tree-sitter";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { webSearch } from "./web-search";
 
@@ -2175,7 +2180,7 @@ describe("Phase 4: Edge cases", () => {
     expect(status.reasons.includes("manifest-invalid-json")).toBe(true);
   });
 
-  test("Corrupted SQLite index surfaces deterministic status and query error", async () => {
+  test("Corrupted SQLite index surfaces deterministic status and query errors", async () => {
     const repo = join(TEMP_TEST_DIR, "corrupted-sqlite");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
@@ -2187,13 +2192,58 @@ describe("Phase 4: Edge cases", () => {
     const status = await getStatus(repo);
     expect(status.reasons.includes("index-db-corrupt")).toBe(true);
 
-    let caught = "";
+    let fileError = "";
+    let symbolError = "";
+    let chunkError = "";
     try {
       await queryFiles(repo, "beta", 10);
     } catch (error) {
-      caught = String(error);
+      fileError = String(error);
     }
-    expect(caught.includes("index-db-corrupt")).toBe(true);
+    try {
+      await querySymbols(repo, "beta", 10);
+    } catch (error) {
+      symbolError = String(error);
+    }
+    try {
+      await queryChunks(repo, "beta", 10);
+    } catch (error) {
+      chunkError = String(error);
+    }
+    expect(fileError.includes("index-db-corrupt")).toBe(true);
+    expect(symbolError.includes("index-db-corrupt")).toBe(true);
+    expect(chunkError.includes("index-db-corrupt")).toBe(true);
+  });
+
+  test("initWorkspaceIndex changed mode refreshes from corruption", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-corrupt-sqlite");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "theta.ts"), "export const theta = 7\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(repo, "full");
+
+    const dbPath = join(repo, ".veil", "index", "index.sqlite");
+    await writeFile(dbPath, Buffer.from([0xde, 0xad, 0xbe, 0xef]));
+
+    const before = await getStatus(repo);
+    expect(before.reasons.includes("index-db-corrupt")).toBe(true);
+
+    const refreshed = await initWorkspaceIndex(repo, { mode: "changed", refresh_if_stale: true });
+    expect(refreshed.refreshed).toBe(true);
+    expect(refreshed.reason).toBe("refreshed");
+
+    const files = await queryFiles(repo, "theta", 10);
+    expect(files.some((file) => file.path === "theta.ts")).toBe(true);
   });
 
   test("Schema version mismatch reports stale status", async () => {
@@ -2341,6 +2391,61 @@ describe("Phase 4.5: Query accuracy verification", () => {
     expect(files.length).toBe(0);
     expect(symbols.length).toBe(0);
     expect(chunks.length).toBe(0);
+  });
+
+  test("Candidate-prefiltered files keep parity with full-scan ranking", async () => {
+    const records = await readAllRecords(SMALL_REPO);
+    const queries = [
+      "hello.ts",
+      "math",
+      "add",
+      "hello%world",
+      "path_with_underscore",
+      "quote'case",
+      "こんにちは",
+      "x".repeat(128),
+    ];
+    for (const query of queries) {
+      const parsed = __internal.parseQuery(query);
+      const expected = __internal
+        .rankFiles(records.files, parsed, 10)
+        .map((item: { path: string }) => item.path);
+      const actual = (await queryFiles(SMALL_REPO, query, 10)).map((item) => item.path);
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  test("Candidate-prefiltered symbols keep parity with full-scan ranking", async () => {
+    const records = await readAllRecords(SMALL_REPO);
+    const queries = ["greet", "Greeter", "add", "quote'case", "symbol_%", "x".repeat(96)];
+    for (const query of queries) {
+      const parsed = __internal.parseQuery(query);
+      const expected = __internal
+        .rankSymbols(records.symbols, parsed, 10)
+        .map(
+          (item: { path: string; line: number; name: string }) =>
+            `${item.path}:${String(item.line)}:${item.name}`,
+        );
+      const actual = (await querySymbols(SMALL_REPO, query, 10)).map(
+        (item) => `${item.path}:${String(item.line)}:${item.name}`,
+      );
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  test("Candidate-prefiltered chunks keep parity with full-scan ranking", async () => {
+    const records = await readAllRecords(SMALL_REPO);
+    const queries = ["multiply", "Hello", "path_with_underscore", "quote'case", "你好世界"];
+    for (const query of queries) {
+      const parsed = __internal.parseQuery(query);
+      const expected = __internal
+        .rankChunks(records.chunks, parsed, 10, {})
+        .map((item: { id: string }) => item.id);
+      const actual = (await queryChunks(SMALL_REPO, query, 10, { include_content: true })).map(
+        (item) => item.id,
+      );
+      expect(actual).toEqual(expected);
+    }
   });
 });
 
@@ -2912,6 +3017,38 @@ describe("Profiler utilities", () => {
     ).toBe(true);
   });
 
+  test("Bun prebuild recovery helper returns missing-candidate deterministically", () => {
+    const status = __internalSymbols.ensureBunTreeSitterPrebuildWith({
+      isBun: true,
+      platform: "darwin",
+      arch: "arm64",
+      resolvePackage: () => "/tmp/tree-sitter/package.json",
+      exists: () => false,
+      mkdir: () => undefined,
+      symlink: () => undefined,
+      copy: () => undefined,
+      relativePath: () => "candidate.node",
+    });
+    expect(status).toEqual({ attempted: true, ok: false, reason: "missing-candidate" });
+  });
+
+  test("Bun prebuild recovery helper returns readonly on mkdir denial", () => {
+    const status = __internalSymbols.ensureBunTreeSitterPrebuildWith({
+      isBun: true,
+      platform: "darwin",
+      arch: "arm64",
+      resolvePackage: () => "/tmp/tree-sitter/package.json",
+      exists: (path) => path.endsWith("tree_sitter_runtime_binding.node"),
+      mkdir: () => {
+        throw Object.assign(new Error("read-only"), { code: "EROFS" });
+      },
+      symlink: () => undefined,
+      copy: () => undefined,
+      relativePath: () => "candidate.node",
+    });
+    expect(status).toEqual({ attempted: true, ok: false, reason: "readonly" });
+  });
+
   test("Bin isMainModule handles non-main paths", () => {
     expect(__internalBin.isMainModule(import.meta.url)).toBe(false);
   });
@@ -3198,5 +3335,69 @@ describe("Bench suite planning helpers", () => {
     });
     expect(mapped.status).toBe("unsupported");
     expect(mapped.reason).toBe("codex timeout");
+  });
+
+  test("Regression gate reports violations above threshold", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-cli_skill",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { p50_ms: 100 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-cli_skill",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { p50_ms: 125 } },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+    );
+    expect(gate.compared).toBe(1);
+    expect(gate.violations.length).toBe(1);
+  });
+
+  test("Regression gate ignores improvements and small drift", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { p50_ms: 100 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { p50_ms: 108 } },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+    );
+    expect(gate.compared).toBe(1);
+    expect(gate.violations.length).toBe(0);
   });
 });

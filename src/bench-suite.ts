@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { cpus } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -298,6 +298,8 @@ function showHelp(): void {
     "  --warm <n>                     Warm iterations per scenario (default: 1)",
     "  --max-runtime-ms <n>           Whole-suite runtime budget (default: 120000)",
     "  --max-cell-runtime-ms <n>      Per-cell runtime budget (default: 20000)",
+    "  --baseline <path>              Optional baseline results.json for regression gate",
+    "  --regression-threshold-pct <n> Max allowed p50 regression percent (default: 10)",
     "  --out <path>                   Output root (default: benchmarks/results)",
     "  -h, --help                     Show this help and exit",
   ];
@@ -315,6 +317,13 @@ function parseIntArg(name: string, fallback: number): number {
   if (!raw) return fallback;
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function parseFloatArg(name: string, fallback: number): number {
+  const raw = getArg(name);
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function parseCsvArg(name: string, fallback: string[]): string[] {
@@ -1098,6 +1107,47 @@ function summarizeAbSignal(
   };
 }
 
+type RegressionGateResult = {
+  compared: number;
+  violations: string[];
+};
+
+function evaluateRegressionGate(
+  current: SuiteReport,
+  baseline: SuiteReport,
+  thresholdPct: number,
+): RegressionGateResult {
+  const baselineByCompetitor = new Map<string, CompetitorReport>();
+  for (const competitor of baseline.competitors) {
+    baselineByCompetitor.set(competitor.id, competitor);
+  }
+
+  let compared = 0;
+  const violations: string[] = [];
+  for (const competitor of current.competitors) {
+    if (!competitor.id.startsWith("veil-")) continue;
+    const baselineCompetitor = baselineByCompetitor.get(competitor.id);
+    if (!baselineCompetitor) continue;
+    for (const scenario of current.scenarios) {
+      const row = competitor.scenarios[scenario.id] as ScenarioSummary | undefined;
+      const baselineRow = baselineCompetitor.scenarios[scenario.id] as ScenarioSummary | undefined;
+      if (!row || !baselineRow) continue;
+      if (row.status !== "ok" || baselineRow.status !== "ok") continue;
+      const baselineP50 = baselineRow.warm.p50_ms;
+      if (!Number.isFinite(baselineP50) || baselineP50 <= 0) continue;
+      const currentP50 = row.warm.p50_ms;
+      const deltaPct = ((currentP50 - baselineP50) / baselineP50) * 100;
+      compared += 1;
+      if (deltaPct > thresholdPct) {
+        violations.push(
+          `${competitor.id}:${scenario.id} ${deltaPct.toFixed(2)}% (${currentP50.toFixed(4)} vs ${baselineP50.toFixed(4)})`,
+        );
+      }
+    }
+  }
+  return { compared, violations };
+}
+
 function toMarkdown(report: SuiteReport): string {
   const lines: string[] = [];
   lines.push("# Benchmark Suite Result");
@@ -1211,6 +1261,8 @@ async function main(): Promise<void> {
   const warmIterations = parseIntArg("--warm", 1);
   const maxRuntimeMs = parseIntArg("--max-runtime-ms", 120_000);
   const maxCellRuntimeMs = parseIntArg("--max-cell-runtime-ms", 20_000);
+  const baselinePath = getArg("--baseline");
+  const regressionThresholdPct = parseFloatArg("--regression-threshold-pct", 10);
   const rawOutputRoot = resolve(getArg("--out") ?? "benchmarks/results");
   const outputRoot = basename(rawOutputRoot) === "latest" ? dirname(rawOutputRoot) : rawOutputRoot;
   const runId = toRunId(new Date());
@@ -1358,6 +1410,20 @@ async function main(): Promise<void> {
       competitors: competitorReports,
     };
 
+    const regressionGate = baselinePath
+      ? (() => {
+          const baselineAbs = resolve(baselinePath);
+          return { baselineAbs, thresholdPct: regressionThresholdPct };
+        })()
+      : null;
+
+    let gateResult: RegressionGateResult | null = null;
+    if (regressionGate) {
+      const baselineRaw = await readFile(regressionGate.baselineAbs, "utf-8");
+      const baseline = JSON.parse(baselineRaw) as SuiteReport;
+      gateResult = evaluateRegressionGate(report, baseline, regressionGate.thresholdPct);
+    }
+
     await mkdir(outputDir, { recursive: true });
 
     const jsonPath = join(outputDir, "results.json");
@@ -1379,6 +1445,9 @@ async function main(): Promise<void> {
           strategies,
           max_runtime_ms: maxRuntimeMs,
           max_cell_runtime_ms: maxCellRuntimeMs,
+          baseline: regressionGate?.baselineAbs ?? null,
+          regression_threshold_pct: regressionGate?.thresholdPct ?? null,
+          regression_gate: gateResult,
           json: jsonPath,
           markdown: markdownPath,
           benchmarks: benchmarksDocPath,
@@ -1387,6 +1456,10 @@ async function main(): Promise<void> {
         2,
       )}\n`,
     );
+
+    if (gateResult && gateResult.violations.length > 0) {
+      throw new Error(`benchmark-regression-gate-failed: ${gateResult.violations.join("; ")}`);
+    }
   } finally {
     for (const adapter of adapters) {
       if (adapter.teardown) {
@@ -1404,6 +1477,7 @@ export const __internalBenchSuite = {
   parseScenarioProfile,
   scenariosForProfile,
   mapTimeoutToUnsupported,
+  evaluateRegressionGate,
 };
 
 if (import.meta.main) {

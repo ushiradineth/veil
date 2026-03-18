@@ -175,20 +175,22 @@ function uniqueTerms(tokens: string[], normalized: string): string[] {
   return [...new Set(terms)];
 }
 
-function escapeLike(value: string): string {
-  return value.replaceAll("'", "''").replaceAll("%", "\\%").replaceAll("_", "\\_");
+function escapeLikePattern(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
-function orLikeConditions(columns: string[], terms: string[]): string {
-  const clauses: string[] = [];
+function buildLikeWhere(columns: string[], terms: string[]): { clause: string; params: string[] } {
+  const predicates: string[] = [];
+  const params: string[] = [];
   for (const term of terms) {
-    const escaped = escapeLike(term);
+    const pattern = `%${escapeLikePattern(term)}%`;
     for (const column of columns) {
-      clauses.push(`${column} LIKE '%${escaped}%' ESCAPE '\\'`);
+      predicates.push(`${column} LIKE ? ESCAPE '\\'`);
+      params.push(pattern);
     }
   }
-  if (clauses.length === 0) return "1=1";
-  return `(${clauses.join(" OR ")})`;
+  if (predicates.length === 0) return { clause: "1=1", params: [] };
+  return { clause: `(${predicates.join(" OR ")})`, params };
 }
 
 export function indexDbExists(workspace: string, stateRoot?: string): boolean {
@@ -334,10 +336,11 @@ export async function readFileCandidates(
   const db = await loadDb(path);
   const candidateLimit = Math.max(50, Math.min(2000, options.limit * 16));
   const terms = uniqueTerms(options.tokens, options.normalized);
-  const where = orLikeConditions(["path", "top_level"], terms);
+  const where = buildLikeWhere(["path", "top_level"], terms);
   const rows = rowsFromExec<FileRecord>(
     db.exec(
-      `SELECT path, language, size, hash, top_level FROM files WHERE ${where} ORDER BY path ASC LIMIT ${String(candidateLimit)}`,
+      `SELECT path, language, size, hash, top_level FROM files WHERE ${where.clause} ORDER BY path ASC LIMIT ${String(candidateLimit)}`,
+      where.params,
     ),
   );
   return rows;
@@ -357,10 +360,11 @@ export async function readSymbolCandidates(
   const db = await loadDb(path);
   const candidateLimit = Math.max(100, Math.min(4000, options.limit * 24));
   const terms = uniqueTerms(options.tokens, options.normalized);
-  const where = orLikeConditions(["name", "path", "kind"], terms);
+  const where = buildLikeWhere(["name", "path", "kind"], terms);
   const rows = rowsFromExec<SymbolRecord>(
     db.exec(
-      `SELECT path, line, kind, name, signature_hint FROM symbols WHERE ${where} ORDER BY path ASC, line ASC, name ASC LIMIT ${String(candidateLimit)}`,
+      `SELECT path, line, kind, name, signature_hint FROM symbols WHERE ${where.clause} ORDER BY path ASC, line ASC, name ASC LIMIT ${String(candidateLimit)}`,
+      where.params,
     ),
   );
   return rows;
@@ -381,15 +385,19 @@ export async function readChunkCandidates(
   const db = await loadDb(path);
   const candidateLimit = Math.max(120, Math.min(5000, options.limit * 30));
   const terms = uniqueTerms(options.tokens, options.normalized);
-  const predicates: string[] = [orLikeConditions(["path", "content"], terms)];
+  const where = buildLikeWhere(["path", "content"], terms);
+  const predicates: string[] = [where.clause];
+  const params = [...where.params];
   if (options.pathPrefix && options.pathPrefix.trim() !== "") {
-    const escapedPrefix = escapeLike(options.pathPrefix.trim().toLowerCase());
-    predicates.push(`path LIKE '${escapedPrefix}%' ESCAPE '\\'`);
+    const escapedPrefix = escapeLikePattern(options.pathPrefix.trim().toLowerCase());
+    predicates.push("path LIKE ? ESCAPE '\\'");
+    params.push(`${escapedPrefix}%`);
   }
-  const where = predicates.join(" AND ");
+  const whereClause = predicates.join(" AND ");
   const rows = rowsFromExec<ChunkRecord>(
     db.exec(
-      `SELECT id, path, start_line, end_line, content FROM chunks WHERE ${where} ORDER BY path ASC, start_line ASC LIMIT ${String(candidateLimit)}`,
+      `SELECT id, path, start_line, end_line, content FROM chunks WHERE ${whereClause} ORDER BY path ASC, start_line ASC LIMIT ${String(candidateLimit)}`,
+      params,
     ),
   );
   return rows;

@@ -154,6 +154,8 @@ MCP breaking change: canonical tool names are now prefixed with `veil_` and comp
 
 MCP responses are TOON text only and optimized for compact machine parsing. Guidance is included only when confidence is not high/full. Retrieval tools (`discover`, `lookup`, `search`) return compact chunk content by default, and full chunk content is opt-in (`--include-content` / `include_content`).
 
+Retrieval query tools run freshness checks by default and now refresh on dirty workspace changes so indexed results stay aligned with current local edits.
+
 | Capability                           | What it does                                                          | CLI command                                              | MCP tool           |
 | ------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------- | ------------------ |
 | Index status                         | Shows index freshness, manifest health, and stale reasons.            | `veil status --workspace .`                              | `veil_status`      |

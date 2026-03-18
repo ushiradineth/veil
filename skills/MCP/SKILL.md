@@ -22,6 +22,8 @@ Veil MCP responses are compact TOON payloads. Guidance fields appear only on low
 
 ## Retrieval Workflow
 
+Retrieval query tools refresh index state on stale or dirty worktrees by default.
+
 1. Start broad once with `veil_discover`.
 2. Narrow once with `veil_lookup` or one targeted call: `veil_files|veil_symbols|veil_search`.
 3. Fetch full code only when needed with `veil_chunk` using chunk ids from prior results.

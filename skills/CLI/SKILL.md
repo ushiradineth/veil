@@ -20,6 +20,8 @@ Prefer Veil CLI commands when supported so outputs stay structured and follow-on
 
 ## Retrieval Workflow
 
+Retrieval query commands refresh index state on stale or dirty worktrees by default.
+
 1. Start broad once with `veil discover --workspace . --query "<intent>"`.
 2. Narrow once with `veil lookup --workspace . --query "<intent>"` or one targeted call: `veil files|symbols|search`.
 3. Fetch full code only when needed with `veil chunk --id <chunk-id>` from prior results.

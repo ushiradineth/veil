@@ -35,6 +35,7 @@ import {
   queryFiles,
   querySymbols,
 } from "./indexer";
+import { compactStatusSummary, parseIntent } from "./shared/orchestration";
 import { diagnosticsStatePath } from "./state-root";
 import type {
   BuildMode,
@@ -42,6 +43,7 @@ import type {
   InitSetupPackageManager,
   InitSetupResult,
   InitSetupStep,
+  QueryIntent,
 } from "./types";
 import { VEIL_VERSION } from "./version";
 import { webSearch } from "./web-search";
@@ -52,25 +54,9 @@ type SharedArgs = {
   profile?: boolean;
 };
 
-type Intent = "auto" | "code" | "docs" | "symbols";
+type Intent = QueryIntent;
 
 type McpClient = "claude" | "codex" | "opencode" | "other";
-
-function parseIntent(value: unknown): Intent {
-  return value === "code" || value === "docs" || value === "symbols" ? value : "auto";
-}
-
-function compactStatusSummary(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { exists: false, stale: true, reasons: ["unknown"] };
-  }
-  const record = value as Record<string, unknown>;
-  return {
-    exists: record.exists === true,
-    stale: record.stale === true,
-    reasons: Array.isArray(record.reasons) ? record.reasons : [],
-  };
-}
 
 function writeOutput(data: unknown): void {
   process.stdout.write(toToon(data) + "\n");
@@ -1005,12 +991,12 @@ export function createCli(args: string[] = []): Argv {
         alias: "timeout-ms",
         default: 5000,
       }),
-    (argv) => {
+    async (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
         withAgentGuidanceCompact(
           "git_status",
-          gitStatus(workspace, { timeout_ms: argv.timeoutMs ?? 5000 }),
+          await gitStatus(workspace, { timeout_ms: argv.timeoutMs ?? 5000 }),
         ),
       );
     },
@@ -1034,12 +1020,12 @@ export function createCli(args: string[] = []): Argv {
         .option("since", { type: "string" })
         .option("author", { type: "string" })
         .option("grep", { type: "string" }),
-    (argv) => {
+    async (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
         withAgentGuidanceCompact(
           "git_log",
-          gitLog(workspace, {
+          await gitLog(workspace, {
             timeout_ms: argv.timeoutMs ?? 8000,
             limit: argv.limit ?? 30,
             since: argv.since,
@@ -1073,12 +1059,12 @@ export function createCli(args: string[] = []): Argv {
         .option("path", { type: "string" })
         .option("base", { type: "string" })
         .option("head", { type: "string" }),
-    (argv) => {
+    async (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
         withAgentGuidanceCompact(
           "git_diff",
-          gitDiff(workspace, {
+          await gitDiff(workspace, {
             timeout_ms: argv.timeoutMs ?? 5000,
             max_bytes: argv.maxBytes ?? 64000,
             staged: argv.staged ?? false,
@@ -1110,12 +1096,12 @@ export function createCli(args: string[] = []): Argv {
         .option("maxBytes", { type: "number", alias: "max-bytes", default: 64000 })
         .option("path", { type: "string" })
         .option("patch", { type: "boolean", default: true }),
-    (argv) => {
+    async (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
         withAgentGuidanceCompact(
           "git_show",
-          gitShow(workspace, {
+          await gitShow(workspace, {
             rev: argv.rev ?? "",
             timeout_ms: argv.timeoutMs ?? 8000,
             max_bytes: argv.maxBytes ?? 64000,

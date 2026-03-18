@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,8 @@ import {
 } from "./symbols-tree-sitter";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { webSearch } from "./web-search";
+
+import "./test/server-http.test";
 
 const TEST_FIXTURES_DIR = join(import.meta.dir, "../test/fixtures");
 const SMALL_REPO = join(TEST_FIXTURES_DIR, "small");
@@ -1245,6 +1247,36 @@ describe("Phase 3: Cache behavior", () => {
     expect(changedManifest.file_count).toBe(fullManifest.file_count);
   });
 
+  test("Changed mode skips human-doc rewrites when no files changed", async () => {
+    const repo = join(TEMP_TEST_DIR, "changed-noop-docs-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "index.ts"), "export const value = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+
+    await buildIndex(repo, "full");
+    const dirsPath = join(repo, ".veil", "index", "dirs.md");
+    const entrypointsPath = join(repo, ".veil", "index", "entrypoints.md");
+    const dirsBefore = await stat(dirsPath);
+    const entrypointsBefore = await stat(entrypointsPath);
+
+    await buildIndex(repo, "changed");
+
+    const dirsAfter = await stat(dirsPath);
+    const entrypointsAfter = await stat(entrypointsPath);
+    expect(dirsAfter.mtimeMs).toBe(dirsBefore.mtimeMs);
+    expect(entrypointsAfter.mtimeMs).toBe(entrypointsBefore.mtimeMs);
+  });
+
   test("Changed mode includes staged, unstaged, and untracked files", async () => {
     const repo = join(TEMP_TEST_DIR, "dirty-repo");
     await mkdir(repo, { recursive: true });
@@ -1356,7 +1388,7 @@ describe("Phase 3: Cache behavior", () => {
     diagnostics.reset();
 
     const nonRepo = await mkdtemp(join(tmpdir(), "veil-diag-git-fail-"));
-    const gitFail = gitStatus(nonRepo);
+    const gitFail = await gitStatus(nonRepo);
     expect(gitFail.meta.ok).toBe(false);
     await rm(nonRepo, { recursive: true });
 
@@ -1404,7 +1436,7 @@ describe("Phase 3: Cache behavior", () => {
     ]);
     await writeFile(join(repo, "a.ts"), "export const a = 2\n");
 
-    const result = gitStatus(repo);
+    const result = await gitStatus(repo);
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
     const data = must(result.data);
@@ -1429,13 +1461,13 @@ describe("Phase 3: Cache behavior", () => {
     ]);
     await writeFile(join(repo, "new.ts"), "export const n = 1\n");
 
-    const result = gitStatus(repo);
+    const result = await gitStatus(repo);
     expect(result.meta.ok).toBe(true);
     expect((result.data?.changed.untracked ?? 0) > 0).toBe(true);
   });
 
-  test("Git status returns non-negative duration", () => {
-    const result = gitStatus(SMALL_REPO);
+  test("Git status returns non-negative duration", async () => {
+    const result = await gitStatus(SMALL_REPO);
     expect(result.meta.duration_ms).toBeGreaterThanOrEqual(0);
   });
 
@@ -1471,7 +1503,7 @@ describe("Phase 3: Cache behavior", () => {
       "second",
     ]);
 
-    const result = gitLog(repo, { limit: 2 });
+    const result = await gitLog(repo, { limit: 2 });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
     expect(must(result.data).entries.length).toBeLessThan(3);
@@ -1494,7 +1526,7 @@ describe("Phase 3: Cache behavior", () => {
     ]);
     await writeFile(join(repo, "b.ts"), "export const b = 'after'\n");
 
-    const result = gitDiff(repo, { path: "b.ts" });
+    const result = await gitDiff(repo, { path: "b.ts" });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
     expect(must(result.data).text.includes("after")).toBe(true);
@@ -1516,7 +1548,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitDiff(repo, { path: "../escape.ts" });
+    const result = await gitDiff(repo, { path: "../escape.ts" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-path");
   });
@@ -1537,7 +1569,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitDiff(repo, { base: "HEAD bad" });
+    const result = await gitDiff(repo, { base: "HEAD bad" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-revision");
   });
@@ -1558,7 +1590,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitDiff(repo, { base: "HEAD", head: "HEAD bad" });
+    const result = await gitDiff(repo, { base: "HEAD", head: "HEAD bad" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-revision");
   });
@@ -1579,7 +1611,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitShow(repo, { rev: "" });
+    const result = await gitShow(repo, { rev: "" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-revision");
   });
@@ -1601,14 +1633,14 @@ describe("Phase 3: Cache behavior", () => {
     ]);
     await writeFile(join(repo, "big.ts"), `${"x".repeat(4000)}\n`);
 
-    const result = gitDiff(repo, { path: "big.ts", max_bytes: 1024 });
+    const result = await gitDiff(repo, { path: "big.ts", max_bytes: 1024 });
     expect(result.meta.ok).toBe(true);
     expect(result.meta.truncated).toBe(true);
     expect(result.meta.warnings.length).toBeGreaterThan(0);
   });
 
-  test("Git status reports git-unavailable when command is missing", () => {
-    const result = gitStatus(SMALL_REPO, { command: "git-missing-binary" });
+  test("Git status reports git-unavailable when command is missing", async () => {
+    const result = await gitStatus(SMALL_REPO, { command: "git-missing-binary" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("git-unavailable");
   });
@@ -1619,7 +1651,7 @@ describe("Phase 3: Cache behavior", () => {
       script,
       '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--abbrev-ref" ]; then exit 2; fi\nexit 0\n',
     );
-    const result = gitStatus(SMALL_REPO, { command: script });
+    const result = await gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
   });
@@ -1630,7 +1662,7 @@ describe("Phase 3: Cache behavior", () => {
       script,
       '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then exit 2; fi\nexit 0\n',
     );
-    const result = gitStatus(SMALL_REPO, { command: script });
+    const result = await gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("not-a-repo");
   });
@@ -1641,15 +1673,15 @@ describe("Phase 3: Cache behavior", () => {
       script,
       '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then echo /no/such/root; exit 0; fi\nexit 0\n',
     );
-    const result = gitStatus(SMALL_REPO, { command: script });
+    const result = await gitStatus(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("not-a-repo");
   });
 
   test("Git log and show fail on non-repo workspace", async () => {
     const nonRepo = await mkdtemp(join(tmpdir(), "veil-non-repo-multi-"));
-    const logResult = gitLog(nonRepo, { limit: 3 });
-    const showResult = gitShow(nonRepo, { rev: "HEAD" });
+    const logResult = await gitLog(nonRepo, { limit: 3 });
+    const showResult = await gitShow(nonRepo, { rev: "HEAD" });
     expect(logResult.meta.ok).toBe(false);
     expect(logResult.error?.code).toBe("not-a-repo");
     expect(showResult.meta.ok).toBe(false);
@@ -1663,14 +1695,14 @@ describe("Phase 3: Cache behavior", () => {
       script,
       '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "log" ]; then exit 9; fi\nexit 0\n',
     );
-    const result = gitLog(SMALL_REPO, { command: script });
+    const result = await gitLog(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
   });
 
   test("Git diff fails on non-repo workspace", async () => {
     const nonRepo = await mkdtemp(join(tmpdir(), "veil-non-repo-diff-"));
-    const result = gitDiff(nonRepo, { path: "a.ts" });
+    const result = await gitDiff(nonRepo, { path: "a.ts" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("not-a-repo");
     await rm(nonRepo, { recursive: true });
@@ -1682,7 +1714,7 @@ describe("Phase 3: Cache behavior", () => {
       script,
       '#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "--is-inside-work-tree" ]; then echo true; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then pwd; exit 0; fi\nif [ "$3" = "diff" ]; then exit 7; fi\nexit 0\n',
     );
-    const result = gitDiff(SMALL_REPO, { command: script });
+    const result = await gitDiff(SMALL_REPO, { command: script });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("command-failed");
   });
@@ -1703,7 +1735,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitDiff(repo, { base: "HEAD", name_only: true });
+    const result = await gitDiff(repo, { base: "HEAD", name_only: true });
     expect(result.meta.ok).toBe(true);
     expect(result.data?.mode).toBe("working");
   });
@@ -1724,7 +1756,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitShow(repo, { rev: "notarev123" });
+    const result = await gitShow(repo, { rev: "notarev123" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-revision");
   });
@@ -1745,7 +1777,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitDiff(repo, { base: "HEAD:foo" });
+    const result = await gitDiff(repo, { base: "HEAD:foo" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-revision");
   });
@@ -1766,7 +1798,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitShow(repo, { rev: "HEAD", path: "/abs/path.ts" });
+    const result = await gitShow(repo, { rev: "HEAD", path: "/abs/path.ts" });
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("invalid-path");
   });
@@ -1925,7 +1957,7 @@ describe("Phase 3: Cache behavior", () => {
       "show",
     ]);
 
-    const result = gitShow(repo, { rev: "HEAD", patch: false });
+    const result = await gitShow(repo, { rev: "HEAD", patch: false });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
     expect(must(result.data).text.includes("Commit:")).toBe(true);
@@ -1948,7 +1980,7 @@ describe("Phase 3: Cache behavior", () => {
       "init",
     ]);
 
-    const result = gitStatus(subdir);
+    const result = await gitStatus(subdir);
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
   });
@@ -1980,7 +2012,7 @@ describe("Phase 3: Cache behavior", () => {
       "second",
     ]);
 
-    const result = gitDiff(repo, { base: "HEAD~1", head: "HEAD", name_only: true });
+    const result = await gitDiff(repo, { base: "HEAD~1", head: "HEAD", name_only: true });
     expect(result.meta.ok).toBe(true);
     expect(result.data).not.toBeNull();
     expect(must(result.data).text.includes("range.ts")).toBe(true);
@@ -2030,14 +2062,14 @@ describe("Phase 3: Cache behavior", () => {
     ];
 
     for (const { desc, rev } of injectionVectors) {
-      test(`Git diff rejects ${desc}`, () => {
-        const result = gitDiff(repo, { base: rev });
+      test(`Git diff rejects ${desc}`, async () => {
+        const result = await gitDiff(repo, { base: rev });
         expect(result.meta.ok).toBe(false);
         expect(result.error?.code).toBe("invalid-revision");
       });
 
-      test(`Git show rejects ${desc}`, () => {
-        const result = gitShow(repo, { rev });
+      test(`Git show rejects ${desc}`, async () => {
+        const result = await gitShow(repo, { rev });
         expect(result.meta.ok).toBe(false);
         expect(result.error?.code).toBe("invalid-revision");
       });
@@ -2063,50 +2095,50 @@ describe("Phase 3: Cache behavior", () => {
       ]);
     });
 
-    test("Git diff rejects path with null byte", () => {
-      const result = gitDiff(repo, { path: "test\u0000.ts" });
+    test("Git diff rejects path with null byte", async () => {
+      const result = await gitDiff(repo, { path: "test\u0000.ts" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git diff rejects path starting with hyphen", () => {
-      const result = gitDiff(repo, { path: "-test.ts" });
+    test("Git diff rejects path starting with hyphen", async () => {
+      const result = await gitDiff(repo, { path: "-test.ts" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git diff rejects absolute path", () => {
-      const result = gitDiff(repo, { path: "/etc/passwd" });
+    test("Git diff rejects absolute path", async () => {
+      const result = await gitDiff(repo, { path: "/etc/passwd" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git diff rejects path traversal with ..", () => {
-      const result = gitDiff(repo, { path: "../../../etc/passwd" });
+    test("Git diff rejects path traversal with ..", async () => {
+      const result = await gitDiff(repo, { path: "../../../etc/passwd" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git show rejects path with null byte", () => {
-      const result = gitShow(repo, { rev: "HEAD", path: "test\u0000.ts" });
+    test("Git show rejects path with null byte", async () => {
+      const result = await gitShow(repo, { rev: "HEAD", path: "test\u0000.ts" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git show rejects path starting with hyphen", () => {
-      const result = gitShow(repo, { rev: "HEAD", path: "-test.ts" });
+    test("Git show rejects path starting with hyphen", async () => {
+      const result = await gitShow(repo, { rev: "HEAD", path: "-test.ts" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git show rejects absolute path", () => {
-      const result = gitShow(repo, { rev: "HEAD", path: "/etc/passwd" });
+    test("Git show rejects absolute path", async () => {
+      const result = await gitShow(repo, { rev: "HEAD", path: "/etc/passwd" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
 
-    test("Git show rejects path traversal with ..", () => {
-      const result = gitShow(repo, { rev: "HEAD", path: "../../../etc/passwd" });
+    test("Git show rejects path traversal with ..", async () => {
+      const result = await gitShow(repo, { rev: "HEAD", path: "../../../etc/passwd" });
       expect(result.meta.ok).toBe(false);
       expect(result.error?.code).toBe("invalid-path");
     });
@@ -2115,7 +2147,7 @@ describe("Phase 3: Cache behavior", () => {
   test("Git tools fail with not-a-repo on non-git workspace", async () => {
     const repo = await mkdtemp(join(tmpdir(), "veil-not-a-repo-"));
     await writeFile(join(repo, "c.ts"), "export const c = 3\n");
-    const result = gitStatus(repo);
+    const result = await gitStatus(repo);
     expect(result.meta.ok).toBe(false);
     expect(result.error?.code).toBe("not-a-repo");
     await rm(repo, { recursive: true });
@@ -2151,8 +2183,8 @@ describe("Phase 3: Cache behavior", () => {
     expect(threw).toBe(true);
   });
 
-  test("Git internals runCommand returns error data on invalid cwd", () => {
-    const result = __internalGit.runCommand(
+  test("Git internals runCommand returns error data on invalid cwd", async () => {
+    const result = await __internalGit.runCommand(
       "git",
       ["status"],
       "/definitely/missing/cwd-for-run-command",
@@ -2515,8 +2547,8 @@ describe("Phase 4.5: Query accuracy verification", () => {
 });
 
 describe("Phase 4.6: Error handling standardization", () => {
-  test("Git tool error responses have consistent format", () => {
-    const result = gitStatus("/nonexistent/path/that/does/not/exist");
+  test("Git tool error responses have consistent format", async () => {
+    const result = await gitStatus("/nonexistent/path/that/does/not/exist");
     expect(result.meta.ok).toBe(false);
     expect(result.error).not.toBeNull();
     expect(result.error?.code).toBeDefined();
@@ -2548,8 +2580,8 @@ describe("Phase 4.6: Error handling standardization", () => {
     expect(result.data).toBeNull();
   });
 
-  test("Git tool success responses have consistent format", () => {
-    const result = gitStatus(SMALL_REPO);
+  test("Git tool success responses have consistent format", async () => {
+    const result = await gitStatus(SMALL_REPO);
     expect(result.meta.ok).toBe(true);
     expect(result.error).toBeNull();
     expect(result.data).toBeDefined();
@@ -2558,8 +2590,8 @@ describe("Phase 4.6: Error handling standardization", () => {
     expect(result.meta.duration_ms).toBeGreaterThanOrEqual(0);
   });
 
-  test("Error codes are from defined taxonomies", () => {
-    const gitResult = gitStatus("/nonexistent/path");
+  test("Error codes are from defined taxonomies", async () => {
+    const gitResult = await gitStatus("/nonexistent/path");
     if (!gitResult.meta.ok && gitResult.error) {
       const validGitCodes = [
         "not-a-repo",

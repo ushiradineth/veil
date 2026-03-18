@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
@@ -52,38 +52,73 @@ export const __internalGit = {
   validateRevision,
 };
 
-function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): RunResult {
+async function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+): Promise<RunResult> {
   const started = nowMs();
-  try {
-    const out = spawnSync(command, args, {
+  return await new Promise((resolveResult) => {
+    let resolved = false;
+    const child = spawn(command, args, {
       cwd,
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: timeoutMs,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    const elapsed = nowMs() - started;
-    const timedOut = (out.signal === "SIGTERM" && out.status === null) || elapsed > timeoutMs;
-    return {
-      ok: out.status === 0 && !out.error && !timedOut,
-      stdout: out.stdout,
-      stderr: out.stderr,
-      code: out.status,
-      timedOut,
-      error: out.error?.message,
-      errorCode: (out.error as { code?: string } | undefined)?.code,
-    };
-  } catch (error) {
-    const value = error as { message?: string; code?: string };
-    return {
-      ok: false,
-      stdout: "",
-      stderr: "",
-      code: null,
-      timedOut: false,
-      error: value.message ?? String(error),
-      errorCode: value.code,
-    };
-  }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      if (resolved) return;
+      resolved = true;
+      resolveResult({
+        ok: false,
+        stdout,
+        stderr,
+        code: null,
+        timedOut: true,
+      });
+    }, timeoutMs);
+
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      if (resolved) return;
+      resolved = true;
+      resolveResult({
+        ok: false,
+        stdout,
+        stderr,
+        code: null,
+        timedOut: false,
+        error: error.message,
+        errorCode: error.code,
+      });
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (resolved) return;
+      resolved = true;
+      const elapsed = nowMs() - started;
+      const timedOut = elapsed > timeoutMs;
+      resolveResult({
+        ok: code === 0 && !timedOut,
+        stdout,
+        stderr,
+        code,
+        timedOut,
+      });
+    });
+  });
 }
 
 function isMissingBinary(result: RunResult): boolean {
@@ -316,11 +351,11 @@ function validateRevision(
   return { ok: true, value: rev };
 }
 
-function ensureGitRepo(
+async function ensureGitRepo(
   workspace: string,
   options: RunnerOptions,
-): { ok: true } | { ok: false; error: GitToolError; gitAvailable: boolean } {
-  const probe = runCommand(
+): Promise<{ ok: true } | { ok: false; error: GitToolError; gitAvailable: boolean }> {
+  const probe = await runCommand(
     options.command ?? "git",
     ["-C", workspace, "rev-parse", "--is-inside-work-tree"],
     workspace,
@@ -340,7 +375,7 @@ function ensureGitRepo(
       gitAvailable: true,
     };
   }
-  const top = runCommand(
+  const top = await runCommand(
     options.command ?? "git",
     ["-C", workspace, "rev-parse", "--show-toplevel"],
     workspace,
@@ -441,44 +476,44 @@ function recordDiagnostics(
   diagnostics.recordGitCall(elapsed, ok, timedOut, isGh);
 }
 
-export function gitStatus(
+export async function gitStatus(
   workspace: string,
   options?: { timeout_ms?: number; command?: string },
-): GitToolResponse<GitStatusData> {
+): Promise<GitToolResponse<GitStatusData>> {
   const started = nowMs();
   const timeoutMs = Math.min(10_000, Math.max(500, options?.timeout_ms ?? 5_000));
   const runner = { timeoutMs, command: options?.command };
-  const repoCheck = ensureGitRepo(workspace, runner);
+  const repoCheck = await ensureGitRepo(workspace, runner);
   if (!repoCheck.ok) {
     recordDiagnostics("git_status", started, false, false);
     return fail(workspace, "git_status", started, repoCheck.error, repoCheck.gitAvailable);
   }
 
-  const branch = runCommand(
+  const branch = await runCommand(
     runner.command ?? "git",
     ["-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
     workspace,
     timeoutMs,
   );
-  const head = runCommand(
+  const head = await runCommand(
     runner.command ?? "git",
     ["-C", workspace, "rev-parse", "HEAD"],
     workspace,
     timeoutMs,
   );
-  const upstream = runCommand(
+  const upstream = await runCommand(
     runner.command ?? "git",
     ["-C", workspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
     workspace,
     timeoutMs,
   );
-  const aheadBehind = runCommand(
+  const aheadBehind = await runCommand(
     runner.command ?? "git",
     ["-C", workspace, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
     workspace,
     timeoutMs,
   );
-  const porcelain = runCommand(
+  const porcelain = await runCommand(
     runner.command ?? "git",
     ["-C", workspace, "status", "--porcelain"],
     workspace,
@@ -514,7 +549,7 @@ export function gitStatus(
   return finish(workspace, "git_status", started, data, { truncated: false });
 }
 
-export function gitLog(
+export async function gitLog(
   workspace: string,
   options?: {
     limit?: number;
@@ -524,11 +559,11 @@ export function gitLog(
     timeout_ms?: number;
     command?: string;
   },
-): GitToolResponse<GitLogData> {
+): Promise<GitToolResponse<GitLogData>> {
   const started = nowMs();
   const timeoutMs = Math.min(12_000, Math.max(500, options?.timeout_ms ?? 8_000));
   const runner = { timeoutMs, command: options?.command };
-  const repoCheck = ensureGitRepo(workspace, runner);
+  const repoCheck = await ensureGitRepo(workspace, runner);
   if (!repoCheck.ok) {
     recordDiagnostics("git_log", started, false, false);
     return fail(workspace, "git_log", started, repoCheck.error, repoCheck.gitAvailable);
@@ -547,7 +582,7 @@ export function gitLog(
   if (options?.author) args.push(`--author=${options.author}`);
   if (options?.grep) args.push(`--grep=${options.grep}`);
 
-  const out = runCommand(runner.command ?? "git", args, workspace, timeoutMs);
+  const out = await runCommand(runner.command ?? "git", args, workspace, timeoutMs);
   if (!out.ok) {
     recordDiagnostics("git_log", started, false, out.timedOut);
     return fail(workspace, "git_log", started, {
@@ -561,7 +596,7 @@ export function gitLog(
   return finish(workspace, "git_log", started, { limit, entries }, { truncated: false });
 }
 
-export function gitDiff(
+export async function gitDiff(
   workspace: string,
   options?: {
     staged?: boolean;
@@ -573,11 +608,11 @@ export function gitDiff(
     max_bytes?: number;
     command?: string;
   },
-): GitToolResponse<GitDiffData> {
+): Promise<GitToolResponse<GitDiffData>> {
   const started = nowMs();
   const timeoutMs = Math.min(10_000, Math.max(500, options?.timeout_ms ?? 5_000));
   const runner = { timeoutMs, command: options?.command };
-  const repoCheck = ensureGitRepo(workspace, runner);
+  const repoCheck = await ensureGitRepo(workspace, runner);
   if (!repoCheck.ok) {
     recordDiagnostics("git_diff", started, false, false);
     return fail(workspace, "git_diff", started, repoCheck.error, repoCheck.gitAvailable);
@@ -615,7 +650,7 @@ export function gitDiff(
     args.push("--", pathValidated.value);
   }
 
-  const out = runCommand(runner.command ?? "git", args, workspace, timeoutMs);
+  const out = await runCommand(runner.command ?? "git", args, workspace, timeoutMs);
   if (!out.ok) {
     recordDiagnostics("git_diff", started, false, out.timedOut);
     return fail(workspace, "git_diff", started, {
@@ -638,7 +673,7 @@ export function gitDiff(
   return finish(workspace, "git_diff", started, data, truncation);
 }
 
-export function gitShow(
+export async function gitShow(
   workspace: string,
   options?: {
     rev: string;
@@ -648,11 +683,11 @@ export function gitShow(
     timeout_ms?: number;
     command?: string;
   },
-): GitToolResponse<GitShowData> {
+): Promise<GitToolResponse<GitShowData>> {
   const started = nowMs();
   const timeoutMs = Math.min(12_000, Math.max(500, options?.timeout_ms ?? 8_000));
   const runner = { timeoutMs, command: options?.command };
-  const repoCheck = ensureGitRepo(workspace, runner);
+  const repoCheck = await ensureGitRepo(workspace, runner);
   if (!repoCheck.ok) {
     recordDiagnostics("git_show", started, false, false);
     return fail(workspace, "git_show", started, repoCheck.error, repoCheck.gitAvailable);
@@ -691,7 +726,7 @@ export function gitShow(
     args.push("--", pathValidated.value);
   }
 
-  const out = runCommand(runner.command ?? "git", args, workspace, timeoutMs);
+  const out = await runCommand(runner.command ?? "git", args, workspace, timeoutMs);
   if (!out.ok) {
     const invalidRevision =
       out.stderr.includes("bad revision") || out.stderr.includes("unknown revision");
@@ -713,7 +748,7 @@ export function gitShow(
   return finish(workspace, "git_show", started, data, truncation);
 }
 
-export function ghLookup(
+export async function ghLookup(
   workspace: string,
   options: {
     repo: string;
@@ -729,38 +764,32 @@ export function ghLookup(
   const started = nowMs();
   const timeoutMs = Math.min(20_000, Math.max(500, options.timeout_ms ?? 12_000));
   const command = options.command ?? "gh";
-  const probe = runCommand(command, ["--version"], workspace, timeoutMs);
+  const probe = await runCommand(command, ["--version"], workspace, timeoutMs);
   if (isMissingBinary(probe)) {
     recordDiagnostics("gh_lookup", started, false, false);
-    return Promise.resolve(
-      fail(
-        workspace,
-        "gh_lookup",
-        started,
-        { code: "gh-unavailable", message: "gh is not available in PATH" },
-        true,
-      ),
+    return fail(
+      workspace,
+      "gh_lookup",
+      started,
+      { code: "gh-unavailable", message: "gh is not available in PATH" },
+      true,
     );
   }
   if (!probe.ok) {
     recordDiagnostics("gh_lookup", started, false, probe.timedOut);
-    return Promise.resolve(
-      fail(workspace, "gh_lookup", started, {
-        code: probe.timedOut ? "timeout" : "gh-unavailable",
-        message: "gh command is unavailable",
-      }),
-    );
+    return fail(workspace, "gh_lookup", started, {
+      code: probe.timedOut ? "timeout" : "gh-unavailable",
+      message: "gh command is unavailable",
+    });
   }
 
-  const auth = runCommand(command, ["auth", "status"], workspace, timeoutMs);
+  const auth = await runCommand(command, ["auth", "status"], workspace, timeoutMs);
   if (!auth.ok) {
     recordDiagnostics("gh_lookup", started, false, auth.timedOut);
-    return Promise.resolve(
-      fail(workspace, "gh_lookup", started, {
-        code: auth.timedOut ? "timeout" : "gh-unauthenticated",
-        message: "gh is unauthenticated or cannot access GitHub",
-      }),
-    );
+    return fail(workspace, "gh_lookup", started, {
+      code: auth.timedOut ? "timeout" : "gh-unauthenticated",
+      message: "gh is unauthenticated or cannot access GitHub",
+    });
   }
 
   const parseRepoRef = (
@@ -807,41 +836,35 @@ export function ghLookup(
   const repoRef = parseRepoRef(options.repo);
   if (!repoRef) {
     recordDiagnostics("gh_lookup", started, false, false);
-    return Promise.resolve(
-      fail(workspace, "gh_lookup", started, {
-        code: "command-failed",
-        message: "repo must be 'owner/repo' or a GitHub URL",
-      }),
-    );
+    return fail(workspace, "gh_lookup", started, {
+      code: "command-failed",
+      message: "repo must be 'owner/repo' or a GitHub URL",
+    });
   }
 
   if (options.kind === "repo_context") {
-    const gitProbe = runCommand("git", ["--version"], workspace, timeoutMs);
+    const gitProbe = await runCommand("git", ["--version"], workspace, timeoutMs);
     if (isMissingBinary(gitProbe)) {
       recordDiagnostics("gh_lookup", started, false, false);
-      return Promise.resolve(
-        fail(
-          workspace,
-          "gh_lookup",
-          started,
-          { code: "git-unavailable", message: "git is not available in PATH" },
-          false,
-        ),
+      return fail(
+        workspace,
+        "gh_lookup",
+        started,
+        { code: "git-unavailable", message: "git is not available in PATH" },
+        false,
       );
     }
     if (!gitProbe.ok) {
       recordDiagnostics("gh_lookup", started, false, gitProbe.timedOut);
-      return Promise.resolve(
-        fail(
-          workspace,
-          "gh_lookup",
-          started,
-          {
-            code: gitProbe.timedOut ? "timeout" : "command-failed",
-            message: "git command is unavailable",
-          },
-          false,
-        ),
+      return fail(
+        workspace,
+        "gh_lookup",
+        started,
+        {
+          code: gitProbe.timedOut ? "timeout" : "command-failed",
+          message: "git command is unavailable",
+        },
+        false,
       );
     }
 
@@ -853,7 +876,7 @@ export function ghLookup(
     const markerPath = join(target, REPO_CONTEXT_MARKER);
     let syncOut: RunResult;
     if (!existsSync(gitDir)) {
-      syncOut = runCommand(
+      syncOut = await runCommand(
         "git",
         ["clone", "--depth", "1", repoRef.url, target],
         workspace,
@@ -865,36 +888,32 @@ export function ghLookup(
     } else {
       if (!existsSync(markerPath)) {
         recordDiagnostics("gh_lookup", started, false, false);
-        return Promise.resolve(
-          fail(workspace, "gh_lookup", started, {
-            code: "command-failed",
-            message: `existing clone target ${target} is unmanaged, refusing hard reset`,
-          }),
-        );
+        return fail(workspace, "gh_lookup", started, {
+          code: "command-failed",
+          message: `existing clone target ${target} is unmanaged, refusing hard reset`,
+        });
       }
       const markerRepo = readFileSync(markerPath, "utf-8").trim();
       if (markerRepo !== repoRef.repo) {
         recordDiagnostics("gh_lookup", started, false, false);
-        return Promise.resolve(
-          fail(workspace, "gh_lookup", started, {
-            code: "command-failed",
-            message: `existing clone target ${target} belongs to ${markerRepo || "unknown"}, refusing hard reset`,
-          }),
-        );
+        return fail(workspace, "gh_lookup", started, {
+          code: "command-failed",
+          message: `existing clone target ${target} belongs to ${markerRepo || "unknown"}, refusing hard reset`,
+        });
       }
-      const remote = runCommand(
+      const remote = await runCommand(
         "git",
         ["-C", target, "remote", "set-url", "origin", repoRef.url],
         workspace,
         timeoutMs,
       );
-      const fetch = runCommand(
+      const fetch = await runCommand(
         "git",
         ["-C", target, "fetch", "--depth", "1", "origin"],
         workspace,
         timeoutMs,
       );
-      const headRef = runCommand(
+      const headRef = await runCommand(
         "git",
         ["-C", target, "symbolic-ref", "refs/remotes/origin/HEAD"],
         workspace,
@@ -903,7 +922,7 @@ export function ghLookup(
       const branchRef = headRef.ok
         ? headRef.stdout.trim().replace(/^refs\/remotes\//, "")
         : "origin/main";
-      const reset = runCommand(
+      const reset = await runCommand(
         "git",
         ["-C", target, "reset", "--hard", branchRef],
         workspace,
@@ -923,39 +942,36 @@ export function ghLookup(
 
     if (!syncOut.ok) {
       recordDiagnostics("gh_lookup", started, false, syncOut.timedOut);
-      return Promise.resolve(
-        fail(workspace, "gh_lookup", started, {
-          code: syncOut.timedOut ? "timeout" : "command-failed",
-          message: `failed to sync repo ${repoRef.repo}: ${syncOut.stderr.trim() !== "" ? syncOut.stderr.trim() : (syncOut.error ?? "unknown")}`,
-        }),
-      );
+      return fail(workspace, "gh_lookup", started, {
+        code: syncOut.timedOut ? "timeout" : "command-failed",
+        message: `failed to sync repo ${repoRef.repo}: ${syncOut.stderr.trim() !== "" ? syncOut.stderr.trim() : (syncOut.error ?? "unknown")}`,
+      });
     }
 
-    return buildIndex(target, "changed", { state_root: options.state_root })
-      .then(async () => {
-        const status = await getStatus(target, { state_root: options.state_root });
-        const stateRootResolved = resolveStateRoot(target, options.state_root);
-        const data: GhLookupData = {
-          repo: repoRef.repo,
-          kind: "repo_context",
-          query: options.query ?? "",
-          limit: 0,
-          text: `repo indexed at ${target}`,
-          repo_url: repoRef.url,
-          cloned_workspace: target,
-          state_root: stateRootResolved,
-          status_exists: status.exists,
-        };
-        recordDiagnostics("gh_lookup", started, true, false);
-        return finish(workspace, "gh_lookup", started, data, { truncated: false });
-      })
-      .catch((error: unknown) => {
-        recordDiagnostics("gh_lookup", started, false, false);
-        return fail(workspace, "gh_lookup", started, {
-          code: "command-failed",
-          message: `failed to index cloned repo: ${String(error)}`,
-        });
+    try {
+      await buildIndex(target, "changed", { state_root: options.state_root });
+      const status = await getStatus(target, { state_root: options.state_root });
+      const stateRootResolved = resolveStateRoot(target, options.state_root);
+      const data: GhLookupData = {
+        repo: repoRef.repo,
+        kind: "repo_context",
+        query: options.query ?? "",
+        limit: 0,
+        text: `repo indexed at ${target}`,
+        repo_url: repoRef.url,
+        cloned_workspace: target,
+        state_root: stateRootResolved,
+        status_exists: status.exists,
+      };
+      recordDiagnostics("gh_lookup", started, true, false);
+      return finish(workspace, "gh_lookup", started, data, { truncated: false });
+    } catch (error) {
+      recordDiagnostics("gh_lookup", started, false, false);
+      return fail(workspace, "gh_lookup", started, {
+        code: "command-failed",
+        message: `failed to index cloned repo: ${String(error)}`,
       });
+    }
   }
 
   const limit = Math.min(50, Math.max(1, options.limit ?? 10));
@@ -976,15 +992,13 @@ export function ghLookup(
     args = ["list", "--repo", repoRef.repo, "--limit", String(limit)];
   }
 
-  const out = runCommand(command, [subcommand, ...args], workspace, timeoutMs);
+  const out = await runCommand(command, [subcommand, ...args], workspace, timeoutMs);
   if (!out.ok) {
     recordDiagnostics("gh_lookup", started, false, out.timedOut);
-    return Promise.resolve(
-      fail(workspace, "gh_lookup", started, {
-        code: out.timedOut ? "timeout" : "command-failed",
-        message: `gh lookup failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
-      }),
-    );
+    return fail(workspace, "gh_lookup", started, {
+      code: out.timedOut ? "timeout" : "command-failed",
+      message: `gh lookup failed: ${out.stderr.trim() !== "" ? out.stderr.trim() : (out.error ?? "unknown")}`,
+    });
   }
 
   const truncation = truncateText(out.stdout, DEFAULT_MAX_BYTES);
@@ -997,5 +1011,5 @@ export function ghLookup(
     repo_url: repoRef.url,
   };
   recordDiagnostics("gh_lookup", started, true, false);
-  return Promise.resolve(finish(workspace, "gh_lookup", started, data, truncation));
+  return finish(workspace, "gh_lookup", started, data, truncation);
 }

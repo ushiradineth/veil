@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -161,19 +161,42 @@ function nowMs(): number {
   return Date.now();
 }
 
-function runGit(workspace: string, args: string[]): string | null {
-  const result = spawnSync("git", ["-C", workspace, ...args], { encoding: "utf-8" });
-  if (result.status !== 0) return null;
-  return result.stdout.trim();
+async function runGit(workspace: string, args: string[], timeoutMs = 5000): Promise<string | null> {
+  return await new Promise((resolve) => {
+    const child = spawn("git", ["-C", workspace, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      resolve(null);
+    }, timeoutMs);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
 }
 
-function hasDirtyWorkspace(workspace: string): boolean {
-  const raw = runGit(workspace, ["status", "--porcelain"]);
+async function hasDirtyWorkspace(workspace: string): Promise<boolean> {
+  const raw = await runGit(workspace, ["status", "--porcelain"]);
   if (raw === null) return false;
   return raw.length > 0;
 }
 
-function listDirtyFiles(workspace: string, baseHead: string | null): Set<string> {
+async function listDirtyFiles(workspace: string, baseHead: string | null): Promise<Set<string>> {
   const out = new Set<string>();
   const addLines = (raw: string | null): void => {
     if (!raw) return;
@@ -183,10 +206,10 @@ function listDirtyFiles(workspace: string, baseHead: string | null): Set<string>
     }
   };
 
-  if (baseHead) addLines(runGit(workspace, ["diff", "--name-only", `${baseHead}..HEAD`]));
-  addLines(runGit(workspace, ["diff", "--name-only"]));
-  addLines(runGit(workspace, ["diff", "--cached", "--name-only"]));
-  addLines(runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
+  if (baseHead) addLines(await runGit(workspace, ["diff", "--name-only", `${baseHead}..HEAD`]));
+  addLines(await runGit(workspace, ["diff", "--name-only"]));
+  addLines(await runGit(workspace, ["diff", "--cached", "--name-only"]));
+  addLines(await runGit(workspace, ["ls-files", "--others", "--exclude-standard"]));
   return out;
 }
 
@@ -572,7 +595,8 @@ export async function buildIndex(
   }
 
   const tracked = await listIndexableFiles(workspace, options.state_root);
-  const gitHead = runGit(workspace, ["rev-parse", "HEAD"]);
+  const gitHead = await runGit(workspace, ["rev-parse", "HEAD"]);
+  let shouldWriteDocs = mode === "full";
 
   if (mode === "full") {
     const computed = await computeForPaths(workspace, tracked, enabledParsers, options.state_root);
@@ -591,19 +615,23 @@ export async function buildIndex(
         options.state_root,
       );
       await replaceAllRecords(workspace, computed, options.state_root);
+      shouldWriteDocs = true;
     } else {
-      const changedSet = listDirtyFiles(workspace, prevStatus.manifest.git_head);
+      const changedSet = await listDirtyFiles(workspace, prevStatus.manifest.git_head);
       const trackedSet = new Set(tracked);
       for (const prevPath of await getAllFilePaths(workspace, options.state_root)) {
         if (!trackedSet.has(prevPath)) changedSet.add(prevPath);
       }
-      const recomputed = await computeForPaths(
-        workspace,
-        [...changedSet],
-        enabledParsers,
-        options.state_root,
-      );
-      await applyChangedRecords(workspace, changedSet, recomputed, options.state_root);
+      if (changedSet.size > 0) {
+        const recomputed = await computeForPaths(
+          workspace,
+          [...changedSet],
+          enabledParsers,
+          options.state_root,
+        );
+        await applyChangedRecords(workspace, changedSet, recomputed, options.state_root);
+        shouldWriteDocs = true;
+      }
     }
   }
 
@@ -617,8 +645,10 @@ export async function buildIndex(
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf-8",
   );
-  const records = await readAllRecords(workspace, options.state_root);
-  await writeHumanDocs(workspace, records.files, options.state_root);
+  if (shouldWriteDocs) {
+    const records = await readAllRecords(workspace, options.state_root);
+    await writeHumanDocs(workspace, records.files, options.state_root);
+  }
 
   STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
   QUERY_RESULT_CACHE.delete(cacheKey(workspace, options.state_root));
@@ -640,13 +670,13 @@ export async function getStatus(
     return cached.value;
   }
 
-  const currentHead = runGit(workspace, ["rev-parse", "HEAD"]);
+  const currentHead = await runGit(workspace, ["rev-parse", "HEAD"]);
   const manifestPath = join(resolveIndexDir(workspace, options.state_root), "manifest.json");
   const hasDb = indexDbExists(workspace, options.state_root);
 
   if (!existsSync(manifestPath) || !hasDb) {
     const reasons = [!existsSync(manifestPath) ? "manifest-missing" : "index-db-missing"];
-    if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
+    if (await hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
     const status: IndexStatus = {
       exists: false,
       stale: true,
@@ -670,7 +700,7 @@ export async function getStatus(
       manifest: null,
       current_git_head: currentHead,
     };
-    if (hasDirtyWorkspace(workspace)) malformed.reasons.push("workspace-dirty");
+    if (await hasDirtyWorkspace(workspace)) malformed.reasons.push("workspace-dirty");
     setStatusCache(key, malformed);
     diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
     return malformed;
@@ -680,7 +710,7 @@ export async function getStatus(
   if (await isIndexDbCorrupt(workspace, options.state_root)) reasons.push(INDEX_DB_CORRUPT_REASON);
   if (manifest.schema_version !== SCHEMA_VERSION) reasons.push("schema-version-mismatch");
   if (manifest.git_head !== currentHead) reasons.push("git-head-mismatch");
-  if (hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
+  if (await hasDirtyWorkspace(workspace)) reasons.push("workspace-dirty");
 
   const generatedAt = Date.parse(manifest.generated_at);
   const ageMs = Date.now() - generatedAt;

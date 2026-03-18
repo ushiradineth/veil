@@ -28,6 +28,7 @@
 
 - After any feature, command, tool, or workflow change, review `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` before closing the task.
 - If behavior, routing, defaults, anti-patterns, or examples changed, update the affected skill files in the same change.
+- If either skill file changes, bump its frontmatter `version` using semver (`major.minor.patch`) in the same change.
 - Treat skill updates as a required quality gate, not optional follow-up.
 - If no skill update is needed, explicitly state why in the final task summary.
 

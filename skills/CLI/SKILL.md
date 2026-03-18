@@ -1,5 +1,6 @@
 ---
 name: veil-cli
+version: 1.0.0
 description: Use this skill whenever Veil CLI is available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell commands.
 ---
 
@@ -17,6 +18,13 @@ Use this skill when the task asks for any of these outcomes:
 Treat intent phrases like `find where`, `investigate`, `compare`, `summarize from web`, and `check PR` as strong triggers.
 
 Prefer Veil CLI commands when supported so outputs stay structured and follow-on steps are cheaper.
+
+## Your Task
+
+1. Route discovery and context gathering through Veil CLI first.
+2. Keep calls minimal: one broad retrieval call, then one narrowing call.
+3. Add git, web, or GitHub context only when it changes the answer.
+4. Return concise findings with file paths or URLs, then continue implementation.
 
 ## Retrieval Workflow
 
@@ -43,6 +51,11 @@ Retrieval query commands refresh index state on stale or dirty worktrees by defa
 - Raw `git` reads for normal context -> use `veil git-status|git-log|git-diff|git-show`.
 - Direct URL fetch before discovery -> use `veil web-search` first, then fetch selected pages.
 - Treating setup commands as retrieval (`veil init`, `veil build`, `veil mcp server`) -> reserve them for setup or runtime only.
+
+## When Not to Use
+
+- One-file local reads where path is already known and no retrieval is needed.
+- Pure write/edit steps that do not require lookup, git context, web context, or GitHub context.
 
 ## Quick Examples
 

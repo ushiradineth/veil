@@ -1,5 +1,6 @@
 ---
 name: veil-mcp
+version: 1.0.0
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -19,6 +20,13 @@ Treat intent phrases like `find where`, `investigate`, `compare`, `summarize fro
 Prefer Veil MCP tools when supported so outputs stay structured and follow-on steps are cheaper.
 
 Veil MCP responses are compact TOON payloads. Guidance fields appear only on low-confidence or missing-context responses.
+
+## Your Task
+
+1. Route discovery and context gathering through Veil MCP tools first.
+2. Keep calls minimal: one broad retrieval tool, then one narrowing tool.
+3. Add git, web, or GitHub branches only when they change the answer.
+4. Return concise findings with file paths or URLs, then continue implementation.
 
 ## Retrieval Workflow
 
@@ -45,6 +53,11 @@ Retrieval query tools refresh index state on stale or dirty worktrees by default
 - Jumping to `veil_fetch_url` without candidates -> use `veil_web_search` first.
 - Raw `git` reads for normal context -> use `veil_git_status|veil_git_log|veil_git_diff|veil_git_show`.
 - Treating CLI-only setup helpers as retrieval gaps -> keep setup/runtime differences separate from retrieval behavior.
+
+## When Not to Use
+
+- One-file local reads where path is already known and no retrieval is needed.
+- Pure write/edit steps that do not require lookup, git context, web context, or GitHub context.
 
 ## Quick Examples
 

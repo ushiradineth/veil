@@ -68,7 +68,7 @@ export function scoreChunk(
   chunk: ChunkRecord,
   parsed: ParsedQueryLike,
 ): { score: number; reasons: LookupReason[] } {
-  const hay = normalizeText(`${chunk.path}\n${chunk.content}`);
+  const hay = normalizeText(`${chunk.path}\n${chunk.content ?? ""}`);
   const pathLower = normalizeText(chunk.path);
   let score = hay.includes(parsed.normalized) ? 7 : 2;
   const reasons: LookupReason[] = [];

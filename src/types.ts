@@ -32,7 +32,7 @@ export type ChunkRecord = {
   path: string;
   start_line: number;
   end_line: number;
-  content: string;
+  content?: string;
   content_truncated?: boolean;
   content_chars?: number;
 };
@@ -173,7 +173,7 @@ export type GitStatusData = {
     unstaged: number;
     untracked: number;
   };
-  paths: {
+  paths?: {
     staged: string[];
     unstaged: string[];
     untracked: string[];

@@ -1,4 +1,5 @@
 import { errorMessage, isAbortLike } from "./errors";
+import { clampWebSearchLimit, clampWebSearchTimeout } from "./shared/parity-contract";
 import type {
   WebSearchDebugResult,
   WebSearchProvider,
@@ -6,7 +7,7 @@ import type {
   WebSearchResponse,
   WebSearchResult,
 } from "./types";
-import { clampInt, trimQuery } from "./validation";
+import { trimQuery } from "./validation";
 
 type DuckTopic = {
   Text?: string;
@@ -722,9 +723,8 @@ export async function webSearch(
 ): Promise<WebSearchResponse> {
   const started = nowMs();
   const query = trimQuery(options.query);
-  const limit = clampInt(options.limit, 1, 25, 8);
-  // Enforce timeout bounds: min 100ms, max 20s
-  const timeoutMs = clampInt(options.timeout_ms, 100, 20_000, 5_000);
+  const limit = clampWebSearchLimit(options.limit);
+  const timeoutMs = clampWebSearchTimeout(options.timeout_ms);
   const debug = options.debug ?? false;
 
   if (!query) {

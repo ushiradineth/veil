@@ -11,7 +11,7 @@ import { buildAgentGuidance, withAgentGuidanceCompact } from "./agent-guidance";
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
-import { __internalCli } from "./cli";
+import { __internalCli, runCli } from "./cli";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
@@ -36,6 +36,13 @@ import {
   discoverIndex,
   shouldRefreshDiscover,
 } from "./indexer";
+import { __internalServer } from "./server";
+import {
+  PARITY_LIMITS,
+  clampWebSearchLimit,
+  clampWebSearchTimeout,
+  responseErrorMessage,
+} from "./shared/parity-contract";
 import {
   diagnosticsStatePath,
   resolveIndexDir,
@@ -199,7 +206,9 @@ describe("Phase 2: Query accuracy", () => {
     for (const chunk of chunks) {
       expect(typeof chunk.content).toBe("string");
       expect(typeof chunk.content_chars).toBe("number");
-      expect(chunk.content.length).toBeLessThanOrEqual(chunk.content_chars ?? chunk.content.length);
+      expect(chunk.content?.length ?? 0).toBeLessThanOrEqual(
+        chunk.content_chars ?? chunk.content?.length ?? 0,
+      );
     }
   });
 
@@ -209,7 +218,49 @@ describe("Phase 2: Query accuracy", () => {
     expect(compact.length).toBeGreaterThan(0);
     expect(full.length).toBeGreaterThan(0);
     expect((full[0]?.content_chars ?? 0) >= (compact[0]?.content_chars ?? 0)).toBe(true);
-    expect(full[0]?.content.length >= compact[0]?.content.length).toBe(true);
+    expect((full[0]?.content?.length ?? 0) >= (compact[0]?.content?.length ?? 0)).toBe(true);
+  });
+
+  test("Chunk query supports content_mode none|preview|full", async () => {
+    const none = await queryChunks(MEDIUM_REPO, "service", 1, { content_mode: "none" });
+    const preview = await queryChunks(MEDIUM_REPO, "service", 1, {
+      content_mode: "preview",
+    });
+    const full = await queryChunks(MEDIUM_REPO, "service", 1, { content_mode: "full" });
+
+    expect(none.length).toBeGreaterThan(0);
+    expect(preview.length).toBeGreaterThan(0);
+    expect(full.length).toBeGreaterThan(0);
+
+    const noneFirst = none[0] as unknown as { content?: unknown; content_chars?: number };
+    expect(noneFirst.content).toBeUndefined();
+    expect(typeof noneFirst.content_chars).toBe("number");
+
+    const previewFirst = must(preview[0]);
+    const fullFirst = must(full[0]);
+    expect(typeof previewFirst.content).toBe("string");
+    expect(typeof fullFirst.content).toBe("string");
+    expect((fullFirst.content?.length ?? 0) >= (previewFirst.content?.length ?? 0)).toBe(true);
+  });
+
+  test("Chunk query content_mode overrides include_content compatibility mapping", async () => {
+    const mixed = await queryChunks(MEDIUM_REPO, "service", 1, {
+      include_content: true,
+      content_mode: "none",
+    });
+    const legacyCompact = await queryChunks(MEDIUM_REPO, "service", 1, {
+      include_content: false,
+    });
+    const legacyFull = await queryChunks(MEDIUM_REPO, "service", 1, {
+      include_content: true,
+    });
+
+    const mixedFirst = mixed[0] as unknown as { content?: unknown };
+    expect(mixedFirst.content).toBeUndefined();
+    expect((legacyCompact[0]?.content?.length ?? 0) > 0).toBe(true);
+    expect((legacyFull[0]?.content?.length ?? 0) >= (legacyCompact[0]?.content?.length ?? 0)).toBe(
+      true,
+    );
   });
 
   test("Chunk by id supports targeted follow-up content fetch", async () => {
@@ -261,6 +312,30 @@ describe("Phase 2: Query accuracy", () => {
     for (const group of [result.files, result.symbols, result.chunks]) {
       for (let i = 0; i + 1 < group.length; i += 1) {
         expect(group[i].score >= group[i + 1].score).toBe(true);
+      }
+    }
+  });
+
+  test("Lookup compact response mode removes verbose reason detail", async () => {
+    const compact = await lookupIndex(MEDIUM_REPO, "where is process defined", {
+      response_mode: "compact",
+    });
+    const full = await lookupIndex(MEDIUM_REPO, "where is process defined");
+
+    const compactGroups = [compact.files, compact.symbols, compact.chunks];
+    const fullGroups = [full.files, full.symbols, full.chunks];
+    for (const group of compactGroups) {
+      for (let i = 0; i + 1 < group.length; i += 1) {
+        expect(group[i].score >= group[i + 1].score).toBe(true);
+      }
+      for (const row of group) {
+        expect(row.reasons.every((reason) => reason.detail === "")).toBe(true);
+      }
+    }
+
+    for (const group of fullGroups) {
+      for (const row of group) {
+        expect(row.reasons.some((reason) => reason.detail.length > 0)).toBe(true);
       }
     }
   });
@@ -966,6 +1041,26 @@ describe("Phase 2: Query accuracy", () => {
     expect(result.error?.message).toBe("HTTP 503");
     expect(result.data?.status).toBe(503);
     expect(result.data?.final_url).toBe("https://example.com/unavailable");
+    expect(result.data?.content).toBe("");
+  });
+
+  test("Fetch URL can include non-OK response body on explicit opt-in", async () => {
+    const mockFetch = (() =>
+      Promise.resolve(
+        new Response("nope", {
+          status: 503,
+          headers: { "content-type": "text/plain" },
+        }),
+      )) as unknown as typeof fetch;
+
+    const result = await fetchUrl({
+      url: "https://example.com/unavailable",
+      include_error_content: true,
+      fetch_impl: mockFetch,
+    });
+    expect(result.meta.ok).toBe(false);
+    expect(result.error?.code).toBe("fetch-failed");
+    expect(result.data?.content).toBe("nope");
   });
 
   test("Fetch URL converts markdown to text when text format is requested", async () => {
@@ -1464,6 +1559,54 @@ describe("Phase 3: Cache behavior", () => {
     const result = await gitStatus(repo);
     expect(result.meta.ok).toBe(true);
     expect((result.data?.changed.untracked ?? 0) > 0).toBe(true);
+  });
+
+  test("Git status supports include_paths=false while keeping changed counts", async () => {
+    const repo = join(TEMP_TEST_DIR, "git-status-no-paths-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "s.ts"), "export const s = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await writeFile(join(repo, "new.ts"), "export const n = 1\n");
+
+    const result = await gitStatus(repo, { include_paths: false });
+    expect(result.meta.ok).toBe(true);
+    expect((result.data?.changed.untracked ?? 0) > 0).toBe(true);
+    expect((result.data as unknown as { paths?: unknown }).paths).toBeUndefined();
+  });
+
+  test("Git status supports paths_limit caps and warning metadata", async () => {
+    const repo = join(TEMP_TEST_DIR, "git-status-path-limit-repo");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "base.ts"), "export const base = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await writeFile(join(repo, "u1.ts"), "export const u1 = 1\n");
+    await writeFile(join(repo, "u2.ts"), "export const u2 = 1\n");
+    await writeFile(join(repo, "u3.ts"), "export const u3 = 1\n");
+
+    const result = await gitStatus(repo, { paths_limit: 1 });
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.paths?.untracked.length ?? 0).toBe(1);
+    expect(result.meta.warnings.some((warning) => warning.includes("truncated"))).toBe(true);
   });
 
   test("Git status returns non-negative duration", async () => {
@@ -3001,6 +3144,63 @@ describe("MCP protocol conformance", () => {
     });
   });
 
+  test("tools/call accepts response_mode for veil_lookup", async () => {
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_lookup",
+        arguments: {
+          workspace: SMALL_REPO,
+          query: "hello",
+          response_mode: "compact",
+        },
+      });
+      expect(result.isError).toBe(false);
+    });
+  });
+
+  test("tools/call accepts content_mode for veil_search", async () => {
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_search",
+        arguments: {
+          workspace: SMALL_REPO,
+          query: "hello",
+          content_mode: "none",
+        },
+      });
+      expect(result.isError).toBe(false);
+      const text = toolText(result);
+      expect(text.includes("content:")).toBe(false);
+    });
+  });
+
+  test("tools/call accepts include_paths and paths_limit for veil_git_status", async () => {
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_git_status",
+        arguments: {
+          workspace: SMALL_REPO,
+          include_paths: false,
+          paths_limit: 1,
+        },
+      });
+      expect(result.isError).toBe(false);
+    });
+  });
+
+  test("tools/call accepts include_error_content for veil_fetch_url", async () => {
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_fetch_url",
+        arguments: {
+          url: "https://example.com/404",
+          include_error_content: false,
+        },
+      });
+      expect(result.isError).toBe(true);
+    });
+  });
+
   test("discover output uses compact status summary", async () => {
     await withMcpClient(async (client) => {
       const result = await client.callTool({
@@ -3012,6 +3212,53 @@ describe("MCP protocol conformance", () => {
       expect(text.includes("manifest")).toBe(false);
       expect(text.includes("reasons")).toBe(true);
     });
+  });
+});
+
+describe("CLI/MCP parity contracts", () => {
+  test("parity: MCP tool surface includes operational parity tools", () => {
+    const names = new Set(__internalServer.toolNames);
+    expect(names.has("veil_build")).toBe(true);
+    expect(names.has("veil_init")).toBe(true);
+    expect(names.has("veil_grammar_list")).toBe(true);
+    expect(names.has("veil_grammar_install")).toBe(true);
+    expect(names.has("veil_grammar_remove")).toBe(true);
+    expect(names.has("veil_grammar_update")).toBe(true);
+  });
+
+  test("parity: chunk tool exposes refresh_if_stale control", () => {
+    const definition = __internalServer.toolDefinitions.find((tool) => tool.name === "veil_chunk");
+    expect(definition).toBeDefined();
+    expect(definition?.inputSchema.refresh_if_stale).toBeDefined();
+  });
+
+  test("parity: web search clamp path uses shared bounds", () => {
+    expect(clampWebSearchLimit(10_000)).toBe(PARITY_LIMITS.web_search_limit.max);
+    expect(clampWebSearchTimeout(10_000_000)).toBe(PARITY_LIMITS.web_search_timeout_ms.max);
+  });
+
+  test("parity: shared error detector marks meta and top-level errors", () => {
+    const byMeta = responseErrorMessage({
+      meta: { ok: false },
+      error: { code: "invalid", message: "bad" },
+    });
+    const byTopLevel = responseErrorMessage({ ok: false, error: { message: "bad2" } });
+    expect(byMeta).toBe("bad");
+    expect(byTopLevel).toBe("bad2");
+  });
+
+  test("parity: CLI sets non-zero exit code for tool-style failure payload", async () => {
+    const originalExitCode = process.exitCode;
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try {
+      process.exitCode = 0;
+      await runCli(["node", "src/cli.ts", "fetch-url", "--url", "not-a-valid-url"]);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.stdout.write = originalWrite;
+      process.exitCode = originalExitCode;
+    }
   });
 });
 

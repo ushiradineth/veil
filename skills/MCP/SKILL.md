@@ -1,6 +1,6 @@
 ---
 name: veil-mcp
-version: 1.0.0
+version: 1.2.0
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -38,12 +38,15 @@ Retrieval query tools refresh index state on stale or dirty worktrees by default
 4. Add context branches only as needed: git, web, or GitHub.
 5. Return concise findings with paths or URLs, then continue implementation.
 
+Prefer required args only by default. Add optional args only when you need behavior different from defaults.
+
 ## Intent Branches
 
 - Local retrieval: `veil_discover`, `veil_lookup`, `veil_files`, `veil_symbols`, `veil_search`, `veil_chunk`.
 - Git context: `veil_git_status`, `veil_git_log`, `veil_git_diff`, `veil_git_show`.
 - Web context: `veil_web_search`, then `veil_fetch_url`.
 - GitHub context: `veil_gh_lookup`.
+- Setup and operations (non-retrieval): `veil_build`, `veil_init`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
 
 ## Anti-pattern Corrections
 
@@ -52,7 +55,7 @@ Retrieval query tools refresh index state on stale or dirty worktrees by default
 - Asking for full code in broad calls -> keep compact defaults and fetch only selected chunk ids with `veil_chunk`.
 - Jumping to `veil_fetch_url` without candidates -> use `veil_web_search` first.
 - Raw `git` reads for normal context -> use `veil_git_status|veil_git_log|veil_git_diff|veil_git_show`.
-- Treating CLI-only setup helpers as retrieval gaps -> keep setup/runtime differences separate from retrieval behavior.
+- Treating setup helpers as retrieval gaps -> keep setup/runtime operations separate from retrieval behavior.
 
 ## When Not to Use
 

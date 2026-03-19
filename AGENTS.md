@@ -20,9 +20,27 @@
 
 ## Testing
 
+- For behavior-changing refactors, follow TDD: write or update a failing test first (Red), implement the smallest change to pass (Green), then refactor with tests still passing (Refactor).
 - Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.
 - For performance or benchmark changes, run at least one fresh suite and update the newest `benchmarks/results/<run-id>/*` artifacts.
 - Keep benchmark tables in `BENCHMARKS.md` aligned with the newest `benchmarks/results/<run-id>/results.json`.
+
+## TDD Workflow
+
+For behavior-changing refactors, use a strict test-first loop:
+
+1. Red: write or update a test that fails for the intended behavior.
+2. Green: implement the smallest change that makes the test pass.
+3. Refactor: clean up code while keeping the test suite green.
+
+Recommended loop commands:
+
+```bash
+nix run nixpkgs#bun -- test ./src/test.ts
+nix run nixpkgs#bun -- test --coverage ./src/test.ts
+```
+
+For docs-only, release-note, or non-behavioral chore changes, mark TDD as not applicable in the PR checklist.
 
 ## Skill Quality Gate
 

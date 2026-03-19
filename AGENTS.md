@@ -21,6 +21,7 @@
 ## Testing
 
 - For behavior-changing refactors, follow TDD: write or update a failing test first (Red), implement the smallest change to pass (Green), then refactor with tests still passing (Refactor).
+- For CLI/MCP parity refactors, keep parity regression tests under `parity:` prefixes and use `nix run nixpkgs#bun -- test ./src/test.ts --filter "parity:"` as task-level gate.
 - Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.
 - For performance or benchmark changes, run at least one fresh suite and update the newest `benchmarks/results/<run-id>/*` artifacts.
 - Keep benchmark tables in `BENCHMARKS.md` aligned with the newest `benchmarks/results/<run-id>/results.json`.

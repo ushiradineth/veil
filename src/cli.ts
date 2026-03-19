@@ -36,6 +36,19 @@ import {
   querySymbols,
 } from "./indexer";
 import { compactStatusSummary, parseIntent } from "./shared/orchestration";
+import {
+  PARITY_LIMITS,
+  clampFilesLimit,
+  clampSearchLimit,
+  clampSymbolsLimit,
+  clampWebSearchLimit,
+  clampWebSearchTimeout,
+  normalizeLookupFilesLimit,
+  normalizeLookupSearchLimit,
+  normalizeLookupSymbolsLimit,
+  normalizeOptionalChunkContentChars,
+  responseErrorMessage,
+} from "./shared/parity-contract";
 import { diagnosticsStatePath } from "./state-root";
 import type {
   BuildMode,
@@ -59,6 +72,10 @@ type Intent = QueryIntent;
 type McpClient = "claude" | "codex" | "opencode" | "other";
 
 function writeOutput(data: unknown): void {
+  const message = responseErrorMessage(data);
+  if (message) {
+    process.exitCode = 1;
+  }
   process.stdout.write(toToon(data) + "\n");
 }
 
@@ -612,9 +629,17 @@ export function createCli(args: string[] = []): Argv {
     SharedArgs & {
       query?: string;
       intent?: Intent;
+      contentMode?: "none" | "preview" | "full";
       includeContent?: boolean;
       contentMaxChars?: number;
       refreshIfStale?: boolean;
+      filesLimit?: number;
+      symbolsLimit?: number;
+      searchLimit?: number;
+      preferCode?: boolean;
+      responseMode?: "full" | "compact";
+      pathPrefix?: string;
+      language?: string;
     }
   >(
     "discover",
@@ -631,12 +656,37 @@ export function createCli(args: string[] = []): Argv {
           alias: "include-content",
           default: false,
         })
+        .option("contentMode", {
+          choices: ["none", "preview", "full"],
+          alias: "content-mode",
+        })
         .option("contentMaxChars", {
           type: "number",
           alias: "content-max-chars",
           default: 240,
         })
-        .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true }),
+        .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true })
+        .option("filesLimit", {
+          type: "number",
+          alias: "files-limit",
+          default: PARITY_LIMITS.files_limit.default,
+        })
+        .option("symbolsLimit", {
+          type: "number",
+          alias: "symbols-limit",
+          default: PARITY_LIMITS.symbols_limit.default,
+        })
+        .option("searchLimit", {
+          type: "number",
+          alias: "search-limit",
+          default: PARITY_LIMITS.search_limit.default,
+        })
+        .option("preferCode", {
+          type: "boolean",
+          alias: "prefer-code",
+        })
+        .option("pathPrefix", { type: "string", alias: "path-prefix" })
+        .option("language", { type: "string" }),
     async (argv) => {
       const { workspace, stateRoot } = configureContext(argv);
       const query = argv.query ?? "";
@@ -646,10 +696,16 @@ export function createCli(args: string[] = []): Argv {
         strict_query_freshness: true,
       });
       const discovered = await discoverIndex(workspace, query, {
-        prefer_code: true,
+        files_limit: clampFilesLimit(argv.filesLimit),
+        symbols_limit: clampSymbolsLimit(argv.symbolsLimit),
+        search_limit: clampSearchLimit(argv.searchLimit),
+        prefer_code: argv.preferCode,
+        content_mode: argv.contentMode,
         intent: parseIntent(argv.intent),
         include_content: argv.includeContent ?? false,
-        content_max_chars: argv.contentMaxChars,
+        content_max_chars: normalizeOptionalChunkContentChars(argv.contentMaxChars),
+        path_prefix: argv.pathPrefix,
+        language: argv.language,
         state_root: stateRoot,
       });
       writeOutput(
@@ -672,8 +728,16 @@ export function createCli(args: string[] = []): Argv {
     SharedArgs & {
       query?: string;
       intent?: Intent;
+      contentMode?: "none" | "preview" | "full";
       includeContent?: boolean;
       contentMaxChars?: number;
+      refreshIfStale?: boolean;
+      filesLimit?: number;
+      symbolsLimit?: number;
+      searchLimit?: number;
+      preferCode?: boolean;
+      pathPrefix?: string;
+      language?: string;
     }
   >(
     "lookup",
@@ -690,24 +754,50 @@ export function createCli(args: string[] = []): Argv {
           alias: "include-content",
           default: false,
         })
+        .option("contentMode", {
+          choices: ["none", "preview", "full"],
+          alias: "content-mode",
+        })
         .option("contentMaxChars", {
           type: "number",
           alias: "content-max-chars",
           default: 240,
-        }),
+        })
+        .option("refreshIfStale", { type: "boolean", alias: "refresh-if-stale", default: true })
+        .option("filesLimit", { type: "number", alias: "files-limit" })
+        .option("symbolsLimit", { type: "number", alias: "symbols-limit" })
+        .option("searchLimit", { type: "number", alias: "search-limit" })
+        .option("preferCode", {
+          type: "boolean",
+          alias: "prefer-code",
+        })
+        .option("responseMode", {
+          choices: ["full", "compact"],
+          alias: "response-mode",
+          default: "full" as const,
+        })
+        .option("pathPrefix", { type: "string", alias: "path-prefix" })
+        .option("language", { type: "string" }),
     async (argv) => {
       const { workspace, stateRoot } = configureContext(argv);
       const query = argv.query ?? "";
       await initWorkspaceIndex(workspace, {
         state_root: stateRoot,
-        refresh_if_stale: true,
+        refresh_if_stale: argv.refreshIfStale ?? true,
         strict_query_freshness: true,
       });
       const result = await lookupIndex(workspace, query, {
+        files_limit: normalizeLookupFilesLimit(argv.filesLimit),
+        symbols_limit: normalizeLookupSymbolsLimit(argv.symbolsLimit),
+        search_limit: normalizeLookupSearchLimit(argv.searchLimit),
         intent: parseIntent(argv.intent),
-        prefer_code: true,
+        prefer_code: argv.preferCode,
+        content_mode: argv.contentMode,
+        response_mode: argv.responseMode === "compact" ? "compact" : "full",
         include_content: argv.includeContent ?? false,
-        content_max_chars: argv.contentMaxChars,
+        content_max_chars: normalizeOptionalChunkContentChars(argv.contentMaxChars),
+        path_prefix: argv.pathPrefix,
+        language: argv.language,
         state_root: stateRoot,
       });
       writeOutput(withAgentGuidanceCompact("lookup", result, { query }));
@@ -736,7 +826,7 @@ export function createCli(args: string[] = []): Argv {
       const item = await queryChunkById(workspace, id, {
         state_root: stateRoot,
         include_content: true,
-        content_max_chars: argv.contentMaxChars,
+        content_max_chars: normalizeOptionalChunkContentChars(argv.contentMaxChars),
       });
       writeOutput(withAgentGuidanceCompact("chunk", { item }, { query: id }));
     },
@@ -758,7 +848,9 @@ export function createCli(args: string[] = []): Argv {
         refresh_if_stale: argv.refreshIfStale ?? true,
         strict_query_freshness: true,
       });
-      const items = await queryFiles(workspace, query, argv.limit ?? 20, { state_root: stateRoot });
+      const items = await queryFiles(workspace, query, clampFilesLimit(argv.limit), {
+        state_root: stateRoot,
+      });
       writeOutput(withAgentGuidanceCompact("files", { items }, { query }));
     },
   );
@@ -779,7 +871,7 @@ export function createCli(args: string[] = []): Argv {
         refresh_if_stale: argv.refreshIfStale ?? true,
         strict_query_freshness: true,
       });
-      const items = await querySymbols(workspace, query, argv.limit ?? 20, {
+      const items = await querySymbols(workspace, query, clampSymbolsLimit(argv.limit), {
         state_root: stateRoot,
       });
       writeOutput(withAgentGuidanceCompact("symbols", { items }, { query }));
@@ -792,9 +884,12 @@ export function createCli(args: string[] = []): Argv {
       limit?: number;
       refreshIfStale?: boolean;
       includeContent?: boolean;
+      contentMode?: "none" | "preview" | "full";
       contentMaxChars?: number;
       preferCode?: boolean;
       intent?: Intent;
+      pathPrefix?: string;
+      language?: string;
     }
   >(
     "search",
@@ -809,12 +904,18 @@ export function createCli(args: string[] = []): Argv {
           alias: "include-content",
           default: false,
         })
+        .option("contentMode", {
+          choices: ["none", "preview", "full"],
+          alias: "content-mode",
+        })
         .option("contentMaxChars", {
           type: "number",
           alias: "content-max-chars",
           default: 240,
         })
-        .option("preferCode", { type: "boolean", alias: "prefer-code", default: true })
+        .option("preferCode", { type: "boolean", alias: "prefer-code" })
+        .option("pathPrefix", { type: "string", alias: "path-prefix" })
+        .option("language", { type: "string" })
         .option("intent", {
           choices: ["auto", "code", "docs", "symbols"],
           default: "auto" as const,
@@ -827,10 +928,13 @@ export function createCli(args: string[] = []): Argv {
         refresh_if_stale: argv.refreshIfStale ?? true,
         strict_query_freshness: true,
       });
-      const items = await queryChunks(workspace, query, argv.limit ?? 10, {
+      const items = await queryChunks(workspace, query, clampSearchLimit(argv.limit), {
+        content_mode: argv.contentMode,
         include_content: argv.includeContent ?? false,
-        content_max_chars: argv.contentMaxChars,
-        prefer_code: argv.preferCode ?? true,
+        content_max_chars: normalizeOptionalChunkContentChars(argv.contentMaxChars),
+        prefer_code: argv.preferCode,
+        path_prefix: argv.pathPrefix,
+        language: argv.language,
         intent: parseIntent(argv.intent),
         state_root: stateRoot,
       });
@@ -844,16 +948,20 @@ export function createCli(args: string[] = []): Argv {
     (cmd) =>
       withSharedOptions(cmd)
         .option("query", { type: "string", default: "" })
-        .option("limit", { type: "number", default: 8 })
-        .option("timeoutMs", { type: "number", alias: "timeout-ms", default: 5000 })
+        .option("limit", { type: "number", default: PARITY_LIMITS.web_search_limit.default })
+        .option("timeoutMs", {
+          type: "number",
+          alias: "timeout-ms",
+          default: PARITY_LIMITS.web_search_timeout_ms.default,
+        })
         .option("debug", { type: "boolean", default: false }),
     async (argv) => {
       const { workspace } = configureContext(argv);
       const query = argv.query ?? "";
       const result = await webSearch(workspace, {
         query,
-        limit: argv.limit ?? 8,
-        timeout_ms: argv.timeoutMs ?? 5000,
+        limit: clampWebSearchLimit(argv.limit),
+        timeout_ms: clampWebSearchTimeout(argv.timeoutMs),
         debug: argv.debug ?? false,
       });
       writeOutput(withAgentGuidanceCompact("web_search", result, { query }));
@@ -866,6 +974,7 @@ export function createCli(args: string[] = []): Argv {
       format?: "markdown" | "text" | "html";
       timeoutMs?: number;
       maxBytes?: number;
+      includeErrorContent?: boolean;
       allowPrivateNetwork?: boolean;
     }
   >(
@@ -877,6 +986,11 @@ export function createCli(args: string[] = []): Argv {
         .option("format", { choices: ["markdown", "text", "html"], default: "markdown" as const })
         .option("timeoutMs", { type: "number", alias: "timeout-ms", default: 8000 })
         .option("maxBytes", { type: "number", alias: "max-bytes", default: 200000 })
+        .option("includeErrorContent", {
+          type: "boolean",
+          alias: "include-error-content",
+          default: false,
+        })
         .option("allowPrivateNetwork", {
           type: "boolean",
           alias: "allow-private-network",
@@ -890,18 +1004,26 @@ export function createCli(args: string[] = []): Argv {
         format: argv.format ?? "markdown",
         timeout_ms: argv.timeoutMs ?? 8000,
         max_bytes: argv.maxBytes ?? 200000,
+        include_error_content: argv.includeErrorContent ?? false,
         allow_private_network: argv.allowPrivateNetwork ?? false,
       });
       writeOutput(withAgentGuidanceCompact("fetch_url", result, { query: url }));
     },
   );
 
-  cli.command<SharedArgs>(
+  cli.command<SharedArgs & { reset?: boolean }>(
     "diagnostics",
     "Cache and latency diagnostics",
-    (cmd) => withSharedOptions(cmd),
+    (cmd) =>
+      withSharedOptions(cmd).option("reset", {
+        type: "boolean",
+        default: false,
+      }),
     (argv) => {
       configureContext(argv);
+      if (argv.reset) {
+        diagnostics.reset();
+      }
       writeOutput(withAgentGuidanceCompact("diagnostics", diagnostics.getDiagnostics()));
     },
   );
@@ -982,21 +1104,35 @@ export function createCli(args: string[] = []): Argv {
     },
   );
 
-  cli.command<SharedArgs & { timeoutMs?: number }>(
+  cli.command<SharedArgs & { timeoutMs?: number; includePaths?: boolean; pathsLimit?: number }>(
     "git-status",
     "Git branch and dirty-tree summary",
     (cmd) =>
-      withSharedOptions(cmd).option("timeoutMs", {
-        type: "number",
-        alias: "timeout-ms",
-        default: 5000,
-      }),
+      withSharedOptions(cmd)
+        .option("timeoutMs", {
+          type: "number",
+          alias: "timeout-ms",
+          default: 5000,
+        })
+        .option("includePaths", {
+          type: "boolean",
+          alias: "include-paths",
+          default: true,
+        })
+        .option("pathsLimit", {
+          type: "number",
+          alias: "paths-limit",
+        }),
     async (argv) => {
       const { workspace } = configureContext(argv);
       writeOutput(
         withAgentGuidanceCompact(
           "git_status",
-          await gitStatus(workspace, { timeout_ms: argv.timeoutMs ?? 5000 }),
+          await gitStatus(workspace, {
+            timeout_ms: argv.timeoutMs ?? 5000,
+            include_paths: argv.includePaths,
+            paths_limit: argv.pathsLimit,
+          }),
         ),
       );
     },

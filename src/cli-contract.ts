@@ -35,8 +35,11 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
   {
     name: "discover",
     description: CLI_COMMAND_DESCRIPTIONS.discover,
-    usage: "veil discover --workspace <path> --query <text>",
-    examples: ['veil discover --workspace . --query "find build logic"'],
+    usage:
+      "veil discover --workspace <path> --query <text> [--files-limit <n>] [--symbols-limit <n>] [--search-limit <n>] [--path-prefix <path>] [--language <id>]",
+    examples: [
+      'veil discover --workspace . --query "find build logic" --files-limit 20 --search-limit 10',
+    ],
   },
   {
     name: "chunk",
@@ -47,8 +50,11 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
   {
     name: "lookup",
     description: CLI_COMMAND_DESCRIPTIONS.lookup,
-    usage: "veil lookup --workspace <path> --query <text>",
-    examples: ['veil lookup --workspace . --query "where is buildIndex defined"'],
+    usage:
+      "veil lookup --workspace <path> --query <text> [--refresh-if-stale] [--files-limit <n>] [--symbols-limit <n>] [--search-limit <n>] [--path-prefix <path>] [--language <id>]",
+    examples: [
+      'veil lookup --workspace . --query "where is buildIndex defined" --path-prefix src --language typescript',
+    ],
   },
   {
     name: "files",
@@ -65,8 +71,9 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
   {
     name: "search",
     description: CLI_COMMAND_DESCRIPTIONS.search,
-    usage: "veil search --workspace <path> --query <text> [--limit <n>]",
-    examples: ['veil search --workspace . --query "pnpm install" --limit 10'],
+    usage:
+      "veil search --workspace <path> --query <text> [--limit <n>] [--path-prefix <path>] [--language <id>]",
+    examples: ['veil search --workspace . --query "pnpm install" --limit 10 --path-prefix src'],
   },
   {
     name: "web-search",
@@ -89,8 +96,8 @@ export const CLI_COMMAND_REGISTRY: readonly CliCommandSpec[] = [
   {
     name: "diagnostics",
     description: CLI_COMMAND_DESCRIPTIONS.diagnostics,
-    usage: "veil diagnostics",
-    examples: ["veil diagnostics"],
+    usage: "veil diagnostics [--reset]",
+    examples: ["veil diagnostics", "veil diagnostics --reset"],
   },
   {
     name: "git-status",

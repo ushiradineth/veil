@@ -9,10 +9,18 @@ import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/
 import { z } from "zod";
 
 import { withAgentGuidanceCompact } from "./agent-guidance";
+import { __internalCli } from "./cli";
 import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
+import {
+  installParsers,
+  listParsers,
+  parseParserList,
+  removeParsers,
+  updateParsers,
+} from "./grammar-manager";
 import {
   buildIndex,
   discoverIndex,
@@ -25,6 +33,18 @@ import {
   querySymbols,
 } from "./indexer";
 import { compactStatusSummary } from "./shared/orchestration";
+import {
+  clampFilesLimit,
+  clampSearchLimit,
+  clampSymbolsLimit,
+  clampWebSearchLimit,
+  clampWebSearchTimeout,
+  normalizeLookupFilesLimit,
+  normalizeLookupSearchLimit,
+  normalizeLookupSymbolsLimit,
+  normalizeOptionalChunkContentChars,
+  responseErrorMessage,
+} from "./shared/parity-contract";
 import { diagnosticsStatePath } from "./state-root";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { VEIL_VERSION } from "./version";
@@ -108,6 +128,17 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function parseParserIds(value: unknown): ReturnType<typeof parseParserList> {
+  if (Array.isArray(value)) {
+    const raw = value.filter((item): item is string => typeof item === "string").join(",");
+    return parseParserList(raw);
+  }
+  if (typeof value === "string") {
+    return parseParserList(value);
+  }
+  return [];
+}
+
 function successResult(value: unknown): CallToolResult {
   return {
     content: [{ type: "text", text: toToon(value) }],
@@ -127,17 +158,6 @@ function errorResult(message: string, details?: unknown): CallToolResult {
     content: [{ type: "text", text: toToon(payload) }],
     isError: true,
   };
-}
-
-function responseErrorMessage(value: unknown): string | null {
-  const payload = asRecord(value);
-  const meta = asRecord(payload.meta);
-  if (meta.ok === false) {
-    const error = asRecord(payload.error);
-    const message = asString(error.message);
-    return message?.trim() ? message : "Tool execution failed";
-  }
-  return null;
 }
 
 function resolveWorkspace(workspace?: string, stateRoot?: string): string {
@@ -194,6 +214,135 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     },
   },
   {
+    name: "veil_build",
+    title: "Veil Build Index",
+    description: TOOL_DESCRIPTIONS.veil_build,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const manifest = await buildIndex(ws, "full", { state_root: stateRoot });
+      return { ok: true, mode: "full", manifest };
+    },
+  },
+  {
+    name: "veil_init",
+    title: "Veil Init Setup",
+    description: TOOL_DESCRIPTIONS.veil_init,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      mode: z.enum(["cli", "mcp"]).optional(),
+      yes: z.boolean().optional(),
+      parsers: z.array(z.string()).optional(),
+      skip_parser_prompt: z.boolean().optional(),
+      package_manager: z.enum(["npm", "pnpm", "bun", "yarn", "brew"]).optional(),
+      execute_installs: z.boolean().optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      return await __internalCli.buildInitSetupResult({
+        workspace: ws,
+        stateRoot,
+        mode: args.mode === "mcp" ? "mcp" : args.mode === "cli" ? "cli" : undefined,
+        interactive: false,
+        yes: asBoolean(args.yes) ?? false,
+        parsers: parseParserIds(args.parsers),
+        skipParserPrompt: asBoolean(args.skip_parser_prompt) ?? true,
+        packageManager:
+          args.package_manager === "pnpm" ||
+          args.package_manager === "bun" ||
+          args.package_manager === "yarn" ||
+          args.package_manager === "brew" ||
+          args.package_manager === "npm"
+            ? args.package_manager
+            : undefined,
+        executeInstalls: asBoolean(args.execute_installs) ?? false,
+      });
+    },
+  },
+  {
+    name: "veil_grammar_list",
+    title: "Veil Grammar List",
+    description: TOOL_DESCRIPTIONS.veil_grammar_list,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+    },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const parsers = await listParsers(ws, stateRoot);
+      return { parsers };
+    },
+  },
+  {
+    name: "veil_grammar_install",
+    title: "Veil Grammar Install",
+    description: TOOL_DESCRIPTIONS.veil_grammar_install,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      parsers: z.array(z.string()).optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const result = await installParsers(ws, parseParserIds(args.parsers), stateRoot);
+      return { ok: true, installed: result.installed, enabled: result.enabled };
+    },
+  },
+  {
+    name: "veil_grammar_remove",
+    title: "Veil Grammar Remove",
+    description: TOOL_DESCRIPTIONS.veil_grammar_remove,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      parsers: z.array(z.string()).optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const result = await removeParsers(ws, parseParserIds(args.parsers), stateRoot);
+      return { ok: true, installed: result.installed, enabled: result.enabled };
+    },
+  },
+  {
+    name: "veil_grammar_update",
+    title: "Veil Grammar Update",
+    description: TOOL_DESCRIPTIONS.veil_grammar_update,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      parsers: z.array(z.string()).optional(),
+      all: z.boolean().optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const parserIds = asBoolean(args.all) ? "all" : parseParserIds(args.parsers);
+      const result = await updateParsers(ws, parserIds, stateRoot);
+      return { ok: true, updated: result.updated, installed: result.installed };
+    },
+  },
+  {
     name: "veil_files",
     title: "Veil Find Files",
     description: TOOL_DESCRIPTIONS.veil_files,
@@ -216,7 +365,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
       });
-      const items = await queryFiles(ws, query, limit ?? 20, { state_root: stateRoot });
+      const items = await queryFiles(ws, query, clampFilesLimit(limit), { state_root: stateRoot });
       return withAgentGuidanceCompact("files", { items }, { query });
     },
   },
@@ -243,7 +392,9 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
       });
-      const items = await querySymbols(ws, query, limit ?? 20, { state_root: stateRoot });
+      const items = await querySymbols(ws, query, clampSymbolsLimit(limit), {
+        state_root: stateRoot,
+      });
       return withAgentGuidanceCompact("symbols", { items }, { query });
     },
   },
@@ -254,9 +405,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
-      limit: z.number().int().positive().max(100).optional(),
+      limit: z.number().int().positive().optional(),
+      content_mode: z.enum(["none", "preview", "full"]).optional(),
       include_content: z.boolean().optional(),
-      content_max_chars: z.number().int().positive().max(20000).optional(),
+      content_max_chars: z.number().int().positive().optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
       language: z.string().optional(),
@@ -275,9 +427,15 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
       });
-      const items = await queryChunks(ws, query, asNumber(args.limit) ?? 10, {
+      const items = await queryChunks(ws, query, clampSearchLimit(asNumber(args.limit)), {
+        content_mode:
+          args.content_mode === "none" ||
+          args.content_mode === "full" ||
+          args.content_mode === "preview"
+            ? args.content_mode
+            : undefined,
         include_content: asBoolean(args.include_content),
-        content_max_chars: asNumber(args.content_max_chars),
+        content_max_chars: normalizeOptionalChunkContentChars(asNumber(args.content_max_chars)),
         prefer_code: asBoolean(args.prefer_code),
         path_prefix: asString(args.path_prefix),
         language: asString(args.language),
@@ -297,15 +455,17 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
-      files_limit: z.number().int().positive().max(200).optional(),
-      symbols_limit: z.number().int().positive().max(200).optional(),
-      search_limit: z.number().int().positive().max(100).optional(),
+      files_limit: z.number().int().positive().optional(),
+      symbols_limit: z.number().int().positive().optional(),
+      search_limit: z.number().int().positive().optional(),
+      content_mode: z.enum(["none", "preview", "full"]).optional(),
       include_content: z.boolean().optional(),
-      content_max_chars: z.number().int().positive().max(20000).optional(),
+      content_max_chars: z.number().int().positive().optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
       language: z.string().optional(),
       intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
+      response_mode: z.enum(["full", "compact"]).optional(),
       refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
@@ -321,11 +481,17 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         refresh_if_stale: refreshIfStale,
       });
       const result = await lookupIndex(ws, query, {
-        files_limit: asNumber(args.files_limit),
-        symbols_limit: asNumber(args.symbols_limit),
-        search_limit: asNumber(args.search_limit),
+        files_limit: normalizeLookupFilesLimit(asNumber(args.files_limit)),
+        symbols_limit: normalizeLookupSymbolsLimit(asNumber(args.symbols_limit)),
+        search_limit: normalizeLookupSearchLimit(asNumber(args.search_limit)),
+        content_mode:
+          args.content_mode === "none" ||
+          args.content_mode === "full" ||
+          args.content_mode === "preview"
+            ? args.content_mode
+            : undefined,
         include_content: asBoolean(args.include_content),
-        content_max_chars: asNumber(args.content_max_chars),
+        content_max_chars: normalizeOptionalChunkContentChars(asNumber(args.content_max_chars)),
         prefer_code: asBoolean(args.prefer_code),
         path_prefix: asString(args.path_prefix),
         language: asString(args.language),
@@ -333,6 +499,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
           args.intent === "code" || args.intent === "docs" || args.intent === "symbols"
             ? args.intent
             : "auto",
+        response_mode: args.response_mode === "compact" ? "compact" : "full",
         state_root: stateRoot,
       });
       return withAgentGuidanceCompact("lookup", result, { query });
@@ -345,11 +512,12 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
-      files_limit: z.number().int().positive().max(200).optional(),
-      symbols_limit: z.number().int().positive().max(200).optional(),
-      search_limit: z.number().int().positive().max(100).optional(),
+      files_limit: z.number().int().positive().optional(),
+      symbols_limit: z.number().int().positive().optional(),
+      search_limit: z.number().int().positive().optional(),
+      content_mode: z.enum(["none", "preview", "full"]).optional(),
       include_content: z.boolean().optional(),
-      content_max_chars: z.number().int().positive().max(20000).optional(),
+      content_max_chars: z.number().int().positive().optional(),
       refresh_if_stale: z.boolean().optional(),
       prefer_code: z.boolean().optional(),
       path_prefix: z.string().optional(),
@@ -369,11 +537,17 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         strict_query_freshness: true,
       });
       const discovered = await discoverIndex(ws, query, {
-        files_limit: asNumber(args.files_limit),
-        symbols_limit: asNumber(args.symbols_limit),
-        search_limit: asNumber(args.search_limit),
+        files_limit: clampFilesLimit(asNumber(args.files_limit)),
+        symbols_limit: clampSymbolsLimit(asNumber(args.symbols_limit)),
+        search_limit: clampSearchLimit(asNumber(args.search_limit)),
+        content_mode:
+          args.content_mode === "none" ||
+          args.content_mode === "full" ||
+          args.content_mode === "preview"
+            ? args.content_mode
+            : undefined,
         include_content: asBoolean(args.include_content),
-        content_max_chars: asNumber(args.content_max_chars),
+        content_max_chars: normalizeOptionalChunkContentChars(asNumber(args.content_max_chars)),
         prefer_code: asBoolean(args.prefer_code),
         path_prefix: asString(args.path_prefix),
         language: asString(args.language),
@@ -403,7 +577,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       id: z.string(),
-      content_max_chars: z.number().int().positive().max(20000).optional(),
+      content_max_chars: z.number().int().positive().optional(),
+      refresh_if_stale: z.boolean().optional(),
       state_root: z.string().optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
@@ -413,13 +588,13 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const ws = await initQueryWorkspace({
         workspace,
         state_root: stateRoot,
-        refresh_if_stale: true,
+        refresh_if_stale: asBoolean(args.refresh_if_stale) ?? true,
       });
       const id = asString(args.id) ?? "";
       const item = await queryChunkById(ws, id, {
         state_root: stateRoot,
         include_content: true,
-        content_max_chars: asNumber(args.content_max_chars),
+        content_max_chars: normalizeOptionalChunkContentChars(asNumber(args.content_max_chars)),
       });
       return withAgentGuidanceCompact("chunk", { item }, { query: id });
     },
@@ -431,8 +606,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       query: z.string(),
-      limit: z.number().int().positive().max(25).optional(),
-      timeout_ms: z.number().int().positive().max(15000).optional(),
+      limit: z.number().int().positive().optional(),
+      timeout_ms: z.number().int().positive().optional(),
       debug: z.boolean().optional(),
     },
     annotations: EXTERNAL_READ_ANNOTATIONS,
@@ -443,8 +618,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         "web_search",
         await webSearch(workspace, {
           query,
-          limit: asNumber(args.limit),
-          timeout_ms: asNumber(args.timeout_ms),
+          limit: clampWebSearchLimit(asNumber(args.limit)),
+          timeout_ms: clampWebSearchTimeout(asNumber(args.timeout_ms)),
           debug: asBoolean(args.debug),
         }),
         { query },
@@ -460,6 +635,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       format: z.enum(["markdown", "text", "html"]).optional(),
       timeout_ms: z.number().int().positive().max(20000).optional(),
       max_bytes: z.number().int().positive().max(2000000).optional(),
+      include_error_content: z.boolean().optional(),
       allow_private_network: z.boolean().optional(),
     },
     annotations: EXTERNAL_READ_ANNOTATIONS,
@@ -475,6 +651,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
               : undefined,
           timeout_ms: asNumber(args.timeout_ms),
           max_bytes: asNumber(args.max_bytes),
+          include_error_content: asBoolean(args.include_error_content),
           allow_private_network: asBoolean(args.allow_private_network),
         }),
         { query: url },
@@ -488,6 +665,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       timeout_ms: z.number().int().positive().max(10000).optional(),
+      include_paths: z.boolean().optional(),
+      paths_limit: z.number().int().positive().max(2000).optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
     handler: async (args) =>
@@ -495,6 +674,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         "git_status",
         await gitStatus(asString(args.workspace) ?? process.cwd(), {
           timeout_ms: asNumber(args.timeout_ms),
+          include_paths: asBoolean(args.include_paths),
+          paths_limit: asNumber(args.paths_limit),
         }),
       ),
   },
@@ -622,14 +803,17 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     title: "Veil Diagnostics",
     description: TOOL_DESCRIPTIONS.veil_diagnostics,
     inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
       reset: z.boolean().optional(),
     },
     annotations: DIAGNOSTICS_ANNOTATIONS,
     handler: (args) => {
-      const data = diagnostics.getDiagnostics();
+      resolveWorkspace(asString(args.workspace), asString(args.state_root));
       if (asBoolean(args.reset)) {
         diagnostics.reset();
       }
+      const data = diagnostics.getDiagnostics();
       return withAgentGuidanceCompact("diagnostics", data);
     },
   },

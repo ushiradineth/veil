@@ -3445,15 +3445,18 @@ describe("Profiler utilities", () => {
 
   test("Bin runMain uses default runner", async () => {
     const originalExitCode = process.exitCode;
+    const originalArgv = [...process.argv];
     const originalWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (() => true) as typeof process.stderr.write;
 
     try {
       process.exitCode = 0;
+      process.argv = ["node", "src/bin.ts", "--help"];
       await __internalBin.runMain();
       expect(process.exitCode).toBe(0);
     } finally {
       process.exitCode = originalExitCode;
+      process.argv = originalArgv;
       process.stderr.write = originalWrite;
     }
   });

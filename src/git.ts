@@ -447,7 +447,7 @@ async function ensureGitRepo(
   return { ok: true };
 }
 
-function parsePorcelain(raw: string): GitStatusData["paths"] {
+function parsePorcelain(raw: string): NonNullable<GitStatusData["paths"]> {
   const staged = new Set<string>();
   const unstaged = new Set<string>();
   const untracked = new Set<string>();
@@ -468,6 +468,34 @@ function parsePorcelain(raw: string): GitStatusData["paths"] {
     staged: [...staged],
     unstaged: [...unstaged],
     untracked: [...untracked],
+  };
+}
+
+function clampPathsLimit(value: number | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.max(1, Math.min(2000, Math.floor(value)));
+}
+
+function applyPathsLimit(
+  paths: NonNullable<GitStatusData["paths"]>,
+  limit: number | null,
+): { paths: NonNullable<GitStatusData["paths"]>; warnings: string[] } {
+  if (limit === null) {
+    return { paths, warnings: [] };
+  }
+  const warnings: string[] = [];
+  const capBucket = (bucket: string[], label: string): string[] => {
+    if (bucket.length <= limit) return bucket;
+    warnings.push(`${label} paths truncated to ${String(limit)} of ${String(bucket.length)}`);
+    return bucket.slice(0, limit);
+  };
+  return {
+    paths: {
+      staged: capBucket(paths.staged, "staged"),
+      unstaged: capBucket(paths.unstaged, "unstaged"),
+      untracked: capBucket(paths.untracked, "untracked"),
+    },
+    warnings,
   };
 }
 
@@ -531,7 +559,12 @@ function recordDiagnostics(
 
 export async function gitStatus(
   workspace: string,
-  options?: { timeout_ms?: number; command?: string },
+  options?: {
+    timeout_ms?: number;
+    include_paths?: boolean;
+    paths_limit?: number;
+    command?: string;
+  },
 ): Promise<GitToolResponse<GitStatusData>> {
   const started = nowMs();
   const timeoutMs = Math.min(10_000, Math.max(500, options?.timeout_ms ?? 5_000));
@@ -583,6 +616,8 @@ export async function gitStatus(
   }
 
   const paths = parsePorcelain(porcelain.stdout);
+  const limitedPaths = applyPathsLimit(paths, clampPathsLimit(options?.paths_limit));
+  const includePaths = options?.include_paths ?? true;
   const [behindRaw, aheadRaw] = (aheadBehind.stdout.trim() || "0 0").split("\t");
   const data: GitStatusData = {
     branch: branch.stdout.trim(),
@@ -596,10 +631,17 @@ export async function gitStatus(
       unstaged: paths.unstaged.length,
       untracked: paths.untracked.length,
     },
-    paths,
+    paths: includePaths ? limitedPaths.paths : undefined,
   };
   recordDiagnostics("git_status", started, true, false);
-  return finish(workspace, "git_status", started, data, { truncated: false });
+  return finish(
+    workspace,
+    "git_status",
+    started,
+    data,
+    { truncated: false },
+    limitedPaths.warnings,
+  );
 }
 
 export async function gitLog(

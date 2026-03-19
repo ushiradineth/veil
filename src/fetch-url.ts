@@ -197,6 +197,7 @@ export async function fetchUrl(options: {
   format?: FetchUrlFormat;
   timeout_ms?: number;
   max_bytes?: number;
+  include_error_content?: boolean;
   allow_private_network?: boolean;
   fetch_impl?: typeof fetch;
 }): Promise<FetchUrlResponse> {
@@ -206,6 +207,7 @@ export async function fetchUrl(options: {
   // Enforce timeout bounds: min 100ms, max 20s
   const timeoutMs = clampInt(options.timeout_ms, 100, 20_000, 8_000);
   const maxBytes = clampInt(options.max_bytes, 100, 2_000_000, 200_000);
+  const includeErrorContent = options.include_error_content ?? false;
   const allowPrivateNetwork = options.allow_private_network ?? false;
 
   if (!parsed) {
@@ -306,11 +308,12 @@ export async function fetchUrl(options: {
 
     const truncated = truncateTo(transformed, maxBytes);
     if (!response.ok) {
+      const errorContent = includeErrorContent ? truncated.value : "";
       return {
         meta: {
           ok: false,
           duration_ms: Number((nowMs() - started).toFixed(4)),
-          truncated: truncated.truncated,
+          truncated: includeErrorContent ? truncated.truncated : false,
         },
         data: {
           url: parsed.toString(),
@@ -321,7 +324,7 @@ export async function fetchUrl(options: {
           markdown_tokens: markdownTokens,
           content_signal: contentSignal,
           vary,
-          content: truncated.value,
+          content: errorContent,
         },
         error: { code: "fetch-failed", message: `HTTP ${String(status)}` },
       };

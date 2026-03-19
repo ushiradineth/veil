@@ -63,6 +63,7 @@ type QueryChunksOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  content_mode?: "none" | "preview" | "full";
   include_content?: boolean;
   content_max_chars?: number;
   state_root?: string;
@@ -76,10 +77,36 @@ type DiscoverOptions = {
   path_prefix?: string;
   language?: string;
   intent?: QueryIntent;
+  content_mode?: "none" | "preview" | "full";
   include_content?: boolean;
   content_max_chars?: number;
+  response_mode?: "full" | "compact";
   state_root?: string;
 };
+
+function resolveContentMode(options: {
+  content_mode?: "none" | "preview" | "full";
+  include_content?: boolean;
+}): "none" | "preview" | "full" {
+  if (
+    options.content_mode === "none" ||
+    options.content_mode === "preview" ||
+    options.content_mode === "full"
+  ) {
+    return options.content_mode;
+  }
+  if (options.include_content === true) return "full";
+  return "preview";
+}
+
+function toCompactLookupReasons<T extends { reasons: { label: string; detail: string }[] }>(
+  rows: T[],
+): T[] {
+  return rows.map((row) => ({
+    ...row,
+    reasons: row.reasons.map((reason) => ({ label: reason.label, detail: "" })),
+  }));
+}
 
 const STATUS_CACHE = new Map<string, { value: IndexStatus; ts: number }>();
 const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
@@ -906,7 +933,7 @@ function rankChunks(
     const pathLower = normalizeText(chunk.path);
     if (pathPrefix && !pathLower.startsWith(pathPrefix)) continue;
     if (!matchesLanguage(pathLower, languageFilter)) continue;
-    const hay = normalizeText(`${chunk.path}\n${chunk.content}`);
+    const hay = normalizeText(`${chunk.path}\n${chunk.content ?? ""}`);
     let score = hay.includes(parsed.normalized) ? 6 : 0;
     if (pathLower.includes(parsed.normalized)) score += 3;
     for (const token of parsed.tokens) {
@@ -935,11 +962,12 @@ function normalizeContentMaxChars(value: number | undefined): number {
 
 function projectChunk(
   chunk: ChunkRecord,
-  includeContent: boolean,
+  contentMode: "none" | "preview" | "full",
   contentMaxChars?: number,
 ): ChunkRecord {
-  const fullLength = chunk.content.length;
-  if (includeContent) {
+  const content = chunk.content ?? "";
+  const fullLength = content.length;
+  if (contentMode === "full") {
     if (
       typeof contentMaxChars === "number" &&
       Number.isFinite(contentMaxChars) &&
@@ -949,7 +977,7 @@ function projectChunk(
       if (fullLength > limit) {
         return {
           ...chunk,
-          content: chunk.content.slice(0, limit),
+          content: content.slice(0, limit),
           content_truncated: true,
           content_chars: fullLength,
         };
@@ -962,11 +990,22 @@ function projectChunk(
     };
   }
 
+  if (contentMode === "none") {
+    return {
+      id: chunk.id,
+      path: chunk.path,
+      start_line: chunk.start_line,
+      end_line: chunk.end_line,
+      content_truncated: true,
+      content_chars: fullLength,
+    };
+  }
+
   const limit = normalizeContentMaxChars(contentMaxChars);
   const truncated = fullLength > limit;
   return {
     ...chunk,
-    content: truncated ? chunk.content.slice(0, limit) : chunk.content,
+    content: truncated ? content.slice(0, limit) : content,
     content_truncated: truncated,
     content_chars: fullLength,
   };
@@ -974,10 +1013,10 @@ function projectChunk(
 
 function projectChunks(
   chunks: ChunkRecord[],
-  includeContent: boolean,
+  contentMode: "none" | "preview" | "full",
   contentMaxChars?: number,
 ): ChunkRecord[] {
-  return chunks.map((chunk) => projectChunk(chunk, includeContent, contentMaxChars));
+  return chunks.map((chunk) => projectChunk(chunk, contentMode, contentMaxChars));
 }
 
 export async function queryFiles(
@@ -1069,7 +1108,7 @@ export async function queryChunks(
     parsed.normalized,
     String(limit),
     String(options.prefer_code ?? ""),
-    String(options.include_content ?? false),
+    resolveContentMode(options),
     String(options.content_max_chars ?? ""),
     options.path_prefix ?? "",
     options.language ?? "",
@@ -1094,7 +1133,7 @@ export async function queryChunks(
     Math.min(limit, 100),
     options,
   );
-  const out = projectChunks(ranked, options.include_content ?? false, options.content_max_chars);
+  const out = projectChunks(ranked, resolveContentMode(options), options.content_max_chars);
   writeCachedQuery(workspace, options.state_root, cacheKeyQuery, out);
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
@@ -1126,6 +1165,7 @@ export async function discoverIndex(
     path_prefix: options.path_prefix,
     language: options.language,
     intent: parsed.intent,
+    content_mode: options.content_mode,
     include_content: options.include_content,
     content_max_chars: options.content_max_chars,
     state_root: options.state_root,
@@ -1159,6 +1199,7 @@ export async function lookupIndex(
     path_prefix: options.path_prefix,
     language: options.language,
     intent: parsed.intent,
+    content_mode: "full",
     include_content: true,
     state_root: options.state_root,
   });
@@ -1184,6 +1225,7 @@ export async function lookupIndex(
       path_prefix: options.path_prefix,
       language: options.language,
       intent: "code",
+      content_mode: "full",
       include_content: true,
       state_root: options.state_root,
     });
@@ -1204,7 +1246,7 @@ export async function lookupIndex(
 
   const compactChunks = projectChunks(
     chunks,
-    options.include_content ?? false,
+    resolveContentMode(options),
     options.content_max_chars,
   );
   const chunkById = new Map<string, ChunkRecord>();
@@ -1237,6 +1279,12 @@ export async function lookupIndex(
     },
   };
 
+  if (options.response_mode === "compact") {
+    response.files = toCompactLookupReasons(response.files);
+    response.symbols = toCompactLookupReasons(response.symbols);
+    response.chunks = toCompactLookupReasons(response.chunks);
+  }
+
   diagnostics.recordQuery(nowMs() - start);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return response;
@@ -1249,7 +1297,11 @@ export async function queryChunkById(
 ): Promise<ChunkRecord | null> {
   const chunk = await readChunkById(workspace, id, options.state_root);
   if (!chunk) return null;
-  return projectChunk(chunk, options.include_content ?? true, options.content_max_chars);
+  return projectChunk(
+    chunk,
+    options.include_content === false ? "preview" : "full",
+    options.content_max_chars,
+  );
 }
 
 export const __internal = {

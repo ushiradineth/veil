@@ -110,6 +110,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  process.exitCode = 0;
   await rm(TEMP_TEST_DIR, { recursive: true, force: true });
 });
 

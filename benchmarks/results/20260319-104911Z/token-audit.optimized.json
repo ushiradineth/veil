@@ -1,0 +1,94 @@
+{
+  "label": "optimized",
+  "profile": "compact",
+  "workspace": "/Users/shu/Code/veil",
+  "generated_at": "2026-03-19T10:49:30.160Z",
+  "cases": [
+    {
+      "id": "discover",
+      "ok": true,
+      "status": 0,
+      "command": "veil discover --workspace . --query index freshness",
+      "stdout_bytes": 5199,
+      "stdout_tokens_approx": 1300,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "lookup",
+      "ok": true,
+      "status": 0,
+      "command": "veil lookup --workspace . --query where is initWorkspaceIndex",
+      "stdout_bytes": 5421,
+      "stdout_tokens_approx": 1356,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "search",
+      "ok": true,
+      "status": 0,
+      "command": "veil search --workspace . --query response_mode",
+      "stdout_bytes": 3334,
+      "stdout_tokens_approx": 834,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "git-status",
+      "ok": true,
+      "status": 0,
+      "command": "veil git-status --workspace .",
+      "stdout_bytes": 347,
+      "stdout_tokens_approx": 87,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "git-diff",
+      "ok": true,
+      "status": 0,
+      "command": "veil git-diff --workspace .",
+      "stdout_bytes": 15324,
+      "stdout_tokens_approx": 3831,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "git-show",
+      "ok": true,
+      "status": 0,
+      "command": "veil git-show --workspace . --rev HEAD",
+      "stdout_bytes": 13567,
+      "stdout_tokens_approx": 3392,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "fetch-url",
+      "ok": true,
+      "status": 0,
+      "command": "veil fetch-url --url https://www.iana.org/domains/reserved --format markdown",
+      "stdout_bytes": 5318,
+      "stdout_tokens_approx": 1330,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    },
+    {
+      "id": "web-search",
+      "ok": true,
+      "status": 0,
+      "command": "veil web-search --query Model Context Protocol spec --limit 3",
+      "stdout_bytes": 420,
+      "stdout_tokens_approx": 105,
+      "stderr_bytes": 0,
+      "stderr_tokens_approx": 0
+    }
+  ],
+  "totals": {
+    "stdout_bytes": 48930,
+    "stdout_tokens_approx": 12235,
+    "stderr_bytes": 0,
+    "stderr_tokens_approx": 0
+  }
+}

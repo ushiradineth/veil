@@ -24,7 +24,7 @@ type ScenarioKind =
   | "gh_lookup";
 
 type AgentId = "veil" | "firecrawl" | "codex" | "claude";
-type StrategyId = "mcp_transport" | "cli_skill";
+type StrategyId = "mcp_transport";
 type ScenarioProfile = "smoke" | "full";
 type Phase = "warm";
 
@@ -292,7 +292,7 @@ function showHelp(): void {
     "  --workspace <path>             Workspace root (default: cwd)",
     "  --profile <smoke|full>         Scenario profile (default: smoke)",
     "  --agents <csv>                 Agent set (default: veil,firecrawl)",
-    "  --strategies <csv>             Benchmark strategies (default: mcp_transport,cli_skill)",
+    "  --strategies <csv>             Benchmark strategies (default: mcp_transport)",
     "  --modes <csv>                  Legacy alias for --strategies",
     "  --cold <n>                     Cold iteration count metadata (default: 1)",
     "  --warm <n>                     Warm iterations per scenario (default: 1)",
@@ -356,15 +356,11 @@ function parseStrategies(raw: string[]): StrategyId[] {
       out.push("mcp_transport");
       continue;
     }
-    if (item === "cli_skill" || item === "none") {
-      out.push("cli_skill");
-      continue;
-    }
     if (item === "veil" || item === "serena") {
       out.push("mcp_transport");
     }
   }
-  return out.length > 0 ? Array.from(new Set(out)) : ["mcp_transport", "cli_skill"];
+  return out.length > 0 ? Array.from(new Set(out)) : ["mcp_transport"];
 }
 
 function parseScenarioProfile(raw: string | undefined): ScenarioProfile {
@@ -582,70 +578,17 @@ async function runCommand(
   });
 }
 
-function mapTimeoutToUnsupported(agent: AgentId, run: ScenarioRun): ScenarioRun {
-  if (run.status === "error" && (run.reason ?? "").includes("ETIMEDOUT")) {
-    return { status: "unsupported", text: "", reason: `${agent} timeout` };
-  }
-  return run;
-}
-
-function makePrompt(scenario: Scenario, strategy: StrategyId): string {
-  const strategyInstruction =
-    strategy === "mcp_transport"
-      ? "A/B strategy is MCP transport. Execute tool calls through transport, not prompt proxies."
-      : "A/B strategy is CLI+skill. Prefer direct CLI execution and skill guidance with no MCP assumptions.";
-  return `${strategyInstruction}\nTask: ${scenario.prompt}\nQuery: ${scenario.query}\nReturn concise plain text output.`;
-}
-
 function timeoutForScenario(scenario: Scenario): number {
   if (scenario.kind === "gh_lookup") return 45_000;
   if (scenario.kind === "web_search" || scenario.kind === "fetch_url") return 30_000;
   return 15_000;
 }
 
-function strategySchemaOverhead(strategy: StrategyId): number {
-  if (strategy === "mcp_transport") return 12_000;
-  return 400;
+function strategySchemaOverhead(): number {
+  return 12_000;
 }
 
 type McpToolCall = { toolName: string; args: Record<string, unknown> };
-
-function veilCliArgsForScenario(scenario: Scenario): string[] | null {
-  switch (scenario.kind) {
-    case "status":
-      return ["status", "--workspace", "."];
-    case "refresh":
-      return ["refresh", "--workspace", ".", "--mode", "changed"];
-    case "files":
-      return ["files", "--workspace", ".", "--query", scenario.query, "--limit", "20"];
-    case "symbols":
-      return ["symbols", "--workspace", ".", "--query", scenario.query, "--limit", "20"];
-    case "search":
-      return ["search", "--workspace", ".", "--query", scenario.query, "--limit", "10"];
-    case "lookup":
-      return ["lookup", "--workspace", ".", "--query", scenario.query];
-    case "discover":
-      return ["discover", "--workspace", ".", "--query", scenario.query];
-    case "web_search":
-      return ["web-search", "--query", scenario.query, "--limit", "5"];
-    case "fetch_url":
-      return ["fetch-url", "--url", scenario.query, "--format", "markdown"];
-    case "diagnostics":
-      return ["diagnostics"];
-    case "git_status":
-      return ["git-status", "--workspace", "."];
-    case "git_log":
-      return ["git-log", "--workspace", ".", "--limit", "10"];
-    case "git_diff":
-      return ["git-diff", "--workspace", "."];
-    case "git_show":
-      return ["git-show", "--workspace", ".", "--rev", "HEAD"];
-    case "gh_lookup":
-      return ["gh-lookup", "--workspace", ".", "--repo", scenario.query, "--kind", "repo_context"];
-    default:
-      return null;
-  }
-}
 
 function veilMcpCallForScenario(workspace: string, scenario: Scenario): McpToolCall | null {
   switch (scenario.kind) {
@@ -708,88 +651,18 @@ function firecrawlMcpCallForScenario(scenario: Scenario): McpToolCall | null {
 
 async function preflightAgent(
   agent: AgentId,
-  strategy: StrategyId,
   workspace: string,
   tracker: ProcessTracker,
 ): Promise<PreflightStatus> {
   if (agent === "veil") {
-    if (strategy === "mcp_transport") {
-      const probe = await runCommand(
-        "nix",
-        ["run", "nixpkgs#bun", "--", "run", "src/bin.ts", "mcp", "--help"],
-        workspace,
-        tracker,
-        [0],
-        15_000,
-      );
-      if (probe.status !== "ok") {
-        return {
-          ready: false,
-          mode_control: "strict",
-          reason: "veil MCP unavailable: " + compactReason(probe.reason),
-        };
-      }
-      return {
-        ready: true,
-        mode_control: "strict",
-        reason: "local veil MCP stdio transport",
-      };
-    }
-
-    const probe = await runCommand(
-      "nix",
-      ["run", "nixpkgs#bun", "--", "run", "src/bin.ts", "--help"],
-      workspace,
-      tracker,
-      [0],
-      15_000,
-    );
-    if (probe.status !== "ok") {
-      return {
-        ready: false,
-        mode_control: "strict",
-        reason: "veil CLI unavailable: " + compactReason(probe.reason),
-      };
-    }
     return {
       ready: true,
       mode_control: "strict",
-      reason: "local veil CLI execution",
+      reason: "local veil MCP stdio transport",
     };
   }
 
   if (agent === "firecrawl") {
-    if (strategy === "mcp_transport") {
-      const key = process.env.FIRECRAWL_API_KEY;
-      if (!key || key.trim() === "") {
-        return {
-          ready: false,
-          mode_control: "strict",
-          reason: "missing FIRECRAWL_API_KEY for firecrawl MCP",
-        };
-      }
-      const probe = await runCommand(
-        "npx",
-        ["-y", "firecrawl-mcp", "--help"],
-        workspace,
-        tracker,
-        [0, 1],
-        15_000,
-      );
-      if (probe.status !== "ok") {
-        return {
-          ready: false,
-          mode_control: "strict",
-          reason: "firecrawl MCP unavailable: " + compactReason(probe.reason),
-        };
-      }
-      return {
-        ready: true,
-        mode_control: "strict",
-        reason: "firecrawl MCP stdio transport",
-      };
-    }
-
     const status = await runCommand("firecrawl", ["--status"], workspace, tracker, [0], 10_000);
     if (status.status !== "ok") {
       return {
@@ -802,31 +675,14 @@ async function preflightAgent(
     return {
       ready: true,
       mode_control: "strict",
-      reason: "firecrawl cli strategy via local command execution",
-    };
-  }
-
-  if (strategy === "mcp_transport") {
-    return {
-      ready: false,
-      mode_control: "strict",
-      reason: agent + " does not expose controllable MCP transport mode",
-    };
-  }
-
-  const help = await runCommand(agent, ["--help"], workspace, tracker, [0, 1], 8_000);
-  if (help.status !== "ok") {
-    return {
-      ready: false,
-      mode_control: "prompt_only",
-      reason: agent + " unavailable: " + compactReason(help.reason),
+      reason: "firecrawl MCP strategy via local command execution",
     };
   }
 
   return {
-    ready: true,
-    mode_control: "prompt_only",
-    reason: "strategy wiring controlled via benchmark prompts",
+    ready: false,
+    mode_control: "strict",
+    reason: agent + " does not expose controllable MCP transport mode",
   };
 }
 
@@ -845,7 +701,7 @@ function createAgentAdapter(
     mode_control: preflight.mode_control,
     prepare: async (ctx, tracker) => {
       if (blockedReason) return;
-      if (agent === "firecrawl" && strategy === "cli_skill") {
+      if (agent === "firecrawl") {
         const probe = await runCommand(
           "firecrawl",
           ["--version"],
@@ -872,33 +728,18 @@ function createAgentAdapter(
       const timeoutMs = opts?.timeoutMs ?? timeoutForScenario(scenario);
 
       if (agent === "veil") {
-        if (strategy === "mcp_transport") {
-          const call = veilMcpCallForScenario(ctx.workspace, scenario);
-          if (!call) {
-            return { status: "unsupported", text: "", reason: "scenario not mapped for veil MCP" };
-          }
-          return await callMcpToolOverStdio(
-            {
-              command: "nix",
-              args: ["run", "nixpkgs#bun", "--", "run", "src/bin.ts", "mcp", "server"],
-              cwd: ctx.workspace,
-            },
-            call.toolName,
-            call.args,
-            timeoutMs,
-          );
+        const call = veilMcpCallForScenario(ctx.workspace, scenario);
+        if (!call) {
+          return { status: "unsupported", text: "", reason: "scenario not mapped for veil MCP" };
         }
-
-        const cliArgs = veilCliArgsForScenario(scenario);
-        if (!cliArgs) {
-          return { status: "unsupported", text: "", reason: "scenario not mapped for veil CLI" };
-        }
-        return await runCommand(
-          "nix",
-          ["run", "nixpkgs#bun", "--", "run", "src/bin.ts", ...cliArgs],
-          ctx.workspace,
-          tracker,
-          [0],
+        return await callMcpToolOverStdio(
+          {
+            command: "nix",
+            args: ["run", "nixpkgs#bun", "--", "run", "src/bin.ts"],
+            cwd: ctx.workspace,
+          },
+          call.toolName,
+          call.args,
           timeoutMs,
         );
       }
@@ -930,36 +771,6 @@ function createAgentAdapter(
           );
         }
 
-        if (scenario.kind === "web_search") {
-          return await runCommand(
-            "firecrawl",
-            ["search", scenario.query, "--limit", "3", "--json"],
-            ctx.workspace,
-            tracker,
-            [0],
-            timeoutMs,
-          );
-        }
-
-        if (scenario.kind === "fetch_url") {
-          return await runCommand(
-            "firecrawl",
-            ["scrape", scenario.query, "--only-main-content", "--format", "markdown"],
-            ctx.workspace,
-            tracker,
-            [0],
-            timeoutMs,
-          );
-        }
-
-        return {
-          status: "unsupported",
-          text: "",
-          reason: "scenario not mapped for firecrawl cli competitor",
-        };
-      }
-
-      if (strategy === "mcp_transport") {
         return {
           status: "unsupported",
           text: "",
@@ -967,28 +778,11 @@ function createAgentAdapter(
         };
       }
 
-      const prompt = makePrompt(scenario, strategy);
-      if (agent === "codex") {
-        const base = ["--dangerously-bypass-approvals-and-sandbox"];
-        const args =
-          scenario.kind === "web_search"
-            ? [...base, "--search", "exec", prompt]
-            : [...base, "exec", prompt];
-        const run = await runCommand("codex", args, ctx.workspace, tracker, [0], timeoutMs);
-        return mapTimeoutToUnsupported("codex", run);
-      }
-
-      const args = [
-        "-p",
-        "--output-format",
-        "text",
-        "--permission-mode",
-        "bypassPermissions",
-        "--",
-        prompt,
-      ];
-      const run = await runCommand("claude", args, ctx.workspace, tracker, [0], timeoutMs);
-      return mapTimeoutToUnsupported("claude", run);
+      return {
+        status: "unsupported",
+        text: "",
+        reason: agent + " mcp_transport is unsupported",
+      };
     },
   };
 }
@@ -1004,7 +798,7 @@ async function createAgentMatrixAdapters(
   for (const agent of agents) {
     for (const strategy of strategies) {
       const id = `${agent}-${strategy}`;
-      const status = await preflightAgent(agent, strategy, workspace, tracker);
+      const status = await preflightAgent(agent, workspace, tracker);
       preflight[id] = status;
       adapters.push(createAgentAdapter(agent, strategy, status));
     }
@@ -1070,7 +864,7 @@ function summarizeNativeAdoption(
   adapterId: string,
   run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
 ): NativeAdoption {
-  const isCliSkill = adapterId.endsWith("-cli_skill");
+  const isVeil = adapterId.startsWith("veil-");
   if (run.status !== "ok" || run.samples.length === 0) {
     return {
       first_call_success: 0,
@@ -1083,7 +877,7 @@ function summarizeNativeAdoption(
   return {
     first_call_success: first.success ? 1 : 0,
     calls_to_useful_context: firstUseful ? 1 : 2,
-    non_veil_fallback_rate: isCliSkill ? 0 : 1,
+    non_veil_fallback_rate: isVeil ? 0 : 1,
   };
 }
 
@@ -1092,7 +886,7 @@ function summarizeAbSignal(
   run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
   nativeAdoption: NativeAdoption,
 ): AbSignal {
-  const strategy: StrategyId = adapterId.endsWith("-cli_skill") ? "cli_skill" : "mcp_transport";
+  const strategy: StrategyId = "mcp_transport";
   let firstUsefulActionMs = 0;
   for (const sample of run.samples) {
     if (sample.relevance > 0) {
@@ -1101,7 +895,7 @@ function summarizeAbSignal(
     }
   }
   return {
-    schema_overhead_tokens: strategySchemaOverhead(strategy),
+    schema_overhead_tokens: strategySchemaOverhead(),
     first_useful_action_ms: firstUsefulActionMs,
     fallback_rate: nativeAdoption.non_veil_fallback_rate,
   };
@@ -1253,7 +1047,7 @@ async function main(): Promise<void> {
   const profile = parseScenarioProfile(getArg("--profile"));
   const agents = parseAgentIds(parseCsvArg("--agents", ["veil", "firecrawl"]));
   const strategies = parseStrategies(
-    parseCsvArg("--strategies", parseCsvArg("--modes", ["mcp_transport", "cli_skill"])),
+    parseCsvArg("--strategies", parseCsvArg("--modes", ["mcp_transport"])),
   );
   const scenarios = scenariosForProfile(profile);
 
@@ -1476,7 +1270,6 @@ export const __internalBenchSuite = {
   parseStrategies,
   parseScenarioProfile,
   scenariosForProfile,
-  mapTimeoutToUnsupported,
   evaluateRegressionGate,
 };
 

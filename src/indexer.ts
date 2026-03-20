@@ -30,7 +30,7 @@ import type {
   BuildMode,
   ChunkRecord,
   FileRecord,
-  InitWorkspaceIndexResult,
+  WorkspaceIndexResult,
   IndexStatus,
   LookupResponse,
   Manifest,
@@ -648,7 +648,7 @@ export async function buildIndex(
   const missingParsers = missingRequiredParsers(enabledParsers);
   if (missingParsers.length > 0) {
     throw new Error(
-      `Missing required parser runtimes for enabled built-ins: ${missingParsers.join(", ")}. Reinstall dependencies and rerun init/parser setup.`,
+      `Missing required parser runtimes for enabled built-ins: ${missingParsers.join(", ")}. Reinstall dependencies and rerun build.`,
     );
   }
 
@@ -806,7 +806,7 @@ export function shouldRefreshDiscover(status: IndexStatus): boolean {
   return status.reasons.some((reason) => reason !== "workspace-dirty");
 }
 
-export async function initWorkspaceIndex(
+export async function prepareWorkspaceIndex(
   workspace: string,
   options: {
     state_root?: string;
@@ -814,7 +814,7 @@ export async function initWorkspaceIndex(
     refresh_if_stale?: boolean;
     strict_query_freshness?: boolean;
   } = {},
-): Promise<InitWorkspaceIndexResult> {
+): Promise<WorkspaceIndexResult> {
   const strictQueryFreshness = options.strict_query_freshness === true;
   const statusBefore = await getStatus(workspace, {
     state_root: options.state_root,

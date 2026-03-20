@@ -135,12 +135,10 @@ export function toBenchmarksMarkdown(report: SuiteReport, repoRoot: string): str
   lines.push("");
   lines.push("## Quick Run");
   lines.push("");
-  lines.push("Build or refresh index:");
+  lines.push("Start MCP server:");
   lines.push("");
   lines.push("```bash");
-  lines.push(
-    "nix run nixpkgs#bun -- run src/cli.ts refresh --workspace /path/to/repo --mode changed",
-  );
+  lines.push("nix run nixpkgs#bun -- run src/bin.ts");
   lines.push("```");
   lines.push("");
   lines.push("Run benchmark suite:");

@@ -1,10 +1,10 @@
 ---
-name: veil-mcp
-version: 1.2.0
+name: veil
+version: 2.0.0
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
-# Veil MCP Skill
+# Veil Skill
 
 ## Trigger Conditions
 
@@ -39,6 +39,7 @@ Retrieval query tools refresh index state on stale or dirty worktrees by default
 5. Return concise findings with paths or URLs, then continue implementation.
 
 Prefer required args only by default. Add optional args only when you need behavior different from defaults.
+Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unless asked, bounded `veil_fetch_url` output).
 
 ## Intent Branches
 
@@ -46,7 +47,7 @@ Prefer required args only by default. Add optional args only when you need behav
 - Git context: `veil_git_status`, `veil_git_log`, `veil_git_diff`, `veil_git_show`.
 - Web context: `veil_web_search`, then `veil_fetch_url`.
 - GitHub context: `veil_gh_lookup`.
-- Setup and operations (non-retrieval): `veil_build`, `veil_init`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
+- Setup and operations (non-retrieval): `veil_build`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
 
 ## Anti-pattern Corrections
 

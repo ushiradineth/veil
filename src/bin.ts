@@ -1,10 +1,19 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCli } from "./cli";
+import { startHttpServer, startServer } from "./server";
 
 async function main(argv: string[] = process.argv): Promise<void> {
-  await runCli(argv);
+  if (shouldStartHttp(argv)) {
+    await startHttpServer();
+    return;
+  }
+  await startServer();
+}
+
+function shouldStartHttp(argv: string[]): boolean {
+  if (process.env.VEIL_HTTP === "1") return true;
+  return argv.includes("--http");
 }
 
 async function runMain(runner: () => Promise<void> = () => main()): Promise<void> {
@@ -34,6 +43,7 @@ export const __internalBin = {
   main,
   runMain,
   isMainModule,
+  shouldStartHttp,
 };
 
 const isMain = isMainModule(import.meta.url);

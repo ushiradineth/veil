@@ -25,28 +25,17 @@
     "LICENSE"
   ],
   "scripts": {
-    "cli": "bun run src/bin.ts",
-    "mcp": "bun run src/bin.ts mcp server",
-    "server": "bun run src/bin.ts mcp server",
+    "mcp": "bun run src/bin.ts",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "npm run build:package",
-    "build": "bun run src/cli.ts build",
-    "refresh": "bun run src/cli.ts refresh",
-    "status": "bun run src/cli.ts status",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --max-warnings 0 --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "bun test ./src/test.ts",
-    "bench": "bun run src/bench.ts",
-    "bench:harness": "bun run src/bench-harness.ts",
-    "bench:baseline": "bun run src/bench-harness.ts --save-baseline",
-    "bench:compare": "bun run src/bench-harness.ts --compare",
-    "bench:comparison": "bun run src/bench-comparison.ts",
     "bench:suite": "bun run src/bench-suite.ts"
   },
   "dependencies": {
-    "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.18.0",
     "@toon-format/toon": "^2.1.0",
     "ignore": "^7.0.5",
@@ -59,7 +48,6 @@
     "tree-sitter-rust": "^0.24.0",
     "tree-sitter-typescript": "^0.23.2",
     "sql.js": "^1.13.0",
-    "yargs": "^17.7.2",
     "zod": "^3.24.1"
   },
   "overrides": {
@@ -67,7 +55,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
-    "@types/yargs": "^17.0.33",
     "@types/bun": "latest",
     "eslint": "^9.22.0",
     "eslint-config-prettier": "^10.1.1",

@@ -62,7 +62,7 @@ async function computeSha256(url) {
 function buildFormula(version, tarballUrl, sha256) {
   return `# This file is managed by veil release automation. DO NOT EDIT.
 class Veil < Formula
-  desc "Fast CLI and skill for local code retrieval and agent context workflows"
+  desc "MCP retrieval toolkit for coding agents"
   homepage "https://github.com/ushiradineth/veil"
   url "${tarballUrl}"
   sha256 "${sha256}"
@@ -76,7 +76,7 @@ class Veil < Formula
   end
 
   test do
-    assert_match "Usage:", shell_output("#{bin}/veil 2>&1", 1)
+    assert_predicate bin/"veil", :exist?
   end
 end
 `;

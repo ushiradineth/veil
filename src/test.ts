@@ -11,7 +11,6 @@ import { buildAgentGuidance, withAgentGuidanceCompact } from "./agent-guidance";
 import { toBenchmarksMarkdown, toRunId } from "./bench-report";
 import { __internalBenchSuite } from "./bench-suite";
 import { __internalBin } from "./bin";
-import { __internalCli, runCli } from "./cli";
 import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
@@ -28,7 +27,7 @@ import {
   buildIndex,
   lookupIndex,
   getStatus,
-  initWorkspaceIndex,
+  prepareWorkspaceIndex,
   queryFiles,
   querySymbols,
   queryChunks,
@@ -38,11 +37,11 @@ import {
 } from "./indexer";
 import { __internalServer } from "./server";
 import {
-  PARITY_LIMITS,
+  TOOL_LIMITS,
   clampWebSearchLimit,
   clampWebSearchTimeout,
   responseErrorMessage,
-} from "./shared/parity-contract";
+} from "./validation";
 import {
   diagnosticsStatePath,
   resolveIndexDir,
@@ -1223,19 +1222,19 @@ describe("Phase 3: Cache behavior", () => {
     ).toBe(true);
   });
 
-  test("initWorkspaceIndex refreshes when manifest is missing", async () => {
+  test("prepareWorkspaceIndex refreshes when manifest is missing", async () => {
     const repo = join(TEMP_TEST_DIR, "init-missing-manifest");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "alpha.ts"), "export const alpha = 1\n");
 
-    const result = await initWorkspaceIndex(repo, { refresh_if_stale: true });
+    const result = await prepareWorkspaceIndex(repo, { refresh_if_stale: true });
     expect(result.refreshed).toBe(true);
     expect(result.reason).toBe("refreshed");
     expect(result.status_after.exists).toBe(true);
     expect(result.status_after.reasons.includes("manifest-missing")).toBe(false);
   });
 
-  test("initWorkspaceIndex skips dirty-only refresh", async () => {
+  test("prepareWorkspaceIndex skips dirty-only refresh", async () => {
     const repo = join(TEMP_TEST_DIR, "init-dirty-only");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "beta.ts"), "export const beta = 1\n");
@@ -1253,12 +1252,12 @@ describe("Phase 3: Cache behavior", () => {
     await buildIndex(repo, "full");
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
 
-    const result = await initWorkspaceIndex(repo, { refresh_if_stale: true });
+    const result = await prepareWorkspaceIndex(repo, { refresh_if_stale: true });
     expect(result.refreshed).toBe(false);
     expect(result.reason).toBe("dirty-only");
   });
 
-  test("initWorkspaceIndex strict query freshness refreshes dirty-only state", async () => {
+  test("prepareWorkspaceIndex strict query freshness refreshes dirty-only state", async () => {
     const repo = join(TEMP_TEST_DIR, "init-dirty-only-strict");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "beta.ts"), "export const beta = 1\n");
@@ -1276,7 +1275,7 @@ describe("Phase 3: Cache behavior", () => {
     await buildIndex(repo, "full");
     await writeFile(join(repo, "beta.ts"), "export const beta = 2\n");
 
-    const result = await initWorkspaceIndex(repo, {
+    const result = await prepareWorkspaceIndex(repo, {
       refresh_if_stale: true,
       strict_query_freshness: true,
     });
@@ -1312,7 +1311,7 @@ describe("Phase 3: Cache behavior", () => {
     const bypassed = await getStatus(repo, { bypass_cache: true });
     expect(bypassed.reasons.includes("workspace-dirty")).toBe(true);
 
-    const result = await initWorkspaceIndex(repo, {
+    const result = await prepareWorkspaceIndex(repo, {
       refresh_if_stale: true,
       strict_query_freshness: true,
     });
@@ -1603,7 +1602,7 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "u2.ts"), "export const u2 = 1\n");
     await writeFile(join(repo, "u3.ts"), "export const u3 = 1\n");
 
-    const result = await gitStatus(repo, { paths_limit: 1 });
+    const result = await gitStatus(repo, { include_paths: true, paths_limit: 1 });
     expect(result.meta.ok).toBe(true);
     expect(result.data?.paths?.untracked.length ?? 0).toBe(1);
     expect(result.meta.warnings.some((warning) => warning.includes("truncated"))).toBe(true);
@@ -2480,7 +2479,7 @@ describe("Phase 4: Edge cases", () => {
     expect(chunkError.includes("index-db-corrupt")).toBe(true);
   });
 
-  test("initWorkspaceIndex changed mode refreshes from corruption", async () => {
+  test("prepareWorkspaceIndex changed mode refreshes from corruption", async () => {
     const repo = join(TEMP_TEST_DIR, "init-corrupt-sqlite");
     await mkdir(repo, { recursive: true });
     await writeFile(join(repo, "theta.ts"), "export const theta = 7\n");
@@ -2503,7 +2502,7 @@ describe("Phase 4: Edge cases", () => {
     const before = await getStatus(repo);
     expect(before.reasons.includes("index-db-corrupt")).toBe(true);
 
-    const refreshed = await initWorkspaceIndex(repo, { mode: "changed", refresh_if_stale: true });
+    const refreshed = await prepareWorkspaceIndex(repo, { mode: "changed", refresh_if_stale: true });
     expect(refreshed.refreshed).toBe(true);
     expect(refreshed.reason).toBe("refreshed");
 
@@ -2658,7 +2657,7 @@ describe("Phase 4.5: Query accuracy verification", () => {
     expect(chunks.length).toBe(0);
   });
 
-  test("Candidate-prefiltered files keep parity with full-scan ranking", async () => {
+  test("Candidate-prefiltered files match full-scan ranking", async () => {
     const records = await readAllRecords(SMALL_REPO);
     const queries = [
       "hello.ts",
@@ -2680,7 +2679,7 @@ describe("Phase 4.5: Query accuracy verification", () => {
     }
   });
 
-  test("Candidate-prefiltered symbols keep parity with full-scan ranking", async () => {
+  test("Candidate-prefiltered symbols match full-scan ranking", async () => {
     const records = await readAllRecords(SMALL_REPO);
     const queries = ["greet", "Greeter", "add", "quote'case", "symbol_%", "x".repeat(96)];
     for (const query of queries) {
@@ -2698,7 +2697,7 @@ describe("Phase 4.5: Query accuracy verification", () => {
     }
   });
 
-  test("Candidate-prefiltered chunks keep parity with full-scan ranking", async () => {
+  test("Candidate-prefiltered chunks match full-scan ranking", async () => {
     const records = await readAllRecords(SMALL_REPO);
     const queries = ["multiply", "Hello", "path_with_underscore", "quote'case", "你好世界"];
     for (const query of queries) {
@@ -3215,29 +3214,45 @@ describe("MCP protocol conformance", () => {
   });
 });
 
-describe("CLI/MCP parity contracts", () => {
-  test("parity: MCP tool surface includes operational parity tools", () => {
+describe("MCP contract checks", () => {
+  function firstReasonDetail(value: unknown): string {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    const payload = value as {
+      files?: { reasons?: { detail?: string }[] }[];
+      symbols?: { reasons?: { detail?: string }[] }[];
+      chunks?: { reasons?: { detail?: string }[] }[];
+    };
+    const groups = [payload.files ?? [], payload.symbols ?? [], payload.chunks ?? []];
+    for (const group of groups) {
+      for (const item of group) {
+        const detail = item.reasons?.[0]?.detail;
+        if (typeof detail === "string") return detail;
+      }
+    }
+    return "";
+  }
+
+  test("MCP tool surface includes operational tools", () => {
     const names = new Set(__internalServer.toolNames);
     expect(names.has("veil_build")).toBe(true);
-    expect(names.has("veil_init")).toBe(true);
     expect(names.has("veil_grammar_list")).toBe(true);
     expect(names.has("veil_grammar_install")).toBe(true);
     expect(names.has("veil_grammar_remove")).toBe(true);
     expect(names.has("veil_grammar_update")).toBe(true);
   });
 
-  test("parity: chunk tool exposes refresh_if_stale control", () => {
+  test("chunk tool exposes refresh_if_stale control", () => {
     const definition = __internalServer.toolDefinitions.find((tool) => tool.name === "veil_chunk");
     expect(definition).toBeDefined();
     expect(definition?.inputSchema.refresh_if_stale).toBeDefined();
   });
 
-  test("parity: web search clamp path uses shared bounds", () => {
-    expect(clampWebSearchLimit(10_000)).toBe(PARITY_LIMITS.web_search_limit.max);
-    expect(clampWebSearchTimeout(10_000_000)).toBe(PARITY_LIMITS.web_search_timeout_ms.max);
+  test("web search clamp path uses shared bounds", () => {
+    expect(clampWebSearchLimit(10_000)).toBe(TOOL_LIMITS.web_search_limit.max);
+    expect(clampWebSearchTimeout(10_000_000)).toBe(TOOL_LIMITS.web_search_timeout_ms.max);
   });
 
-  test("parity: shared error detector marks meta and top-level errors", () => {
+  test("shared error detector marks meta and top-level errors", () => {
     const byMeta = responseErrorMessage({
       meta: { ok: false },
       error: { code: "invalid", message: "bad" },
@@ -3247,97 +3262,34 @@ describe("CLI/MCP parity contracts", () => {
     expect(byTopLevel).toBe("bad2");
   });
 
-  test("parity: CLI sets non-zero exit code for tool-style failure payload", async () => {
-    const originalExitCode = process.exitCode;
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (() => true) as typeof process.stdout.write;
-    try {
-      process.exitCode = 0;
-      await runCli(["node", "src/cli.ts", "fetch-url", "--url", "not-a-valid-url"]);
-      expect(process.exitCode).toBe(1);
-    } finally {
-      process.stdout.write = originalWrite;
-      process.exitCode = originalExitCode;
-    }
+  test("lookup defaults are compact on MCP", async () => {
+    const lookupTool = __internalServer.toolDefinitions.find((tool) => tool.name === "veil_lookup");
+    expect(lookupTool).toBeDefined();
+    const tool = must(lookupTool);
+
+    const mcpDefault = await tool.handler({ workspace: SMALL_REPO, query: "hello" });
+    const mcpFull = await tool.handler({
+      workspace: SMALL_REPO,
+      query: "hello",
+      response_mode: "full",
+    });
+
+    expect(firstReasonDetail(mcpDefault)).toBe("");
+    expect(firstReasonDetail(mcpFull).length).toBeGreaterThan(0);
+  });
+
+  test("git-status defaults omit path arrays on MCP", async () => {
+    const tool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_git_status"),
+    );
+    const mcp = await tool.handler({ workspace: "." });
+    const mcpData = (mcp as { data?: { paths?: unknown } }).data;
+
+    expect(mcpData?.paths ?? null).toBeNull();
   });
 });
 
 describe("Profiler utilities", () => {
-  test("CLI parser helper intent coercion is stable", () => {
-    expect(__internalCli.parseIntent("docs")).toBe("docs");
-    expect(__internalCli.parseIntent("unknown")).toBe("auto");
-  });
-
-  test("CLI init mode coercion is stable", () => {
-    expect(__internalCli.parseInitMode("mcp")).toBe("mcp");
-    expect(__internalCli.parseInitMode("unknown")).toBe("cli");
-  });
-
-  test("CLI package manager inference detects bun runtime", () => {
-    const pm = __internalCli.inferInitPackageManager(
-      undefined,
-      ["veil", "init"],
-      "/usr/local/bin/bun",
-    );
-    expect(pm).toBe("bun");
-  });
-
-  test("CLI package manager inference detects pnpm execpath", () => {
-    const pm = __internalCli.inferInitPackageManager(
-      undefined,
-      ["veil", "init"],
-      "/usr/local/bin/node",
-      "/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs",
-    );
-    expect(pm).toBe("pnpm");
-  });
-
-  test("CLI init setup plan includes CLI and skill installs for cli mode", () => {
-    const steps = __internalCli.initStepsForMode("cli", "npm");
-    expect(steps.some((step) => step.id === "install-cli")).toBe(true);
-    expect(steps.some((step) => step.id === "install-skill")).toBe(true);
-  });
-
-  test("CLI init setup plan includes mcp skill install for mcp mode", () => {
-    const steps = __internalCli.initStepsForMode("mcp", "npm");
-    expect(steps.some((step) => step.id === "install-mcp-skill")).toBe(true);
-    expect(steps.some((step) => step.id === "install-cli")).toBe(false);
-  });
-
-  test("CLI init setup result supports generic mcp setup contract", async () => {
-    const result = await __internalCli.buildInitSetupResult({
-      workspace: SMALL_REPO,
-      mode: "mcp",
-      interactive: false,
-      yes: false,
-      executeInstalls: false,
-      packageManager: "npm",
-    });
-    expect(result.mode).toBe("mcp");
-    expect(result.package_manager).toBe("npm");
-    expect(result.executed).toBe(false);
-    expect(result.mcp_snippet).toContain("@ushiradineth/veil@latest mcp server");
-    expect(result.steps.every((step) => step.status === "planned")).toBe(true);
-    expect(result.next_steps.length).toBeGreaterThan(0);
-    expect(result.parsers.available.length).toBeGreaterThan(0);
-  });
-
-  test("CLI init setup result can execute cli install and skip skill", async () => {
-    const result = await __internalCli.buildInitSetupResult({
-      workspace: SMALL_REPO,
-      mode: "cli",
-      interactive: false,
-      yes: false,
-      packageManager: "npm",
-      runStep: (step) => ({ ...step, status: "ok", ok: true, details: "mocked" }),
-    });
-    expect(result.mode).toBe("cli");
-    expect(result.executed).toBe(true);
-    expect(result.steps[0]?.status).toBe("ok");
-    expect(result.steps[1]?.status).toBe("skipped");
-    expect(result.parsers.enabled.length).toBeGreaterThan(0);
-  });
-
   test("Parser list parsing normalizes aliases", () => {
     const parsed = parseParserList("js, ts, python,sh,go,rs,json");
     expect(parsed).toEqual(["javascript", "typescript", "python", "bash", "go", "rust", "json"]);
@@ -3443,26 +3395,6 @@ describe("Profiler utilities", () => {
     expect(writes.join(" ")).toContain("boom");
   });
 
-  test("Bin runMain uses default runner", async () => {
-    const originalExitCode = process.exitCode;
-    const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (() => true) as typeof process.stderr.write;
-
-    try {
-      process.exitCode = 0;
-      await __internalBin.runMain();
-      expect(process.exitCode).toBe(0);
-    } finally {
-      process.exitCode = originalExitCode;
-      process.stderr.write = originalWrite;
-    }
-  });
-
-  test("CLI createCli returns yargs parser surface", () => {
-    const cli = __internalCli.createCli([]);
-    expect(typeof cli.parseAsync).toBe("function");
-    expect(typeof cli.command).toBe("function");
-  });
   test("State root helpers handle absolute and relative overrides", () => {
     const workspace = join(TEMP_TEST_DIR, "state-root-workspace");
     const absRoot = "/tmp/veil-state-root";
@@ -3618,7 +3550,7 @@ describe("Benchmark report generation", () => {
         workspace: "/tmp/repo",
         profile: "smoke",
         agents: ["codex", "claude"],
-        strategies: ["mcp_transport", "cli_skill"],
+        strategies: ["mcp_transport"],
         cold_iterations: 1,
         warm_iterations: 1,
         output_dir: "/tmp/repo/benchmarks/results/20260307-120000Z",
@@ -3670,7 +3602,7 @@ describe("Benchmark report generation", () => {
     expect(md.includes("A/B Signals")).toBe(true);
     expect(md.includes("- Profile: `smoke`")).toBe(true);
     expect(md.includes("- Agents: `codex,claude`")).toBe(true);
-    expect(md.includes("- Strategies: `mcp_transport,cli_skill`")).toBe(true);
+    expect(md.includes("- Strategies: `mcp_transport`")).toBe(true);
     expect(md.includes("Runtime budget")).toBe(true);
     expect(md.includes("Cell budget")).toBe(true);
     expect(md.includes("| codex (none) | yes | prompt_only |")).toBe(true);
@@ -3691,19 +3623,9 @@ describe("Bench suite planning helpers", () => {
     expect(smoke.every((scenario) => scenario.kind !== "gh_lookup")).toBe(true);
   });
 
-  test("Strategy parsing supports defaults and legacy aliases", () => {
-    const parsed = __internalBenchSuite.parseStrategies(["veil", "none", "cli_skill"]);
-    expect(parsed).toEqual(["mcp_transport", "cli_skill"]);
-  });
-
-  test("Timeout errors map to unsupported classification", () => {
-    const mapped = __internalBenchSuite.mapTimeoutToUnsupported("codex", {
-      status: "error",
-      text: "",
-      reason: "ETIMEDOUT after 1000ms",
-    });
-    expect(mapped.status).toBe("unsupported");
-    expect(mapped.reason).toBe("codex timeout");
+  test("Strategy parsing supports MCP defaults and legacy aliases", () => {
+    const parsed = __internalBenchSuite.parseStrategies(["veil", "none", "mcp_baseline"]);
+    expect(parsed).toEqual(["mcp_transport"]);
   });
 
   test("Regression gate reports violations above threshold", () => {
@@ -3711,7 +3633,7 @@ describe("Bench suite planning helpers", () => {
       scenarios: [{ id: "status-bootstrap" }],
       competitors: [
         {
-          id: "veil-cli_skill",
+          id: "veil-mcp_transport",
           scenarios: {
             "status-bootstrap": { status: "ok", warm: { p50_ms: 100 } },
           },
@@ -3722,7 +3644,7 @@ describe("Bench suite planning helpers", () => {
       scenarios: [{ id: "status-bootstrap" }],
       competitors: [
         {
-          id: "veil-cli_skill",
+          id: "veil-mcp_transport",
           scenarios: {
             "status-bootstrap": { status: "ok", warm: { p50_ms: 125 } },
           },
@@ -3768,5 +3690,86 @@ describe("Bench suite planning helpers", () => {
     );
     expect(gate.compared).toBe(1);
     expect(gate.violations.length).toBe(0);
+  });
+});
+
+describe("Token-efficient defaults", () => {
+  function firstReasonDetail(value: unknown): string {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    const payload = value as {
+      files?: { reasons?: { detail?: string }[] }[];
+      symbols?: { reasons?: { detail?: string }[] }[];
+      chunks?: { reasons?: { detail?: string }[] }[];
+    };
+    const groups = [payload.files ?? [], payload.symbols ?? [], payload.chunks ?? []];
+    for (const group of groups) {
+      for (const item of group) {
+        const detail = item.reasons?.[0]?.detail;
+        if (typeof detail === "string") return detail;
+      }
+    }
+    return "";
+  }
+
+  test("MCP lookup defaults to compact reasons and supports full opt-in", async () => {
+    const lookupTool = __internalServer.toolDefinitions.find((tool) => tool.name === "veil_lookup");
+    expect(lookupTool).toBeDefined();
+    const tool = must(lookupTool);
+
+    const compact = await tool.handler({
+      workspace: SMALL_REPO,
+      query: "greet",
+    });
+    const full = await tool.handler({
+      workspace: SMALL_REPO,
+      query: "greet",
+      response_mode: "full",
+    });
+
+    expect(firstReasonDetail(compact)).toBe("");
+    expect(firstReasonDetail(full).length).toBeGreaterThan(0);
+  });
+
+  test("gitStatus defaults to compact output without path arrays", async () => {
+    const result = await gitStatus(SMALL_REPO);
+    expect(result.meta.ok).toBe(true);
+    expect(result.data?.paths).toBeUndefined();
+    expect(typeof result.data?.changed.staged).toBe("number");
+    expect(typeof result.data?.changed.unstaged).toBe("number");
+    expect(typeof result.data?.changed.untracked).toBe("number");
+  });
+
+  test("fetchUrl default max bytes is bounded for token safety", async () => {
+    const largeBody = "x".repeat(120_000);
+    const result = await fetchUrl({
+      url: "https://example.com",
+      fetch_impl: (async () => {
+        await Promise.resolve();
+        return new Response(largeBody, {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    expect(result.meta.ok).toBe(true);
+    expect(result.meta.truncated).toBe(true);
+    expect((result.data?.content.length ?? 0) <= 80_000).toBe(true);
+  });
+
+  test("hot MCP tool descriptions stay concise and discoverable", () => {
+    const hotTools = [
+      "veil_lookup",
+      "veil_search",
+      "veil_git_status",
+      "veil_git_diff",
+      "veil_git_show",
+      "veil_fetch_url",
+    ] as const;
+    for (const name of hotTools) {
+      const description = TOOL_DESCRIPTIONS[name];
+      expect(description.length).toBeLessThanOrEqual(130);
+      expect(description.trim().length).toBeGreaterThan(20);
+    }
   });
 });

@@ -5,8 +5,9 @@
 - Install deps: `nix run nixpkgs#bun -- install`
 - Run tests: `nix run nixpkgs#bun -- test ./src/test.ts`
 - Run coverage: `nix run nixpkgs#bun -- test --coverage ./src/test.ts`
-- CLI status: `nix run nixpkgs#bun -- run src/cli.ts status`
-- Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --profile smoke --cold 1 --warm 1 --strategies mcp_transport,cli_skill`
+- MCP server (stdio): `nix run nixpkgs#bun -- run src/bin.ts`
+- MCP server (HTTP): `VEIL_HTTP=1 nix run nixpkgs#bun -- run src/bin.ts`
+- Benchmark suite: `nix run nixpkgs#bun -- run src/bench-suite.ts --workspace <path> --profile smoke --cold 1 --warm 1 --strategies mcp_transport`
 - Build npm package bundle: `node scripts/build-package.mjs`
 - Dry-run npm package tarball: `npm pack --dry-run`
 - Validate workflow YAML: `ruby -e 'require "yaml"; %w[ci release publish].each { |n| YAML.load_file(".github/workflows/#{n}.yml") }; puts "ok"'`
@@ -21,7 +22,7 @@
 ## Testing
 
 - For behavior-changing refactors, follow TDD: write or update a failing test first (Red), implement the smallest change to pass (Green), then refactor with tests still passing (Refactor).
-- For CLI/MCP parity refactors, keep parity regression tests under `parity:` prefixes and use `nix run nixpkgs#bun -- test ./src/test.ts --filter "parity:"` as task-level gate.
+- For MCP contract refactors, keep focused contract regression tests and run targeted test filters when isolating failures.
 - Always run `nix run nixpkgs#bun -- test ./src/test.ts` after behavior changes.
 - For performance or benchmark changes, run at least one fresh suite and update the newest `benchmarks/results/<run-id>/*` artifacts.
 - Keep benchmark tables in `BENCHMARKS.md` aligned with the newest `benchmarks/results/<run-id>/results.json`.
@@ -45,17 +46,16 @@ For docs-only, release-note, or non-behavioral chore changes, mark TDD as not ap
 
 ## Skill Quality Gate
 
-- After any feature, command, tool, or workflow change, review `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` before closing the task.
-- If behavior, routing, defaults, anti-patterns, or examples changed, update the affected skill files in the same change.
-- If either skill file changes, bump its frontmatter `version` using semver (`major.minor.patch`) in the same change.
+- After any feature, command, tool, or workflow change, review `skills/SKILL.md` before closing the task.
+- If behavior, routing, defaults, anti-patterns, or examples changed, update the skill file in the same change.
+- If the skill file changes, bump its frontmatter `version` using semver (`major.minor.patch`) in the same change.
 - Treat skill updates as a required quality gate, not optional follow-up.
 - If no skill update is needed, explicitly state why in the final task summary.
 
 ## Project Structure
 
-- `src/cli.ts`: primary CLI command surface.
-- `src/bin.ts`: npm package entrypoint router (top-level CLI + optional `mcp` namespace).
-- `src/server.ts`: optional MCP stdio server runtime (`veil mcp server`).
+- `src/bin.ts`: npm package entrypoint that starts MCP runtime.
+- `src/server.ts`: MCP runtime (stdio default, optional streamable HTTP).
 - `src/indexer.ts`: indexing and local code retrieval core.
 - `src/indexer/build.ts`: incremental merge and record sorting helpers.
 - `src/query.ts`: lookup scoring and ranking helpers.
@@ -77,7 +77,7 @@ For docs-only, release-note, or non-behavioral chore changes, mark TDD as not ap
 
 - TypeScript with explicit response contracts in `src/types.ts`.
 - Keep outputs token-lean and deterministic.
-- CLI text output must stay TOON-formatted.
+- MCP text output must stay TOON-formatted.
 - Avoid ad hoc shell parsing when a typed utility exists.
 
 ## Token Sensitivity
@@ -89,20 +89,20 @@ For docs-only, release-note, or non-behavioral chore changes, mark TDD as not ap
 - Keep skill and onboarding artifacts compact and operational.
 - Keep tool descriptions and guidance text compact by default to reduce token overhead.
 
-## CLI Routing Policy
+## MCP Routing Policy
 
-See `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` for routing guidance and anti-patterns.
+See `skills/SKILL.md` for routing guidance and anti-patterns.
 
 ## Skill Maintenance Gates
 
 - For MCP server, MCP tool, or MCP routing changes, load and follow `mcp-builder`.
 - For skill artifact changes under `skills/**`, load and follow `skill-creator`.
-- If a change affects both skill artifacts and MCP behavior, use both skills and keep guidance and capability claims aligned.
-- Do not close MCP or skill change work without checking whether both `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` need updates.
+- If a change affects both skill artifacts and MCP behavior, use both workflows and keep guidance and capability claims aligned.
+- Do not close MCP or skill change work without checking whether `skills/SKILL.md` needs updates.
 
 ## No-Skill Defaults
 
-- CLI command descriptions and MCP tool descriptions are intent-first and should be treated as co-primary no-skill routing surfaces for generic agents.
+- MCP tool descriptions are intent-first and should be treated as the primary no-skill routing surface for generic agents.
 - Default objective is native-first Veil selection across all replaceable workflows (local retrieval, git context, web/fetch, GitHub context).
 - Query tools (`files`, `symbols`, `search`, `lookup`) auto-refresh stale indexes by default.
 - No project-specific environment variables are required for normal operation.
@@ -111,12 +111,10 @@ See `skills/CLI/SKILL.md` and `skills/MCP/SKILL.md` for routing guidance and ant
 
 When a prompt includes words like `research`, `investigate`, `find where`, `summarize from web`, or `compare docs`, apply:
 
-1. `discover` for local context
-2. `web_search` for external candidates
-3. `fetch_url` for top URLs
+1. `veil_discover` for local context
+2. `veil_web_search` for external candidates
+3. `veil_fetch_url` for top URLs
 4. Return concise synthesis with source URLs
-
-Use `skills/CLI/SKILL.md` for CLI routing and `skills/MCP/SKILL.md` for MCP routing.
 
 ## Release Workflow
 
@@ -139,7 +137,7 @@ Use `skills/CLI/SKILL.md` for CLI routing and `skills/MCP/SKILL.md` for MCP rout
 
 ### Always
 
-- Prefer Veil CLI or Veil MCP tools over shell equivalents for supported intents.
+- Prefer Veil MCP tools over shell equivalents for supported intents.
 - Keep benchmark and docs claims backed by fresh artifacts.
 - Preserve TOON output formatting for agent-facing responses.
 

@@ -206,7 +206,7 @@ export async function fetchUrl(options: {
   const format: FetchUrlFormat = options.format ?? "markdown";
   // Enforce timeout bounds: min 100ms, max 20s
   const timeoutMs = clampInt(options.timeout_ms, 100, 20_000, 8_000);
-  const maxBytes = clampInt(options.max_bytes, 100, 2_000_000, 200_000);
+  const maxBytes = clampInt(options.max_bytes, 100, 2_000_000, 80_000);
   const includeErrorContent = options.include_error_content ?? false;
   const allowPrivateNetwork = options.allow_private_network ?? false;
 

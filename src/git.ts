@@ -35,7 +35,7 @@ type RunnerOptions = {
   timeoutMs: number;
 };
 
-const DEFAULT_MAX_BYTES = 64_000;
+const DEFAULT_MAX_BYTES = 20_000;
 const MAX_BYTES_CAP = 500_000;
 const REPO_CONTEXT_MARKER = ".veil-repo-context";
 const RUNNER_CAPTURE_MAX_BYTES = 2_000_000;
@@ -617,7 +617,7 @@ export async function gitStatus(
 
   const paths = parsePorcelain(porcelain.stdout);
   const limitedPaths = applyPathsLimit(paths, clampPathsLimit(options?.paths_limit));
-  const includePaths = options?.include_paths ?? true;
+  const includePaths = options?.include_paths ?? false;
   const [behindRaw, aheadRaw] = (aheadBehind.stdout.trim() || "0 0").split("\t");
   const data: GitStatusData = {
     branch: branch.stdout.trim(),

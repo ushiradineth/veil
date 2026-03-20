@@ -1,6 +1,6 @@
 {
   "agents": ["codex", "claude", "firecrawl"],
-  "strategies": ["mcp_transport", "cli_skill"],
+  "strategies": ["mcp_transport"],
   "notes": [
     "This file documents the normalized benchmark matrix contract.",
     "Each agent/strategy cell must run the same scenario prompt and query against the same workspace.",

@@ -84,46 +84,16 @@ export type IndexStatus = {
   current_git_head: string | null;
 };
 
-export type InitWorkspaceIndexReason = "fresh" | "dirty-only" | "refresh-disabled" | "refreshed";
+export type WorkspaceIndexReason = "fresh" | "dirty-only" | "refresh-disabled" | "refreshed";
 
-export type InitWorkspaceIndexResult = {
+export type WorkspaceIndexResult = {
   workspace: string;
   refreshed: boolean;
-  reason: InitWorkspaceIndexReason;
+  reason: WorkspaceIndexReason;
   mode: BuildMode | null;
   status_before: IndexStatus;
   status_after: IndexStatus;
   manifest: Manifest | null;
-};
-
-export type InitSetupMode = "cli" | "mcp";
-
-export type InitSetupPackageManager = "npm" | "pnpm" | "bun" | "yarn" | "brew";
-
-export type InitSetupStepStatus = "planned" | "ok" | "failed" | "skipped";
-
-export type InitSetupStep = {
-  id: string;
-  label: string;
-  command: string;
-  status: InitSetupStepStatus;
-  ok: boolean;
-  details: string;
-};
-
-export type InitSetupResult = {
-  mode: InitSetupMode;
-  interactive: boolean;
-  package_manager: InitSetupPackageManager;
-  executed: boolean;
-  mcp_snippet: string | null;
-  parsers: {
-    available: string[];
-    enabled: string[];
-    installed: string[];
-  };
-  steps: InitSetupStep[];
-  next_steps: string[];
 };
 
 export type GitToolName = "git_status" | "git_diff" | "git_log" | "git_show" | "gh_lookup";

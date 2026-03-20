@@ -1,5 +1,5 @@
 import { errorMessage, isAbortLike } from "./errors";
-import { clampWebSearchLimit, clampWebSearchTimeout } from "./shared/parity-contract";
+import { clampWebSearchLimit, clampWebSearchTimeout } from "./validation";
 import type {
   WebSearchDebugResult,
   WebSearchProvider,

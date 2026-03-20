@@ -9,7 +9,6 @@ import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/
 import { z } from "zod";
 
 import { withAgentGuidanceCompact } from "./agent-guidance";
-import { __internalCli } from "./cli";
 import { diagnostics } from "./diagnostics";
 import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
@@ -25,14 +24,13 @@ import {
   buildIndex,
   discoverIndex,
   getStatus,
-  initWorkspaceIndex,
+  prepareWorkspaceIndex,
   lookupIndex,
   queryChunkById,
   queryChunks,
   queryFiles,
   querySymbols,
 } from "./indexer";
-import { compactStatusSummary } from "./shared/orchestration";
 import {
   clampFilesLimit,
   clampSearchLimit,
@@ -44,7 +42,7 @@ import {
   normalizeLookupSymbolsLimit,
   normalizeOptionalChunkContentChars,
   responseErrorMessage,
-} from "./shared/parity-contract";
+} from "./validation";
 import { diagnosticsStatePath } from "./state-root";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
 import { VEIL_VERSION } from "./version";
@@ -78,7 +76,7 @@ const DIAGNOSTICS_ANNOTATIONS: ToolAnnotations = {
   openWorldHint: false,
 };
 
-type QueryInitArgs = {
+type QueryWorkspaceArgs = {
   workspace?: string;
   state_root?: string;
   refresh_if_stale?: boolean;
@@ -128,6 +126,18 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function compactStatusSummary(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { exists: false, stale: true, reasons: ["unknown"] };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    exists: record.exists === true,
+    stale: record.stale === true,
+    reasons: Array.isArray(record.reasons) ? record.reasons : [],
+  };
+}
+
 function parseParserIds(value: unknown): ReturnType<typeof parseParserList> {
   if (Array.isArray(value)) {
     const raw = value.filter((item): item is string => typeof item === "string").join(",");
@@ -166,9 +176,9 @@ function resolveWorkspace(workspace?: string, stateRoot?: string): string {
   return ws;
 }
 
-async function initQueryWorkspace(args: QueryInitArgs): Promise<string> {
+async function prepareQueryWorkspace(args: QueryWorkspaceArgs): Promise<string> {
   const ws = resolveWorkspace(args.workspace, args.state_root);
-  await initWorkspaceIndex(ws, {
+  await prepareWorkspaceIndex(ws, {
     state_root: args.state_root,
     refresh_if_stale: args.refresh_if_stale ?? true,
     strict_query_freshness: true,
@@ -228,45 +238,6 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const ws = resolveWorkspace(workspace, stateRoot);
       const manifest = await buildIndex(ws, "full", { state_root: stateRoot });
       return { ok: true, mode: "full", manifest };
-    },
-  },
-  {
-    name: "veil_init",
-    title: "Veil Init Setup",
-    description: TOOL_DESCRIPTIONS.veil_init,
-    inputSchema: {
-      workspace: z.string().optional(),
-      state_root: z.string().optional(),
-      mode: z.enum(["cli", "mcp"]).optional(),
-      yes: z.boolean().optional(),
-      parsers: z.array(z.string()).optional(),
-      skip_parser_prompt: z.boolean().optional(),
-      package_manager: z.enum(["npm", "pnpm", "bun", "yarn", "brew"]).optional(),
-      execute_installs: z.boolean().optional(),
-    },
-    annotations: INDEX_WRITE_ANNOTATIONS,
-    handler: async (args) => {
-      const workspace = asString(args.workspace);
-      const stateRoot = asString(args.state_root);
-      const ws = resolveWorkspace(workspace, stateRoot);
-      return await __internalCli.buildInitSetupResult({
-        workspace: ws,
-        stateRoot,
-        mode: args.mode === "mcp" ? "mcp" : args.mode === "cli" ? "cli" : undefined,
-        interactive: false,
-        yes: asBoolean(args.yes) ?? false,
-        parsers: parseParserIds(args.parsers),
-        skipParserPrompt: asBoolean(args.skip_parser_prompt) ?? true,
-        packageManager:
-          args.package_manager === "pnpm" ||
-          args.package_manager === "bun" ||
-          args.package_manager === "yarn" ||
-          args.package_manager === "brew" ||
-          args.package_manager === "npm"
-            ? args.package_manager
-            : undefined,
-        executeInstalls: asBoolean(args.execute_installs) ?? false,
-      });
     },
   },
   {
@@ -360,7 +331,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const stateRoot = asString(args.state_root);
       const refreshIfStale = asBoolean(args.refresh_if_stale);
       const limit = asNumber(args.limit);
-      const ws = await initQueryWorkspace({
+      const ws = await prepareQueryWorkspace({
         workspace,
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
@@ -387,7 +358,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const stateRoot = asString(args.state_root);
       const refreshIfStale = asBoolean(args.refresh_if_stale);
       const limit = asNumber(args.limit);
-      const ws = await initQueryWorkspace({
+      const ws = await prepareQueryWorkspace({
         workspace,
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
@@ -422,7 +393,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const workspace = asString(args.workspace);
       const stateRoot = asString(args.state_root);
       const refreshIfStale = asBoolean(args.refresh_if_stale);
-      const ws = await initQueryWorkspace({
+      const ws = await prepareQueryWorkspace({
         workspace,
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
@@ -475,7 +446,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const workspace = asString(args.workspace);
       const stateRoot = asString(args.state_root);
       const refreshIfStale = asBoolean(args.refresh_if_stale);
-      const ws = await initQueryWorkspace({
+      const ws = await prepareQueryWorkspace({
         workspace,
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
@@ -499,7 +470,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
           args.intent === "code" || args.intent === "docs" || args.intent === "symbols"
             ? args.intent
             : "auto",
-        response_mode: args.response_mode === "compact" ? "compact" : "full",
+        response_mode: args.response_mode === "full" ? "full" : "compact",
         state_root: stateRoot,
       });
       return withAgentGuidanceCompact("lookup", result, { query });
@@ -531,7 +502,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const workspace = asString(args.workspace);
       const stateRoot = asString(args.state_root);
       const ws = resolveWorkspace(workspace, stateRoot);
-      const initResult = await initWorkspaceIndex(ws, {
+      const prepareResult = await prepareWorkspaceIndex(ws, {
         state_root: stateRoot,
         refresh_if_stale: asBoolean(args.refresh_if_stale) ?? true,
         strict_query_freshness: true,
@@ -560,7 +531,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       return withAgentGuidanceCompact(
         "discover",
         {
-          status: compactStatusSummary(initResult.status_after),
+          status: compactStatusSummary(prepareResult.status_after),
           intent: discovered.intent,
           files: discovered.files,
           symbols: discovered.symbols,
@@ -585,7 +556,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     handler: async (args) => {
       const workspace = asString(args.workspace);
       const stateRoot = asString(args.state_root);
-      const ws = await initQueryWorkspace({
+      const ws = await prepareQueryWorkspace({
         workspace,
         state_root: stateRoot,
         refresh_if_stale: asBoolean(args.refresh_if_stale) ?? true,

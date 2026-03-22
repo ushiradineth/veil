@@ -95,10 +95,9 @@ jobs:
 
       - name: Smoke test Node bundle
         run: |
-          output=$(node dist/bin.js 2>&1 || true)
-          if ! echo "${output}" | grep -q "Usage:"; then
-            echo "Smoke test failed: bundle did not produce usage output"
-            echo "Got: ${output}"
+          if ! node dist/bin.js --help >/tmp/veil-smoke.log 2>&1; then
+            echo "Smoke test failed: bundle exited non-zero"
+            echo "Got: $(cat /tmp/veil-smoke.log)"
             exit 1
           fi
 

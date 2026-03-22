@@ -126,6 +126,16 @@ When a prompt includes words like `research`, `investigate`, `find where`, `summ
 - If brew update fails after npm publish, keep the existing tag/release and rerun only formula update with the same `TAG` and `VERSION`.
 - See `README.md` for full release runbook and variable reference.
 
+## Agent Release Intent
+
+- When asked to do a release, first inspect local git state (`git status`, current branch, local commits, worktrees) and compare against `origin/main`.
+- If currently on `main` with local commits not pushed, create a new branch from current `HEAD`, push it, open a PR to `main`, and merge through PR before running release.
+- If currently on `main` with no local-only commits, run release directly with `gh` from `main`.
+- Use `gh workflow run Release --ref main -f version_bump=<patch|minor|major>` for normal releases.
+- `release.yml` requires `package.json` version to match the latest semver tag before bumping.
+- `publish.yml` runs on `push` to `main` and publishes only when the latest commit subject exactly matches `chore(release): bump version to X.Y.Z`.
+- For release bump PRs, avoid merge methods that rewrite the subject to include PR suffixes because publish detection is strict.
+
 ## Git Workflow
 
 - Keep diffs tightly scoped to requested work.

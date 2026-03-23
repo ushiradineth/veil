@@ -269,6 +269,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     inputSchema: {
       workspace: z.string().optional(),
       state_root: z.string().optional(),
+      reported_skill_version: z.string().optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
     handler: async (args) => {
@@ -279,7 +280,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         bypass_cache: true,
       });
-      const updates = await buildUpdateCheck({ allow_network: false });
+      const updates = await buildUpdateCheck({
+        allow_network: false,
+        reported_skill_version: asString(args.reported_skill_version),
+      });
       return withAgentGuidanceCompact("status", { ...status, updates });
     },
   },
@@ -688,6 +692,7 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       language: z.string().optional(),
       intent: z.enum(["auto", "code", "docs", "symbols"]).optional(),
       state_root: z.string().optional(),
+      reported_skill_version: z.string().optional(),
     },
     annotations: LOCAL_READ_ANNOTATIONS,
     handler: async (args) => {
@@ -724,8 +729,13 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const grammarSuggestions = (prepareResult.status_after.grammar_suggestions ?? []).filter(
         (suggestion) => suggestionMatchesQuery(suggestion, query),
       );
+      const updates = await buildUpdateCheck({
+        allow_network: false,
+        reported_skill_version: asString(args.reported_skill_version),
+      });
       const payload: Record<string, unknown> = {
         status: compactStatusSummary(prepareResult.status_after),
+        updates,
         intent: discovered.intent,
         files: discovered.files,
         symbols: discovered.symbols,

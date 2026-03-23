@@ -144,6 +144,50 @@ describe("Update check MCP integration", () => {
     expect(result.updates?.skill).toBeDefined();
   });
 
+  test("status tool propagates reported skill version", async () => {
+    const expected = VEIL_SKILL_VERSION ?? "2.2.2";
+    __internalVersion.setSkillVersionForTests(expected);
+    const statusTool = __internalServer.toolDefinitions.find(
+      (entry) => entry.name === "veil_status",
+    );
+    expect(statusTool).toBeDefined();
+    const result = (await statusTool?.handler({
+      workspace: ".",
+      reported_skill_version: "0.0.1",
+    })) as {
+      updates?: {
+        skill?: { reported?: string | null; outdated?: boolean | null; reason?: string | null };
+      };
+    };
+    expect(result.updates?.skill?.reported).toBe("0.0.1");
+    expect(result.updates?.skill?.outdated).toBe(true);
+    expect(result.updates?.skill?.reason).toBeNull();
+  });
+
+  test("discover tool includes updates block and reported skill drift", async () => {
+    const expected = VEIL_SKILL_VERSION ?? "2.2.2";
+    __internalVersion.setSkillVersionForTests(expected);
+    const workspace = join(import.meta.dir, "..");
+    const discoverTool = __internalServer.toolDefinitions.find(
+      (entry) => entry.name === "veil_discover",
+    );
+    expect(discoverTool).toBeDefined();
+    const result = (await discoverTool?.handler({
+      workspace,
+      query: "server",
+      reported_skill_version: "0.0.1",
+    })) as {
+      updates?: {
+        mcp?: unknown;
+        skill?: { reported?: string | null; outdated?: boolean | null; reason?: string | null };
+      };
+    };
+    expect(result.updates?.mcp).toBeDefined();
+    expect(result.updates?.skill?.reported).toBe("0.0.1");
+    expect(result.updates?.skill?.outdated).toBe(true);
+    expect(result.updates?.skill?.reason).toBeNull();
+  });
+
   test("update-check tool returns structured payload", async () => {
     const updateTool = __internalServer.toolDefinitions.find(
       (entry) => entry.name === "veil_update_check",

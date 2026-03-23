@@ -79,6 +79,26 @@ Add to `~/.config/opencode/opencode.json`:
 | GitHub context lookup               | `veil_gh_lookup`                                                                          |
 | Diagnostics                         | `veil_diagnostics`                                                                        |
 
+## Optional parser runtimes
+
+- Core defaults stay minimal: `javascript`, `typescript`, `json`.
+- Additional languages are optional and install only after explicit user approval via
+  `veil_grammar_runtime_install`.
+- Common optional coverage includes:
+  - `nix`, `elixir`, `zig`, `go`, `rust`
+  - `c`, `cpp`, `c-sharp`
+  - `markdown`
+  - `java`, `php`, `ruby`, `lua`, `kotlin`, `swift`
+
+### Runtime install reuse semantics
+
+- Parser enable or install state is persisted in `<state_root>/grammars.json` (default state root: `.veil`).
+- Runtime packages are installed into `<state_root>/grammars-runtime` for that workspace.
+- Separate MCP server instances reuse the same runtime install location when they target the same workspace and
+  state root.
+- Fallback policy is strict for known installable parsers: global fallback is only allowed when runtime install is
+  recorded as failed (`runtime_install_failed`) or when no known runtime package mapping exists.
+
 ## Note
 
 > Veil is still experimental and under active development. Please report any issues or suggestions.

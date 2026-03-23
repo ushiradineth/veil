@@ -8,8 +8,11 @@ import { TopKHeap, getLru, setLru } from "./cache";
 import { diagnostics } from "./diagnostics";
 import { listIndexableFiles } from "./file-discovery";
 import {
+  allowGlobalRuntimeFallbackForParser,
   getParserConfig,
+  getRuntimeInstallFailedParsers,
   languageSupportById,
+  resolveGrammarRuntimeRoot,
   runtimePackageInstalled,
   type ParserId,
 } from "./grammar-manager";
@@ -111,7 +114,7 @@ function toCompactLookupReasons<T extends { reasons: { label: string; detail: st
 ): T[] {
   return rows.map((row) => ({
     ...row,
-    reasons: row.reasons.map((reason) => ({ label: reason.label, detail: "" })),
+    reasons: row.reasons.length > 0 ? [{ label: row.reasons[0]?.label ?? "", detail: "" }] : [],
   }));
 }
 
@@ -370,6 +373,26 @@ function docsPathBias(pathLower: string): number {
 function matchesLanguage(pathLower: string, languageFilter: string): boolean {
   if (!languageFilter) return true;
   if (languageFilter === "nix") return pathLower.endsWith(".nix");
+  if (languageFilter === "elixir") return pathLower.endsWith(".ex") || pathLower.endsWith(".exs");
+  if (languageFilter === "zig") return pathLower.endsWith(".zig");
+  if (languageFilter === "c-sharp") return pathLower.endsWith(".cs");
+  if (languageFilter === "cpp") {
+    return (
+      pathLower.endsWith(".cc") ||
+      pathLower.endsWith(".cpp") ||
+      pathLower.endsWith(".cxx") ||
+      pathLower.endsWith(".hpp") ||
+      pathLower.endsWith(".hh") ||
+      pathLower.endsWith(".hxx")
+    );
+  }
+  if (languageFilter === "c") return pathLower.endsWith(".c") || pathLower.endsWith(".h");
+  if (languageFilter === "java") return pathLower.endsWith(".java");
+  if (languageFilter === "php") return pathLower.endsWith(".php") || pathLower.endsWith(".phtml");
+  if (languageFilter === "ruby") return pathLower.endsWith(".rb");
+  if (languageFilter === "lua") return pathLower.endsWith(".lua");
+  if (languageFilter === "kotlin") return pathLower.endsWith(".kt") || pathLower.endsWith(".kts");
+  if (languageFilter === "swift") return pathLower.endsWith(".swift");
   if (languageFilter === "typescript")
     return pathLower.endsWith(".ts") || pathLower.endsWith(".tsx");
   if (languageFilter === "javascript")
@@ -379,7 +402,10 @@ function matchesLanguage(pathLower: string, languageFilter: string): boolean {
       pathLower.endsWith(".mjs") ||
       pathLower.endsWith(".cjs")
     );
-  if (languageFilter === "markdown") return pathLower.endsWith(".md");
+  if (languageFilter === "markdown")
+    return (
+      pathLower.endsWith(".md") || pathLower.endsWith(".markdown") || pathLower.endsWith(".mdown")
+    );
   return pathLower.endsWith(`.${languageFilter}`);
 }
 
@@ -391,10 +417,21 @@ const EXTENSION_LANGUAGE_ALIAS: Record<string, string> = {
   ex: "elixir",
   exs: "elixir",
   cs: "c-sharp",
+  csharp: "c-sharp",
   cjs: "javascript",
   mjs: "javascript",
   jsx: "javascript",
   tsx: "typescript",
+  md: "markdown",
+  markdown: "markdown",
+  mdown: "markdown",
+  cc: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  hh: "cpp",
+  hxx: "cpp",
+  rb: "ruby",
+  kts: "kotlin",
 };
 
 function detectLanguage(path: string, enabledParsers: Set<ParserId>): string {
@@ -407,8 +444,28 @@ function detectLanguage(path: string, enabledParsers: Set<ParserId>): string {
     lower.endsWith(".cjs")
   )
     return "javascript";
+  if (lower.endsWith(".ex") || lower.endsWith(".exs")) return "elixir";
+  if (lower.endsWith(".zig")) return "zig";
+  if (
+    lower.endsWith(".cc") ||
+    lower.endsWith(".cpp") ||
+    lower.endsWith(".cxx") ||
+    lower.endsWith(".hpp") ||
+    lower.endsWith(".hh") ||
+    lower.endsWith(".hxx")
+  )
+    return "cpp";
+  if (lower.endsWith(".cs")) return "c-sharp";
+  if (lower.endsWith(".java")) return "java";
+  if (lower.endsWith(".php") || lower.endsWith(".phtml")) return "php";
+  if (lower.endsWith(".rb")) return "ruby";
+  if (lower.endsWith(".lua")) return "lua";
+  if (lower.endsWith(".kt") || lower.endsWith(".kts")) return "kotlin";
+  if (lower.endsWith(".swift")) return "swift";
+  if (lower.endsWith(".c") || lower.endsWith(".h")) return "c";
   if (lower.endsWith(".nix")) return "nix";
-  if (lower.endsWith(".md")) return "markdown";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".mdown"))
+    return "markdown";
   if (lower.endsWith(".json")) return "json";
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   if (lower.endsWith(".sh")) return "shell";
@@ -503,8 +560,17 @@ function extractSymbols(
   language: string,
   content: string,
   enabledParsers: Set<ParserId>,
+  runtimeRoots: string[],
+  globalFallbackAllowedParsers: Set<ParserId>,
 ): SymbolRecord[] {
-  const treeSitter = extractSymbolsWithTreeSitter(path, language, content, enabledParsers);
+  const treeSitter = extractSymbolsWithTreeSitter(
+    path,
+    language,
+    content,
+    enabledParsers,
+    runtimeRoots,
+    globalFallbackAllowedParsers,
+  );
   if (treeSitter !== null) return treeSitter;
   return extractSymbolsRegex(path, language, content);
 }
@@ -513,6 +579,8 @@ async function processFile(
   workspace: string,
   rel: string,
   enabledParsers: Set<ParserId>,
+  runtimeRoots: string[],
+  globalFallbackAllowedParsers: Set<ParserId>,
   stateRoot?: string,
 ): Promise<{
   file: FileRecord | null;
@@ -552,7 +620,14 @@ async function processFile(
   };
   return {
     file: fileRecord,
-    symbols: extractSymbols(rel, language, content, enabledParsers),
+    symbols: extractSymbols(
+      rel,
+      language,
+      content,
+      enabledParsers,
+      runtimeRoots,
+      globalFallbackAllowedParsers,
+    ),
     chunks: makeChunks(rel, content),
   };
 }
@@ -561,6 +636,8 @@ async function computeForPaths(
   workspace: string,
   paths: string[],
   enabledParsers: Set<ParserId>,
+  runtimeRoots: string[],
+  globalFallbackAllowedParsers: Set<ParserId>,
   stateRoot?: string,
 ): Promise<{
   files: FileRecord[];
@@ -573,7 +650,16 @@ async function computeForPaths(
   for (let i = 0; i < paths.length; i += BATCH_SIZE) {
     const batch = paths.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
-      batch.map((rel) => processFile(workspace, rel, enabledParsers, stateRoot)),
+      batch.map((rel) =>
+        processFile(
+          workspace,
+          rel,
+          enabledParsers,
+          runtimeRoots,
+          globalFallbackAllowedParsers,
+          stateRoot,
+        ),
+      ),
     );
     for (const result of results) {
       if (!result.file) continue;
@@ -677,6 +763,7 @@ async function grammarSuggestionsForWorkspace(
   if (!indexDbExists(workspace, stateRoot)) return [];
   const parserConfig = await getParserConfig(workspace, stateRoot);
   const enabledParsers = new Set(parserConfig.enabled);
+  const runtimeInstallFailed = new Set(await getRuntimeInstallFailedParsers(workspace, stateRoot));
   const counts = await readLanguageCounts(workspace, stateRoot);
   const suggestions: GrammarSuggestion[] = [];
   for (const row of counts) {
@@ -686,7 +773,9 @@ async function grammarSuggestionsForWorkspace(
     if (!support || !support.installable) continue;
     const parserId = support.parser_id;
     const isEnabled = enabledParsers.has(parserId);
-    const runtimeInstalled = runtimePackageInstalled(parserId);
+    const runtimeInstalled = runtimePackageInstalled(parserId, workspace, stateRoot, {
+      allow_global_fallback: allowGlobalRuntimeFallbackForParser(parserId, runtimeInstallFailed),
+    });
     const reason = !isEnabled ? "parser-disabled" : !runtimeInstalled ? "runtime-missing" : null;
     if (!reason) continue;
     suggestions.push({
@@ -738,7 +827,20 @@ export async function buildIndex(
 
   const parserConfig = await getParserConfig(workspace, options.state_root);
   const enabledParsers = new Set<ParserId>(parserConfig.enabled);
-  const missingParsers = missingRequiredParsers(enabledParsers);
+  const runtimeInstallFailed = new Set(
+    await getRuntimeInstallFailedParsers(workspace, options.state_root),
+  );
+  const globalFallbackAllowedParsers = new Set(
+    [...enabledParsers].filter((parserId) =>
+      allowGlobalRuntimeFallbackForParser(parserId, runtimeInstallFailed),
+    ),
+  );
+  const runtimeRoots = [resolveGrammarRuntimeRoot(workspace, options.state_root)];
+  const missingParsers = missingRequiredParsers(
+    enabledParsers,
+    runtimeRoots,
+    globalFallbackAllowedParsers,
+  );
   if (missingParsers.length > 0) {
     throw new Error(
       `Missing required parser runtimes for enabled built-ins: ${missingParsers.join(", ")}. Reinstall dependencies and rerun build.`,
@@ -751,7 +853,14 @@ export async function buildIndex(
   let shouldWriteDocs = mode === "full";
 
   if (mode === "full") {
-    const computed = await computeForPaths(workspace, tracked, enabledParsers, options.state_root);
+    const computed = await computeForPaths(
+      workspace,
+      tracked,
+      enabledParsers,
+      runtimeRoots,
+      globalFallbackAllowedParsers,
+      options.state_root,
+    );
     await replaceAllRecords(workspace, computed, options.state_root);
   } else {
     const prevStatus = await getStatus(workspace, options);
@@ -764,6 +873,8 @@ export async function buildIndex(
         workspace,
         tracked,
         enabledParsers,
+        runtimeRoots,
+        globalFallbackAllowedParsers,
         options.state_root,
       );
       await replaceAllRecords(workspace, computed, options.state_root);
@@ -779,6 +890,8 @@ export async function buildIndex(
           workspace,
           tracked,
           enabledParsers,
+          runtimeRoots,
+          globalFallbackAllowedParsers,
           options.state_root,
         );
         await replaceAllRecords(workspace, recomputedAll, options.state_root);
@@ -788,6 +901,8 @@ export async function buildIndex(
           workspace,
           [...dirtyProbe.files],
           enabledParsers,
+          runtimeRoots,
+          globalFallbackAllowedParsers,
           options.state_root,
         );
         await applyChangedRecords(workspace, dirtyProbe.files, recomputed, options.state_root);
@@ -1249,16 +1364,16 @@ export async function discoverIndex(
   chunks: ChunkRecord[];
 }> {
   const parsed = parseQuery(query, options.intent);
-  const files = await queryFiles(workspace, query, options.files_limit ?? 20, {
+  const files = await queryFiles(workspace, query, options.files_limit ?? 16, {
     state_root: options.state_root,
   });
   const symbols = await querySymbols(
     workspace,
     query,
-    options.symbols_limit ?? (parsed.intent === "symbols" ? 40 : 20),
+    options.symbols_limit ?? (parsed.intent === "symbols" ? 32 : 16),
     { state_root: options.state_root },
   );
-  const chunks = await queryChunks(workspace, query, options.search_limit ?? 10, {
+  const chunks = await queryChunks(workspace, query, options.search_limit ?? 8, {
     prefer_code: options.prefer_code,
     path_prefix: options.path_prefix,
     language: options.language,
@@ -1279,9 +1394,9 @@ export async function lookupIndex(
   const start = nowMs();
   const parsed = parseQuery(query, options.intent);
 
-  const filesLimit = options.files_limit ?? 8;
-  const symbolsLimit = options.symbols_limit ?? (parsed.intent === "symbols" ? 20 : 12);
-  const searchLimit = options.search_limit ?? (parsed.intent === "docs" ? 10 : 8);
+  const filesLimit = options.files_limit ?? 6;
+  const symbolsLimit = options.symbols_limit ?? (parsed.intent === "symbols" ? 16 : 10);
+  const searchLimit = options.search_limit ?? (parsed.intent === "docs" ? 8 : 6);
   const preferCode = options.prefer_code ?? parsed.intent !== "docs";
 
   let filesParsed = parsed;

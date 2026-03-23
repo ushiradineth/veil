@@ -18,6 +18,7 @@ import {
   installParsers,
   installParserRuntimes,
   parserRuntimeInstallPlan,
+  resolveGrammarRuntimeRoot,
   listParsers,
   parseParserList,
   removeParsers,
@@ -135,14 +136,18 @@ function compactStatusSummary(value: unknown): Record<string, unknown> {
     return { exists: false, stale: true, reasons: ["unknown"] };
   }
   const record = value as Record<string, unknown>;
-  return {
+  const summary: Record<string, unknown> = {
     exists: record.exists === true,
     stale: record.stale === true,
     reasons: Array.isArray(record.reasons) ? record.reasons : [],
-    grammar_suggestions: Array.isArray(record.grammar_suggestions)
-      ? record.grammar_suggestions
-      : [],
   };
+  const grammarSuggestions = Array.isArray(record.grammar_suggestions)
+    ? record.grammar_suggestions
+    : [];
+  if (grammarSuggestions.length > 0) {
+    summary.grammar_suggestions = grammarSuggestions;
+  }
+  return summary;
 }
 
 function parseParserIds(value: unknown): ReturnType<typeof parseParserList> {
@@ -230,6 +235,16 @@ function errorResult(message: string, details?: unknown): CallToolResult {
   };
 }
 
+function errorCodeFromThrown(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const record = error as Record<string, unknown>;
+  const code = asString(record.code);
+  if (code && code.trim().length > 0) return code;
+  const reason = asString(record.reason);
+  if (reason && reason.trim().length > 0) return reason;
+  return null;
+}
+
 function resolveWorkspace(workspace?: string, stateRoot?: string): string {
   const ws = workspace ?? process.cwd();
   diagnostics.configureStatePath(diagnosticsStatePath(ws, stateRoot));
@@ -260,7 +275,10 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const workspace = asString(args.workspace);
       const stateRoot = asString(args.state_root);
       const ws = resolveWorkspace(workspace, stateRoot);
-      const status = await getStatus(ws, { state_root: stateRoot });
+      const status = await getStatus(ws, {
+        state_root: stateRoot,
+        bypass_cache: true,
+      });
       return withAgentGuidanceCompact("status", status);
     },
   },
@@ -396,7 +414,9 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         .slice(0, limit)
         .map((suggestion) => {
           const parserIds = parseParserList(suggestion.parser_id);
-          const installPlan = parserRuntimeInstallPlan(parserIds);
+          const installPlan = parserRuntimeInstallPlan(parserIds, {
+            install_root: resolveGrammarRuntimeRoot(ws, stateRoot),
+          });
           return {
             ...suggestion,
             parser_label: parserDisplayName(suggestion.parser_id),
@@ -439,10 +459,16 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         bypass_cache: true,
       });
-      return withAgentGuidanceCompact("grammar_runtime_install", {
+      const grammarSuggestions = status.grammar_suggestions ?? [];
+      const payload: Record<string, unknown> = {
         ...installResult,
         status: compactStatusSummary(status),
-        grammar_suggestions: status.grammar_suggestions ?? [],
+      };
+      if (grammarSuggestions.length > 0) {
+        payload.grammar_suggestions = grammarSuggestions;
+      }
+      return withAgentGuidanceCompact("grammar_runtime_install", {
+        ...payload,
       });
     },
   },
@@ -672,20 +698,20 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
             : "auto",
         state_root: stateRoot,
       });
-      return withAgentGuidanceCompact(
-        "discover",
-        {
-          status: compactStatusSummary(prepareResult.status_after),
-          intent: discovered.intent,
-          files: discovered.files,
-          symbols: discovered.symbols,
-          chunks: discovered.chunks,
-          grammar_suggestions: (prepareResult.status_after.grammar_suggestions ?? []).filter(
-            (suggestion) => suggestionMatchesQuery(suggestion, query),
-          ),
-        },
-        { query },
+      const grammarSuggestions = (prepareResult.status_after.grammar_suggestions ?? []).filter(
+        (suggestion) => suggestionMatchesQuery(suggestion, query),
       );
+      const payload: Record<string, unknown> = {
+        status: compactStatusSummary(prepareResult.status_after),
+        intent: discovered.intent,
+        files: discovered.files,
+        symbols: discovered.symbols,
+        chunks: discovered.chunks,
+      };
+      if (grammarSuggestions.length > 0) {
+        payload.grammar_suggestions = grammarSuggestions;
+      }
+      return withAgentGuidanceCompact("discover", payload, { query });
     },
   },
   {
@@ -949,7 +975,11 @@ async function executeTool(
     }
     return successResult(value);
   } catch (error) {
+    const code = errorCodeFromThrown(error);
     const message = error instanceof Error ? error.message : String(error);
+    if (code) {
+      return errorResult(message, { error: { code } });
+    }
     return errorResult(message);
   }
 }

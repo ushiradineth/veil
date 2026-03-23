@@ -6,12 +6,13 @@ import type { ParserId } from "./grammar-manager";
 import type { SymbolRecord } from "./types";
 
 type RuntimeLanguageConfig = {
-  loader: () => unknown;
+  loader: (runtimeRoots?: string[], allowGlobalFallback?: boolean) => unknown;
   parserId: ParserId;
   symbolKinds: Record<string, SymbolRecord["kind"]>;
 };
 
 const require = createRequire(import.meta.url);
+const RUNTIME_REQUIRE_CACHE = new Map<string, NodeRequire>();
 
 export type BunPrebuildRecovery = {
   attempted: boolean;
@@ -119,7 +120,24 @@ export function getBunPrebuildRecoveryStatus(): BunPrebuildRecovery {
   return LAST_BUN_PREBUILD_RECOVERY;
 }
 
-function optionalModule(name: string): unknown {
+function optionalModule(
+  name: string,
+  runtimeRoots: string[] = [],
+  allowGlobalFallback = true,
+): unknown {
+  for (const root of runtimeRoots) {
+    let runtimeRequire = RUNTIME_REQUIRE_CACHE.get(root);
+    if (!runtimeRequire) {
+      runtimeRequire = createRequire(join(root, "__veil_runtime_loader__.cjs"));
+      RUNTIME_REQUIRE_CACHE.set(root, runtimeRequire);
+    }
+    try {
+      return runtimeRequire(name);
+    } catch {
+      continue;
+    }
+  }
+  if (!allowGlobalFallback) return undefined;
   try {
     return require(name);
   } catch {
@@ -127,14 +145,17 @@ function optionalModule(name: string): unknown {
   }
 }
 
-function typescriptLanguage(): unknown {
-  const mod = optionalModule("tree-sitter-typescript") as { typescript?: unknown } | undefined;
+function typescriptLanguage(runtimeRoots: string[] = [], allowGlobalFallback = true): unknown {
+  const mod = optionalModule("tree-sitter-typescript", runtimeRoots, allowGlobalFallback) as
+    | { typescript?: unknown }
+    | undefined;
   return mod?.typescript ?? null;
 }
 
 const RUNTIME_LANGUAGE_MAP: Partial<Record<string, RuntimeLanguageConfig>> = {
   javascript: {
-    loader: () => optionalModule("tree-sitter-javascript"),
+    loader: (runtimeRoots, allowGlobalFallback) =>
+      optionalModule("tree-sitter-javascript", runtimeRoots, allowGlobalFallback),
     parserId: "javascript",
     symbolKinds: {
       function_declaration: "function",
@@ -155,7 +176,8 @@ const RUNTIME_LANGUAGE_MAP: Partial<Record<string, RuntimeLanguageConfig>> = {
     },
   },
   python: {
-    loader: () => optionalModule("tree-sitter-python"),
+    loader: (runtimeRoots, allowGlobalFallback) =>
+      optionalModule("tree-sitter-python", runtimeRoots, allowGlobalFallback),
     parserId: "python",
     symbolKinds: {
       function_definition: "function",
@@ -163,14 +185,16 @@ const RUNTIME_LANGUAGE_MAP: Partial<Record<string, RuntimeLanguageConfig>> = {
     },
   },
   shell: {
-    loader: () => optionalModule("tree-sitter-bash"),
+    loader: (runtimeRoots, allowGlobalFallback) =>
+      optionalModule("tree-sitter-bash", runtimeRoots, allowGlobalFallback),
     parserId: "bash",
     symbolKinds: {
       function_definition: "function",
     },
   },
   go: {
-    loader: () => optionalModule("tree-sitter-go"),
+    loader: (runtimeRoots, allowGlobalFallback) =>
+      optionalModule("tree-sitter-go", runtimeRoots, allowGlobalFallback),
     parserId: "go",
     symbolKinds: {
       function_declaration: "function",
@@ -179,7 +203,8 @@ const RUNTIME_LANGUAGE_MAP: Partial<Record<string, RuntimeLanguageConfig>> = {
     },
   },
   rust: {
-    loader: () => optionalModule("tree-sitter-rust"),
+    loader: (runtimeRoots, allowGlobalFallback) =>
+      optionalModule("tree-sitter-rust", runtimeRoots, allowGlobalFallback),
     parserId: "rust",
     symbolKinds: {
       function_item: "function",
@@ -214,13 +239,15 @@ type NodeLike = {
 function getParser(
   language: string,
   tsLanguage: unknown,
+  runtimeKey: string,
 ): { parse: (content: string) => { rootNode: NodeLike } } | null {
   if (!PARSER_CLASS) return null;
-  const cached = PARSER_CACHE.get(language);
+  const cacheKey = `${language}\u0000${runtimeKey}`;
+  const cached = PARSER_CACHE.get(cacheKey);
   if (cached) return cached as { parse: (content: string) => { rootNode: NodeLike } };
   const parser = new PARSER_CLASS();
   parser.setLanguage(tsLanguage);
-  PARSER_CACHE.set(language, parser);
+  PARSER_CACHE.set(cacheKey, parser);
   return parser as { parse: (content: string) => { rootNode: NodeLike } };
 }
 
@@ -267,9 +294,13 @@ function collectNodesByType(root: NodeLike, types: Set<string>): NodeLike[] {
   return out;
 }
 
-function loadDynamicLanguageRuntime(language: string): unknown {
+function loadDynamicLanguageRuntime(
+  language: string,
+  runtimeRoots: string[] = [],
+  allowGlobalFallback = true,
+): unknown {
   if (!language || language === "text") return null;
-  return optionalModule(`tree-sitter-${language}`);
+  return optionalModule(`tree-sitter-${language}`, runtimeRoots, allowGlobalFallback);
 }
 
 function genericSymbolKind(nodeType: string): SymbolRecord["kind"] | null {
@@ -293,8 +324,9 @@ function extractGenericSymbols(
   language: string,
   content: string,
   runtimeLanguage: unknown,
+  runtimeKey: string,
 ): SymbolRecord[] | null {
-  const parser = getParser(language, runtimeLanguage);
+  const parser = getParser(language, runtimeLanguage, runtimeKey);
   if (!parser) return null;
   try {
     const tree = parser.parse(content);
@@ -336,23 +368,30 @@ export function extractSymbolsWithTreeSitter(
   language: string,
   content: string,
   enabledParsers: Set<ParserId>,
+  runtimeRoots: string[] = [],
+  globalFallbackAllowedParsers: Set<ParserId> = new Set<ParserId>(),
 ): SymbolRecord[] | null {
+  const runtimeKeyBase = runtimeRoots.join("\u0000");
   if (language === "json") {
     return enabledParsers.has("json") ? [] : null;
   }
   const config = RUNTIME_LANGUAGE_MAP[language];
   if (!config) {
     if (!enabledParsers.has(language)) return null;
-    const dynamicRuntime = loadDynamicLanguageRuntime(language);
+    const allowGlobalFallback = globalFallbackAllowedParsers.has(language);
+    const runtimeKey = `${runtimeKeyBase}\u0000${allowGlobalFallback ? "1" : "0"}`;
+    const dynamicRuntime = loadDynamicLanguageRuntime(language, runtimeRoots, allowGlobalFallback);
     if (!dynamicRuntime) return null;
-    return extractGenericSymbols(path, language, content, dynamicRuntime);
+    return extractGenericSymbols(path, language, content, dynamicRuntime, runtimeKey);
   }
   if (!enabledParsers.has(config.parserId)) return null;
+  const allowGlobalFallback = globalFallbackAllowedParsers.has(config.parserId);
+  const runtimeKey = `${runtimeKeyBase}\u0000${allowGlobalFallback ? "1" : "0"}`;
 
-  const languageRuntime = config.loader();
+  const languageRuntime = config.loader(runtimeRoots, allowGlobalFallback);
   if (!languageRuntime) return null;
 
-  const parser = getParser(language, languageRuntime);
+  const parser = getParser(language, languageRuntime, runtimeKey);
   if (!parser) return null;
 
   try {
@@ -380,7 +419,11 @@ export function extractSymbolsWithTreeSitter(
   }
 }
 
-export function missingRequiredParsers(enabledParsers: Set<ParserId>): ParserId[] {
+export function missingRequiredParsers(
+  enabledParsers: Set<ParserId>,
+  runtimeRoots: string[] = [],
+  globalFallbackAllowedParsers: Set<ParserId> = new Set<ParserId>(),
+): ParserId[] {
   const required = Object.values(RUNTIME_LANGUAGE_MAP).filter(
     (config): config is RuntimeLanguageConfig => Boolean(config),
   );
@@ -396,7 +439,7 @@ export function missingRequiredParsers(enabledParsers: Set<ParserId>): ParserId[
 
   for (const config of required) {
     if (!enabledParsers.has(config.parserId)) continue;
-    const runtime = config.loader();
+    const runtime = config.loader(runtimeRoots, globalFallbackAllowedParsers.has(config.parserId));
     if (!runtime) missing.push(config.parserId);
   }
   return missing;

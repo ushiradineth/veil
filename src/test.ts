@@ -15,14 +15,20 @@ import { diagnostics, PerformanceDiagnostics, profiler } from "./diagnostics";
 import { __internalFetchUrl, fetchUrl } from "./fetch-url";
 import { __internalGit, ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
+  allowGlobalRuntimeFallbackForParser,
   BUILTIN_PARSERS,
   getParserConfig,
+  getRuntimeInstallFailedParsers,
+  installParsers,
+  installParserRuntimes,
   parseParserList,
   parserRuntimeInstallPlan,
+  resolveGrammarRuntimeRoot,
+  runtimePackageInstalled,
   removeParsers,
   setEnabledParsers,
 } from "./grammar-manager";
-import { readAllRecords } from "./index-db";
+import { __internalIndexDb, readAllRecords } from "./index-db";
 import {
   __internal,
   buildIndex,
@@ -39,6 +45,9 @@ import {
 import { __internalServer } from "./server";
 import {
   TOOL_LIMITS,
+  clampFilesLimit,
+  clampSearchLimit,
+  clampSymbolsLimit,
   clampWebSearchLimit,
   clampWebSearchTimeout,
   responseErrorMessage,
@@ -2498,7 +2507,8 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(dbPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
 
     const status = await getStatus(repo);
-    expect(status.stale || status.reasons.includes("index-db-corrupt")).toBe(true);
+    expect(status.stale).toBe(true);
+    expect(status.reasons.includes("index-db-corrupt")).toBe(true);
 
     let fileError = "";
     let symbolError = "";
@@ -2523,6 +2533,13 @@ describe("Phase 4: Edge cases", () => {
     expect(chunkError.includes("index-db-corrupt")).toBe(true);
   });
 
+  test("Index DB corruption classifier stays typed", () => {
+    expect(__internalIndexDb.isCorruptDbError(new Error("boom"))).toBe(false);
+    expect(__internalIndexDb.isCorruptDbError({ code: "index-db-corrupt" })).toBe(true);
+    expect(__internalIndexDb.isCorruptDbError({ reason: "index-db-corrupt" })).toBe(true);
+    expect(__internalIndexDb.isCorruptDbError({ code: "command-failed" })).toBe(false);
+  });
+
   test("prepareWorkspaceIndex changed mode refreshes from corruption", async () => {
     const repo = join(TEMP_TEST_DIR, "init-corrupt-sqlite");
     await mkdir(repo, { recursive: true });
@@ -2544,7 +2561,8 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(dbPath, Buffer.from([0xde, 0xad, 0xbe, 0xef]));
 
     const before = await getStatus(repo);
-    expect(before.stale || before.reasons.includes("index-db-corrupt")).toBe(true);
+    expect(before.stale).toBe(true);
+    expect(before.reasons.includes("index-db-corrupt")).toBe(true);
 
     const refreshed = await prepareWorkspaceIndex(repo, {
       mode: "changed",
@@ -3122,6 +3140,49 @@ describe("Agent guidance helpers", () => {
     expect((guidance.missing_context ?? []).length).toBeGreaterThan(0);
   });
 
+  test("buildAgentGuidance treats successful empty git log as full coverage", () => {
+    const guidance = buildAgentGuidance("git_log", {
+      meta: { ok: true },
+      data: { limit: 10, entries: [] },
+      error: null,
+    });
+    expect(guidance.confidence).toBe("high");
+    expect(guidance.coverage).toBe("full");
+    expect(guidance.missing_context).toBeUndefined();
+  });
+
+  test("buildAgentGuidance treats successful empty git diff/show as full coverage", () => {
+    const diffGuidance = buildAgentGuidance("git_diff", {
+      meta: { ok: true },
+      data: {
+        mode: "working",
+        staged: false,
+        name_only: false,
+        base: null,
+        head: null,
+        path: null,
+        text: "",
+      },
+      error: null,
+    });
+    expect(diffGuidance.confidence).toBe("high");
+    expect(diffGuidance.coverage).toBe("full");
+
+    const showGuidance = buildAgentGuidance("git_show", {
+      meta: { ok: true },
+      data: {
+        rev: "HEAD",
+        path: null,
+        patch: true,
+        text: "",
+      },
+      error: null,
+    });
+    expect(showGuidance.confidence).toBe("high");
+    expect(showGuidance.coverage).toBe("full");
+    expect(showGuidance.missing_context).toBeUndefined();
+  });
+
   test("withAgentGuidanceCompact omits guidance for high-confidence payloads", () => {
     const payload = withAgentGuidanceCompact("discover", {
       files: [{ item: { path: "src/a.ts" }, score: 1 }],
@@ -3195,6 +3256,36 @@ describe("MCP protocol conformance", () => {
       expect(errorResult.isError).toBe(true);
       const errorText = toolText(errorResult);
       expect(errorText.includes("details")).toBe(false);
+    });
+  });
+
+  test("tools/call preserves typed corruption error code without path leakage", async () => {
+    const workspace = join(TEMP_TEST_DIR, "mcp-corrupt-error-code");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "zeta.ts"), "export const zeta = 6\n", "utf-8");
+    git(workspace, ["init"]);
+    git(workspace, ["add", "."]);
+    git(workspace, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(workspace, "full");
+    await writeFile(join(workspace, ".veil", "index", "index.sqlite"), Buffer.from([1, 2, 3, 4]));
+
+    await withMcpClient(async (client) => {
+      const result = await client.callTool({
+        name: "veil_files",
+        arguments: { workspace, query: "zeta", refresh_if_stale: false },
+      });
+      expect(result.isError).toBe(true);
+      const text = toolText(result);
+      expect(text.includes("code: index-db-corrupt")).toBe(true);
+      expect(text.includes(workspace)).toBe(false);
     });
   });
 
@@ -3298,6 +3389,52 @@ describe("MCP contract checks", () => {
     expect(names.has("veil_grammar_runtime_install")).toBe(true);
   });
 
+  test("veil_status reports corruption even when a healthy status was cached", async () => {
+    const workspace = join(TEMP_TEST_DIR, "mcp-status-corrupt-cache");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "beta.ts"), "export const beta = 2\n", "utf-8");
+    git(workspace, ["init"]);
+    git(workspace, ["add", "."]);
+    git(workspace, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(workspace, "full");
+
+    const statusTool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_status"),
+    );
+
+    const before = (await statusTool.handler({ workspace })) as {
+      stale?: boolean;
+      reasons?: string[];
+    };
+    expect(before.stale).toBe(false);
+
+    const dbPath = join(workspace, ".veil", "index", "index.sqlite");
+    await writeFile(dbPath, Buffer.from([0x12, 0x34, 0x56, 0x78]));
+
+    const after = (await statusTool.handler({ workspace })) as {
+      stale?: boolean;
+      reasons?: string[];
+    };
+    expect(after.stale).toBe(true);
+    expect((after.reasons ?? []).includes("index-db-corrupt")).toBe(true);
+
+    let fileError = "";
+    try {
+      await queryFiles(workspace, "beta", 10);
+    } catch (error) {
+      fileError = String(error);
+    }
+    expect(fileError.includes("index-db-corrupt")).toBe(true);
+  });
+
   test("grammar recommendation tool returns compact suggestions", async () => {
     const workspace = join(TEMP_TEST_DIR, "mcp-grammar-recommend");
     await mkdir(workspace, { recursive: true });
@@ -3342,6 +3479,54 @@ describe("MCP contract checks", () => {
     expect(clampWebSearchTimeout(10_000_000)).toBe(TOOL_LIMITS.web_search_timeout_ms.max);
   });
 
+  test("retrieval clamp path uses tightened defaults", () => {
+    expect(clampFilesLimit(undefined)).toBe(TOOL_LIMITS.files_limit.default);
+    expect(clampSymbolsLimit(undefined)).toBe(TOOL_LIMITS.symbols_limit.default);
+    expect(clampSearchLimit(undefined)).toBe(TOOL_LIMITS.search_limit.default);
+    expect(TOOL_LIMITS.files_limit.default).toBe(16);
+    expect(TOOL_LIMITS.symbols_limit.default).toBe(16);
+    expect(TOOL_LIMITS.search_limit.default).toBe(8);
+    expect(TOOL_LIMITS.lookup_files_limit.default).toBe(6);
+    expect(TOOL_LIMITS.lookup_symbols_limit.default).toBe(10);
+    expect(TOOL_LIMITS.lookup_search_limit.default).toBe(6);
+  });
+
+  test("veil_lookup default limits match explicit compact limits", async () => {
+    const tool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_lookup"),
+    );
+
+    const defaultResult = (await tool.handler({
+      workspace: MEDIUM_REPO,
+      query: "service",
+      response_mode: "compact",
+    })) as {
+      files?: unknown[];
+      symbols?: unknown[];
+      chunks?: unknown[];
+    };
+
+    const explicitResult = (await tool.handler({
+      workspace: MEDIUM_REPO,
+      query: "service",
+      response_mode: "compact",
+      files_limit: 6,
+      symbols_limit: 10,
+      search_limit: 6,
+    })) as {
+      files?: unknown[];
+      symbols?: unknown[];
+      chunks?: unknown[];
+    };
+
+    expect((defaultResult.files ?? []).length).toBe((explicitResult.files ?? []).length);
+    expect((defaultResult.symbols ?? []).length).toBe((explicitResult.symbols ?? []).length);
+    expect((defaultResult.chunks ?? []).length).toBe((explicitResult.chunks ?? []).length);
+    expect((defaultResult.files ?? []).length).toBeLessThanOrEqual(6);
+    expect((defaultResult.symbols ?? []).length).toBeLessThanOrEqual(10);
+    expect((defaultResult.chunks ?? []).length).toBeLessThanOrEqual(6);
+  });
+
   test("shared error detector marks meta and top-level errors", () => {
     const byMeta = responseErrorMessage({
       meta: { ok: false },
@@ -3372,6 +3557,26 @@ describe("MCP contract checks", () => {
 
     expect(firstReasonDetail(mcpDefault)).toBe("");
     expect(firstReasonDetail(mcpFull).length).toBeGreaterThan(0);
+    for (const group of [
+      (mcpDefault as { files?: { reasons?: unknown[] }[] }).files ?? [],
+      (mcpDefault as { symbols?: { reasons?: unknown[] }[] }).symbols ?? [],
+      (mcpDefault as { chunks?: { reasons?: unknown[] }[] }).chunks ?? [],
+    ]) {
+      for (const row of group) {
+        expect((row.reasons ?? []).length).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  test("discover omits empty grammar suggestions payload field", async () => {
+    const discoverTool = must(
+      __internalServer.toolDefinitions.find((tool) => tool.name === "veil_discover"),
+    );
+    const result = (await discoverTool.handler({
+      workspace: SMALL_REPO,
+      query: "hello",
+    })) as { grammar_suggestions?: unknown[] };
+    expect("grammar_suggestions" in result).toBe(false);
   });
 
   test("git-status defaults omit path arrays on MCP", async () => {
@@ -3423,6 +3628,87 @@ describe("Profiler utilities", () => {
     expect(plan.packages).toEqual(["tree-sitter-elixir", "tree-sitter-zig"]);
   });
 
+  test("Parser list normalizes C# and markdown aliases", () => {
+    const parsed = parseParserList("c#,csharp,md,markdown");
+    expect(parsed).toEqual(["c-sharp", "markdown"]);
+  });
+
+  test("Parser runtime install plan supports deterministic install root", () => {
+    const plan = parserRuntimeInstallPlan(["nix", "c-sharp"], {
+      install_root: "/tmp/veil-parser-runtime",
+    });
+    expect(plan.packages).toEqual(["tree-sitter-nix", "tree-sitter-c-sharp"]);
+    expect(plan.args).toContain("--prefix");
+    expect(plan.args).toContain("/tmp/veil-parser-runtime");
+  });
+
+  test("Runtime package detection supports state-root runtime location", async () => {
+    const workspace = join(TEMP_TEST_DIR, "runtime-detect-state-root");
+    const runtimeRoot = resolveGrammarRuntimeRoot(workspace);
+    const runtimePkgDir = join(runtimeRoot, "node_modules", "tree-sitter-nix");
+    await mkdir(runtimePkgDir, { recursive: true });
+    await writeFile(
+      join(runtimePkgDir, "package.json"),
+      '{"name":"tree-sitter-nix","version":"0.0.0","main":"index.js"}\n',
+      "utf-8",
+    );
+    await writeFile(
+      join(runtimePkgDir, "index.js"),
+      'module.exports = require("tree-sitter-javascript").language;\n',
+      "utf-8",
+    );
+    expect(runtimePackageInstalled("nix", workspace)).toBe(true);
+  });
+
+  test("Global runtime fallback policy is strict for known installable parsers", () => {
+    expect(allowGlobalRuntimeFallbackForParser("nix", new Set<string>())).toBe(false);
+    expect(allowGlobalRuntimeFallbackForParser("nix", new Set<string>(["nix"]))).toBe(true);
+    expect(allowGlobalRuntimeFallbackForParser("json", new Set<string>())).toBe(true);
+    expect(allowGlobalRuntimeFallbackForParser("customlang", new Set<string>())).toBe(true);
+    expect(allowGlobalRuntimeFallbackForParser("###bad###", new Set<string>())).toBe(false);
+  });
+
+  test("Install failure persists runtime-failed parser and enables fallback", async () => {
+    const workspace = join(TEMP_TEST_DIR, "runtime-install-failure-state");
+    await mkdir(workspace, { recursive: true });
+    const failedInstall = await installParserRuntimes(
+      workspace,
+      ["nix"],
+      undefined,
+      30_000,
+      async () => ({
+        ok: false,
+        stdout: "",
+        stderr: "mock install failure",
+        timed_out: false,
+        exit_code: 1,
+        error: "mock failure",
+      }),
+    );
+    expect(failedInstall.ok).toBe(false);
+    const failedParsers = await getRuntimeInstallFailedParsers(workspace);
+    expect(failedParsers.includes("nix")).toBe(true);
+    expect(allowGlobalRuntimeFallbackForParser("nix", new Set(failedParsers))).toBe(true);
+  });
+
+  test("Successful parser install clears runtime-failed parser state", async () => {
+    const workspace = join(TEMP_TEST_DIR, "runtime-install-clear-failed-state");
+    await mkdir(workspace, { recursive: true });
+    await installParserRuntimes(workspace, ["nix"], undefined, 30_000, async () => ({
+      ok: false,
+      stdout: "",
+      stderr: "mock install failure",
+      timed_out: false,
+      exit_code: 1,
+      error: "mock failure",
+    }));
+    let failedParsers = await getRuntimeInstallFailedParsers(workspace);
+    expect(failedParsers.includes("nix")).toBe(true);
+    await installParsers(workspace, ["nix"]);
+    failedParsers = await getRuntimeInstallFailedParsers(workspace);
+    expect(failedParsers.includes("nix")).toBe(false);
+  });
+
   test("Index status suggests installable parser for detected non-core language", async () => {
     const repo = join(TEMP_TEST_DIR, "grammar-suggestion-go");
     await mkdir(repo, { recursive: true });
@@ -3435,6 +3721,43 @@ describe("Profiler utilities", () => {
     expect(goSuggestion).toBeDefined();
     expect(goSuggestion?.reason).toBe("parser-disabled");
     expect(goSuggestion?.install_tool).toBe("veil_grammar_runtime_install");
+  });
+
+  test("Index status suggests installable parser for nix files", async () => {
+    const repo = join(TEMP_TEST_DIR, "grammar-suggestion-nix");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "flake.nix"), '{\n  description = "test";\n}\n', "utf-8");
+    await buildIndex(repo, "full");
+    const status = await getStatus(repo, { bypass_cache: true });
+    const nixSuggestion = (status.grammar_suggestions ?? []).find(
+      (suggestion) => suggestion.parser_id === "nix",
+    );
+    expect(nixSuggestion).toBeDefined();
+    expect(nixSuggestion?.reason).toBe("parser-disabled");
+    expect(nixSuggestion?.install_tool).toBe("veil_grammar_runtime_install");
+  });
+
+  test("Grammar runtime install tool returns workspace-scoped reuse metadata", async () => {
+    const workspace = join(TEMP_TEST_DIR, "mcp-grammar-install-reuse");
+    await mkdir(workspace, { recursive: true });
+    const tool = must(
+      __internalServer.toolDefinitions.find(
+        (entry) => entry.name === "veil_grammar_runtime_install",
+      ),
+    );
+    const first = (await tool.handler({ workspace, parsers: ["json"] })) as {
+      ok?: boolean;
+      install_root?: string;
+      reuse_scope?: string;
+    };
+    const second = (await tool.handler({ workspace, parsers: ["json"] })) as {
+      install_root?: string;
+      reuse_scope?: string;
+    };
+    expect(first.ok).toBe(true);
+    expect(first.reuse_scope).toBe("workspace-state-root");
+    expect(first.install_root).toBe(resolveGrammarRuntimeRoot(workspace));
+    expect(second.install_root).toBe(first.install_root);
   });
 
   test("Index language detection supports dynamic parser ids by extension", async () => {
@@ -3453,10 +3776,15 @@ describe("Profiler utilities", () => {
     expect(missing).toEqual([]);
   });
 
-  test("Missing parser runtime check passes for default parser config", async () => {
-    const config = await getParserConfig(SMALL_REPO);
-    const missing = missingRequiredParsers(new Set(config.enabled));
-    expect(missing).toEqual([]);
+  test("Missing parser runtime check follows strict fallback policy", () => {
+    const strictMissing = missingRequiredParsers(new Set(["javascript"]));
+    expect(strictMissing).toEqual(["javascript"]);
+    const withFallback = missingRequiredParsers(
+      new Set(["javascript"]),
+      [],
+      new Set(["javascript"]),
+    );
+    expect(withFallback).toEqual([]);
   });
 
   test("Bun prebuild recovery status is explicit", () => {
@@ -3797,9 +4125,12 @@ describe("Bench suite planning helpers", () => {
       current as never,
       baseline as never,
       10,
+      { minWarmSamples: 1, normalizeByScenarioId: null },
     );
     expect(gate.compared).toBe(1);
     expect(gate.violations.length).toBe(1);
+    expect(gate.insufficient_samples.length).toBe(0);
+    expect(gate.warnings.length).toBe(0);
   });
 
   test("Regression gate ignores improvements and small drift", () => {
@@ -3829,9 +4160,564 @@ describe("Bench suite planning helpers", () => {
       current as never,
       baseline as never,
       10,
+      { minWarmSamples: 1, normalizeByScenarioId: null },
     );
     expect(gate.compared).toBe(1);
     expect(gate.violations.length).toBe(0);
+    expect(gate.insufficient_samples.length).toBe(0);
+    expect(gate.warnings.length).toBe(0);
+  });
+
+  test("Regression gate reports insufficient warm samples", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 1, p50_ms: 100 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 3, p50_ms: 108 } },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+      { minWarmSamples: 3, normalizeByScenarioId: null },
+    );
+    expect(gate.compared).toBe(0);
+    expect(gate.violations.length).toBe(0);
+    expect(gate.insufficient_samples.length).toBe(1);
+    expect(gate.warnings.length).toBe(0);
+  });
+
+  test("Regression gate can normalize against control scenario", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }, { id: "files-homebrew" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 3, p50_ms: 100 } },
+            "files-homebrew": { status: "ok", warm: { count: 3, p50_ms: 200 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }, { id: "files-homebrew" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 3, p50_ms: 120 } },
+            "files-homebrew": { status: "ok", warm: { count: 3, p50_ms: 240 } },
+          },
+        },
+      ],
+    };
+
+    const withoutNormalization = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+      { minWarmSamples: 3, normalizeByScenarioId: null },
+    );
+    expect(withoutNormalization.violations.length).toBe(2);
+
+    const withNormalization = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+      { minWarmSamples: 3, normalizeByScenarioId: "status-bootstrap" },
+    );
+    expect(withNormalization.compared).toBe(2);
+    expect(withNormalization.violations.length).toBe(1);
+    expect(withNormalization.violations[0]?.includes("status-bootstrap")).toBe(true);
+    expect(withNormalization.insufficient_samples.length).toBe(0);
+    expect(withNormalization.warnings.length).toBe(0);
+  });
+
+  test("Bench suite CLI applies regression defaults when baseline is provided", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-defaults-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      regression_min_warm_samples?: number;
+      regression_control_scenario?: string | null;
+      json?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.regression_min_warm_samples).toBe(3);
+    expect(payload.regression_control_scenario).toBe("status-bootstrap");
+    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
+      config?: { effective_warm_iterations?: number };
+    };
+    expect(report.config?.effective_warm_iterations).toBe(3);
+  });
+
+  test("Bench suite CLI honors explicit regression min warm sample override", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-minwarm-override-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--regression-min-warm-samples",
+        "5",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      regression_min_warm_samples?: number;
+      json?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.regression_min_warm_samples).toBe(5);
+    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
+      config?: { effective_warm_iterations?: number };
+    };
+    expect(report.config?.effective_warm_iterations).toBe(5);
+  });
+
+  test("Bench suite CLI falls back to default regression min warm samples on invalid values", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-minwarm-invalid-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--regression-min-warm-samples",
+        "0",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      regression_min_warm_samples?: number;
+      json?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.regression_min_warm_samples).toBe(3);
+    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
+      config?: { effective_warm_iterations?: number };
+    };
+    expect(report.config?.effective_warm_iterations).toBe(3);
+  });
+
+  test("Bench suite CLI supports disabling control normalization", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-control-none-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--regression-control-scenario",
+        "none",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      regression_control_scenario?: string | null;
+      json?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.regression_control_scenario).toBeNull();
+    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
+      config?: { effective_warm_iterations?: number };
+    };
+    expect(report.config?.effective_warm_iterations).toBe(3);
+  });
+
+  test("Bench suite CLI rejects unknown regression control scenario ids", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-control-invalid-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--baseline",
+        baselinePath,
+        "--regression-control-scenario",
+        "not-a-scenario",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).not.toBe(0);
+    expect((run.stderr ?? "").includes("invalid-regression-control-scenario")).toBe(true);
+  });
+
+  test("Bench suite CLI emits ok=false payload on regression-gate failure", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-fail-payload-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({
+        scenarios: [{ id: "status-bootstrap", kind: "status" }],
+        competitors: [
+          {
+            id: "veil-mcp_transport",
+            scenarios: {
+              "status-bootstrap": {
+                status: "ok",
+                warm: { count: 1, p50_ms: 100, p95_ms: 100 },
+              },
+            },
+          },
+        ],
+      })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "veil",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).not.toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      error?: string | null;
+      json?: string;
+      regression_gate?: { insufficient_samples?: string[]; violations?: string[] };
+    };
+    expect(payload.ok).toBe(false);
+    expect((payload.error ?? "").includes("benchmark-regression-gate-insufficient-samples")).toBe(
+      true,
+    );
+    expect((payload.regression_gate?.insufficient_samples ?? []).length).toBeGreaterThan(0);
+    expect((payload.regression_gate?.violations ?? []).length).toBe(0);
+    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
+      competitors?: {
+        id?: string;
+        scenarios?: Record<string, { warm?: { count?: number } }>;
+      }[];
+    };
+    const veil = (report.competitors ?? []).find((entry) => entry.id === "veil-mcp_transport");
+    expect(veil?.scenarios?.["status-bootstrap"]?.warm?.count).toBeGreaterThanOrEqual(3);
+  }, 45_000);
+
+  test("Bench suite CLI reports violation-branch failures with ok=false payload", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-violation-payload-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({
+        scenarios: [{ id: "status-bootstrap", kind: "status" }],
+        competitors: [
+          {
+            id: "veil-mcp_transport",
+            scenarios: {
+              "status-bootstrap": {
+                status: "ok",
+                warm: { count: 3, p50_ms: 1, p95_ms: 1 },
+              },
+            },
+          },
+        ],
+      })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "veil",
+        "--strategies",
+        "mcp_transport",
+        "--warm",
+        "1",
+        "--baseline",
+        baselinePath,
+        "--regression-threshold-pct",
+        "2",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).not.toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      error?: string | null;
+      regression_gate?: { insufficient_samples?: string[]; violations?: string[] };
+    };
+    expect(payload.ok).toBe(false);
+    expect((payload.error ?? "").includes("benchmark-regression-gate-failed")).toBe(true);
+    expect((payload.regression_gate?.insufficient_samples ?? []).length).toBe(0);
+    expect((payload.regression_gate?.violations ?? []).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  test("Regression gate allows gh_lookup single-sample baseline rows", () => {
+    const baseline = {
+      scenarios: [{ id: "gh-repo-context", kind: "gh_lookup" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "gh-repo-context": { status: "ok", warm: { count: 1, p50_ms: 900 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "gh-repo-context", kind: "gh_lookup" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "gh-repo-context": { status: "ok", warm: { count: 1, p50_ms: 910 } },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+      { minWarmSamples: 3, normalizeByScenarioId: null },
+    );
+    expect(gate.compared).toBe(1);
+    expect(gate.insufficient_samples.length).toBe(0);
+    expect(gate.warnings.length).toBe(0);
+  });
+
+  test("Regression gate absorbs jitter within warm spread band", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": {
+              status: "ok",
+              warm: { count: 5, p50_ms: 100, p95_ms: 120 },
+            },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": {
+              status: "ok",
+              warm: { count: 5, p50_ms: 108, p95_ms: 140 },
+            },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      5,
+      { minWarmSamples: 3, normalizeByScenarioId: null },
+    );
+    expect(gate.compared).toBe(1);
+    expect(gate.violations.length).toBe(0);
+  });
+
+  test("Regression gate emits one warning when normalization control is unavailable", () => {
+    const baseline = {
+      scenarios: [{ id: "status-bootstrap" }, { id: "files-homebrew" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 1, p50_ms: 100 } },
+            "files-homebrew": { status: "ok", warm: { count: 3, p50_ms: 200 } },
+          },
+        },
+      ],
+    };
+    const current = {
+      scenarios: [{ id: "status-bootstrap" }, { id: "files-homebrew" }],
+      competitors: [
+        {
+          id: "veil-mcp_transport",
+          scenarios: {
+            "status-bootstrap": { status: "ok", warm: { count: 3, p50_ms: 120 } },
+            "files-homebrew": { status: "ok", warm: { count: 3, p50_ms: 240 } },
+          },
+        },
+      ],
+    };
+    const gate = __internalBenchSuite.evaluateRegressionGate(
+      current as never,
+      baseline as never,
+      10,
+      { minWarmSamples: 3, normalizeByScenarioId: "status-bootstrap" },
+    );
+    expect(gate.warnings.length).toBe(1);
+    expect(gate.warnings[0]?.includes("normalization-control-unavailable")).toBe(true);
   });
 });
 

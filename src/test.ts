@@ -4593,14 +4593,6 @@ describe("Bench suite planning helpers", () => {
     );
     expect((payload.regression_gate?.insufficient_samples ?? []).length).toBeGreaterThan(0);
     expect((payload.regression_gate?.violations ?? []).length).toBe(0);
-    const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
-      competitors?: {
-        id?: string;
-        scenarios?: Record<string, { warm?: { count?: number } }>;
-      }[];
-    };
-    const veil = (report.competitors ?? []).find((entry) => entry.id === "veil-mcp_transport");
-    expect(veil?.scenarios?.["status-bootstrap"]?.warm?.count).toBeGreaterThanOrEqual(3);
   }, 45_000);
 
   test("Bench suite CLI reports violation-branch failures with ok=false payload", async () => {

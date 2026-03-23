@@ -18,15 +18,15 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 ## Latest Run
 
-- Run directory: `benchmarks/results/20260323-162024Z`
-- Result JSON: `benchmarks/results/20260323-162024Z/results.json`
-- Summary markdown: `benchmarks/results/20260323-162024Z/SUMMARY.md`
-- Generated: `2026-03-23T16:20:40.538Z`
+- Run directory: `../../../../tmp/veil-bench-cli-violation-payload-qhnZe1/20260323-165110Z`
+- Result JSON: `../../../../tmp/veil-bench-cli-violation-payload-qhnZe1/20260323-165110Z/results.json`
+- Summary markdown: `../../../../tmp/veil-bench-cli-violation-payload-qhnZe1/20260323-165110Z/SUMMARY.md`
+- Generated: `2026-03-23T16:51:21.104Z`
 - Workspace: `/Users/shu/Code/veil`
 - Profile: `smoke`
 - Agents: `veil`
 - Strategies: `mcp_transport`
-- Iterations: `cold=1`, `warm=5`
+- Iterations: `cold=1`, `warm=1`
 - Runtime budget: `120000ms`
 - Cell budget: `20000ms`
 
@@ -46,25 +46,25 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 | Scenario | veil (mcp_transport) |
 | --- | --- |
-| status-bootstrap | 351.5163 / 412.5676 |
-| files-homebrew | 454.1285 / 656.0840 |
-| symbols-build | 548.6772 / 738.5630 |
-| search-pnpm-install | 461.6388 / 485.3905 |
-| lookup-build-index | 480.2447 / 559.1512 |
-| discover-combined | 479.9609 / 482.2489 |
-| git-status-check | 370.5032 / 406.1030 |
+| status-bootstrap | 354.2473 / 385.0028 |
+| files-homebrew | 520.6439 / 521.2925 |
+| symbols-build | 539.1253 / 618.2535 |
+| search-pnpm-install | 541.4906 / 619.9764 |
+| lookup-build-index | 571.9153 / 650.4433 |
+| discover-combined | 538.3642 / 604.4052 |
+| git-status-check | 359.8038 / 386.6435 |
 
 ## A/B Signals (schema_overhead_tokens / first_useful_action_ms / fallback_rate)
 
 | Scenario | veil (mcp_transport) |
 | --- | --- |
-| status-bootstrap | 12000 / 412.5676 / 0.00 |
-| files-homebrew | 12000 / 656.0840 / 0.00 |
-| symbols-build | 12000 / 481.1573 / 0.00 |
-| search-pnpm-install | 12000 / 0.0000 / 0.00 |
-| lookup-build-index | 12000 / 480.2447 / 0.00 |
-| discover-combined | 12000 / 482.2489 / 0.00 |
-| git-status-check | 12000 / 406.1030 / 0.00 |
+| status-bootstrap | 12000 / 333.6784 / 0.00 |
+| files-homebrew | 12000 / 520.6439 / 0.00 |
+| symbols-build | 12000 / 618.2535 / 0.00 |
+| search-pnpm-install | 12000 / 619.9764 / 0.00 |
+| lookup-build-index | 12000 / 571.9153 / 0.00 |
+| discover-combined | 12000 / 537.1116 / 0.00 |
+| git-status-check | 12000 / 348.5208 / 0.00 |
 
 ## Preflight
 
@@ -79,7 +79,7 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 | status-bootstrap | 1.00 / 1.00 / 0.00 |
 | files-homebrew | 1.00 / 1.00 / 0.00 |
 | symbols-build | 1.00 / 1.00 / 0.00 |
-| search-pnpm-install | 1.00 / 2.00 / 0.00 |
+| search-pnpm-install | 1.00 / 1.00 / 0.00 |
 | lookup-build-index | 1.00 / 1.00 / 0.00 |
 | discover-combined | 1.00 / 1.00 / 0.00 |
 | git-status-check | 1.00 / 1.00 / 0.00 |

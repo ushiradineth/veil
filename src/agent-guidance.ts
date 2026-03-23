@@ -126,6 +126,27 @@ function hasStructuralPayload(tool: GuidanceTool, payload: RecordLike): boolean 
     const branch = data.branch;
     return typeof branch === "string" && branch.length > 0;
   }
+  if (tool === "git_log") {
+    const data = asRecord(payload.data);
+    return Array.isArray(data.entries) && typeof data.limit === "number";
+  }
+  if (tool === "git_diff") {
+    const data = asRecord(payload.data);
+    return (
+      typeof data.mode === "string" &&
+      typeof data.staged === "boolean" &&
+      typeof data.name_only === "boolean" &&
+      typeof data.text === "string"
+    );
+  }
+  if (tool === "git_show") {
+    const data = asRecord(payload.data);
+    return (
+      typeof data.rev === "string" &&
+      typeof data.patch === "boolean" &&
+      typeof data.text === "string"
+    );
+  }
   if (tool === "status") {
     return typeof payload.exists === "boolean";
   }

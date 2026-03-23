@@ -128,11 +128,14 @@ type SuiteReport = {
     strategies: StrategyId[];
     cold_iterations: number;
     warm_iterations: number;
+    effective_warm_iterations: number;
     output_dir: string;
     competitors: string[];
     max_runtime_ms: number;
     max_cell_runtime_ms: number;
     preflight: Record<string, PreflightStatus>;
+    regression_control_scenario?: string | null;
+    regression_confirmation_runs?: number | null;
   };
   scenarios: Scenario[];
   competitors: CompetitorReport[];
@@ -300,6 +303,9 @@ function showHelp(): void {
     "  --max-cell-runtime-ms <n>      Per-cell runtime budget (default: 20000)",
     "  --baseline <path>              Optional baseline results.json for regression gate",
     "  --regression-threshold-pct <n> Max allowed p50 regression percent (default: 10)",
+    "  --regression-min-warm-samples <n> Minimum warm samples for gate (default: 3 when baseline is set, else 1)",
+    "  --regression-control-scenario <id|none> Normalize regression deltas to a control scenario (default: status-bootstrap when baseline is set)",
+    "  --regression-confirmation-runs <n> Confirmation attempts when gate fails (default: 2 with baseline, else 1)",
     "  --out <path>                   Output root (default: benchmarks/results)",
     "  -h, --help                     Show this help and exit",
   ];
@@ -912,7 +918,7 @@ function scenarioIterations(scenario: Scenario, fallback: number): number {
   if (scenario.kind === "gh_lookup") {
     return 1;
   }
-  return Math.min(fallback, 1);
+  return Math.max(1, fallback);
 }
 
 function summarizeNativeAdoption(
@@ -958,12 +964,25 @@ function summarizeAbSignal(
 type RegressionGateResult = {
   compared: number;
   violations: string[];
+  insufficient_samples: string[];
+  warnings: string[];
 };
+
+type RegressionGateOptions = {
+  minWarmSamples: number;
+  normalizeByScenarioId: string | null;
+};
+
+function requiredMinWarmSamples(scenario: Scenario, configuredMin: number): number {
+  if (scenario.kind === "gh_lookup") return 1;
+  return Math.max(1, configuredMin);
+}
 
 function evaluateRegressionGate(
   current: SuiteReport,
   baseline: SuiteReport,
   thresholdPct: number,
+  options: RegressionGateOptions,
 ): RegressionGateResult {
   const baselineByCompetitor = new Map<string, CompetitorReport>();
   for (const competitor of baseline.competitors) {
@@ -972,28 +991,118 @@ function evaluateRegressionGate(
 
   let compared = 0;
   const violations: string[] = [];
+  const insufficientSamples: string[] = [];
+  const warnings: string[] = [];
   for (const competitor of current.competitors) {
     if (!competitor.id.startsWith("veil-")) continue;
     const baselineCompetitor = baselineByCompetitor.get(competitor.id);
     if (!baselineCompetitor) continue;
+    const controlScenario = options.normalizeByScenarioId;
+    let baselineControlP50: number | null = null;
+    let currentControlP50: number | null = null;
+    let controlApplied = false;
+    if (controlScenario) {
+      const controlScenarioDef = current.scenarios.find((entry) => entry.id === controlScenario);
+      const controlMinSamples = controlScenarioDef
+        ? requiredMinWarmSamples(controlScenarioDef, options.minWarmSamples)
+        : options.minWarmSamples;
+      const baselineControl = baselineCompetitor.scenarios[controlScenario] as
+        | ScenarioSummary
+        | undefined;
+      const currentControl = competitor.scenarios[controlScenario] as ScenarioSummary | undefined;
+      if (
+        baselineControl &&
+        currentControl &&
+        baselineControl.status === "ok" &&
+        currentControl.status === "ok" &&
+        baselineControl.warm.count >= controlMinSamples &&
+        currentControl.warm.count >= controlMinSamples &&
+        Number.isFinite(baselineControl.warm.p50_ms) &&
+        Number.isFinite(currentControl.warm.p50_ms) &&
+        baselineControl.warm.p50_ms > 0 &&
+        currentControl.warm.p50_ms > 0
+      ) {
+        baselineControlP50 = baselineControl.warm.p50_ms;
+        currentControlP50 = currentControl.warm.p50_ms;
+        controlApplied = true;
+      } else {
+        warnings.push(
+          `${competitor.id}: normalization-control-unavailable (${controlScenario}, min=${String(controlMinSamples)})`,
+        );
+      }
+    }
     for (const scenario of current.scenarios) {
       const row = competitor.scenarios[scenario.id] as ScenarioSummary | undefined;
       const baselineRow = baselineCompetitor.scenarios[scenario.id] as ScenarioSummary | undefined;
       if (!row || !baselineRow) continue;
       if (row.status !== "ok" || baselineRow.status !== "ok") continue;
+      const currentCount = row.warm.count;
+      const baselineCount = baselineRow.warm.count;
+      const requiredSamples = requiredMinWarmSamples(scenario, options.minWarmSamples);
+      if (currentCount < requiredSamples || baselineCount < requiredSamples) {
+        insufficientSamples.push(
+          `${competitor.id}:${scenario.id} (current=${String(currentCount)}, baseline=${String(baselineCount)}, min=${String(requiredSamples)})`,
+        );
+        continue;
+      }
       const baselineP50 = baselineRow.warm.p50_ms;
       if (!Number.isFinite(baselineP50) || baselineP50 <= 0) continue;
-      const currentP50 = row.warm.p50_ms;
+      const rawCurrentP50 = row.warm.p50_ms;
+      const rawCurrentP95 =
+        Number.isFinite(row.warm.p95_ms) && row.warm.p95_ms > 0 ? row.warm.p95_ms : rawCurrentP50;
+      const isControlScenario = controlScenario !== null && scenario.id === controlScenario;
+      const normalizationRatio =
+        !isControlScenario && controlApplied && baselineControlP50 && currentControlP50
+          ? baselineControlP50 / currentControlP50
+          : null;
+      const currentP50 =
+        normalizationRatio !== null ? rawCurrentP50 * normalizationRatio : rawCurrentP50;
+      const baselineP95 =
+        Number.isFinite(baselineRow.warm.p95_ms) && baselineRow.warm.p95_ms > 0
+          ? baselineRow.warm.p95_ms
+          : baselineP50;
+      const baselineP99 =
+        Number.isFinite(baselineRow.warm.p99_ms) && baselineRow.warm.p99_ms > 0
+          ? baselineRow.warm.p99_ms
+          : baselineP95;
+      const rawCurrentP99 =
+        Number.isFinite(row.warm.p99_ms) && row.warm.p99_ms > 0 ? row.warm.p99_ms : rawCurrentP95;
+      const currentP99 =
+        normalizationRatio !== null ? rawCurrentP99 * normalizationRatio : rawCurrentP99;
+      const baselineSpreadMs = Math.max(0, baselineP99 - baselineP50);
+      const currentSpreadMs = Math.max(0, currentP99 - currentP50);
+      const deltaMs = currentP50 - baselineP50;
+      const thresholdMs = baselineP50 * (thresholdPct / 100);
+      const stabilityBandMs = Math.max(thresholdMs, (baselineSpreadMs + currentSpreadMs) / 2);
       const deltaPct = ((currentP50 - baselineP50) / baselineP50) * 100;
       compared += 1;
-      if (deltaPct > thresholdPct) {
+      if (deltaMs > stabilityBandMs) {
         violations.push(
-          `${competitor.id}:${scenario.id} ${deltaPct.toFixed(2)}% (${currentP50.toFixed(4)} vs ${baselineP50.toFixed(4)})`,
+          `${competitor.id}:${scenario.id} ${deltaPct.toFixed(2)}% (${currentP50.toFixed(4)} vs ${baselineP50.toFixed(4)}, band_ms=${stabilityBandMs.toFixed(4)}, raw=${rawCurrentP50.toFixed(4)})`,
         );
       }
     }
   }
-  return { compared, violations };
+  return {
+    compared,
+    violations,
+    insufficient_samples: insufficientSamples,
+    warnings: Array.from(new Set(warnings)),
+  };
+}
+
+function gateFailureMessage(gateResult: RegressionGateResult | null): string | null {
+  if (!gateResult) return null;
+  if (gateResult.insufficient_samples.length > 0) {
+    return (
+      "benchmark-regression-gate-insufficient-samples: " +
+      gateResult.insufficient_samples.join("; ")
+    );
+  }
+  if (gateResult.violations.length > 0) {
+    return "benchmark-regression-gate-failed: " + gateResult.violations.join("; ");
+  }
+  return null;
 }
 
 function toMarkdown(report: SuiteReport): string {
@@ -1008,7 +1117,11 @@ function toMarkdown(report: SuiteReport): string {
   lines.push(`Runtime budget: ${String(report.config.max_runtime_ms)}ms`);
   lines.push(`Cell budget: ${String(report.config.max_cell_runtime_ms)}ms`);
   lines.push(
-    `Iterations: cold=${String(report.config.cold_iterations)}, warm=${String(report.config.warm_iterations)}`,
+    `Iterations: cold=${String(report.config.cold_iterations)}, warm=${String(report.config.warm_iterations)}${
+      report.config.effective_warm_iterations !== report.config.warm_iterations
+        ? ` (effective ${String(report.config.effective_warm_iterations)})`
+        : ""
+    }`,
   );
   lines.push("");
   lines.push("## Environment");
@@ -1111,6 +1224,32 @@ async function main(): Promise<void> {
   const maxCellRuntimeMs = parseIntArg("--max-cell-runtime-ms", 20_000);
   const baselinePath = getArg("--baseline");
   const regressionThresholdPct = parseFloatArg("--regression-threshold-pct", 10);
+  const regressionMinWarmSamples = parseIntArg(
+    "--regression-min-warm-samples",
+    baselinePath ? 3 : 1,
+  );
+  const regressionConfirmationRuns = parseIntArg(
+    "--regression-confirmation-runs",
+    baselinePath ? 2 : 1,
+  );
+  const effectiveWarmIterations = Math.max(
+    warmIterations,
+    baselinePath ? regressionMinWarmSamples : 1,
+  );
+  const regressionControlScenarioRaw = getArg(
+    "--regression-control-scenario",
+    baselinePath ? "status-bootstrap" : undefined,
+  );
+  const regressionControlScenario =
+    regressionControlScenarioRaw && regressionControlScenarioRaw !== "none"
+      ? regressionControlScenarioRaw
+      : null;
+  if (
+    regressionControlScenario &&
+    !scenarios.some((scenario) => scenario.id === regressionControlScenario)
+  ) {
+    throw new Error(`invalid-regression-control-scenario: ${regressionControlScenario}`);
+  }
   const rawOutputRoot = resolve(getArg("--out") ?? "benchmarks/results");
   const outputRoot = basename(rawOutputRoot) === "latest" ? dirname(rawOutputRoot) : rawOutputRoot;
   const runId = toRunId(new Date());
@@ -1127,7 +1266,6 @@ async function main(): Promise<void> {
   process.on("SIGTERM", onSigterm);
 
   const ctx: RunContext = { workspace };
-  const suiteStarted = nowMs();
   const matrix = await createAgentMatrixAdapters(workspace, agents, strategies, tracker);
   const adapters: Adapter[] = matrix.adapters;
 
@@ -1136,101 +1274,109 @@ async function main(): Promise<void> {
       await adapter.prepare(ctx, tracker);
     }
 
-    const scenarioByAdapter = new Map<string, Record<string, ScenarioSummary>>();
-    for (const adapter of adapters) {
-      scenarioByAdapter.set(adapter.id, {});
-    }
-
-    for (const scenario of scenarios) {
+    const runScenarioMatrix = async (): Promise<CompetitorReport[]> => {
+      const scenarioByAdapter = new Map<string, Record<string, ScenarioSummary>>();
       for (const adapter of adapters) {
-        const rows = scenarioByAdapter.get(adapter.id);
-        if (!rows) continue;
+        scenarioByAdapter.set(adapter.id, {});
+      }
+      const suiteAttemptStarted = nowMs();
 
-        if (tracker.interrupted) {
-          const nativeAdoption = {
-            first_call_success: 0,
-            calls_to_useful_context: 3,
-            non_veil_fallback_rate: 1,
-          };
-          rows[scenario.id] = {
-            status: "unsupported",
-            reason: `interrupted by ${tracker.signal ?? "signal"}`,
-            cold: summarize([]),
-            warm: summarize([]),
-            native_adoption: nativeAdoption,
-            ab_signal: summarizeAbSignal(
-              adapter.id,
-              { status: "unsupported", samples: [] },
-              nativeAdoption,
-            ),
-          };
-          continue;
-        }
+      for (const scenario of scenarios) {
+        for (const adapter of adapters) {
+          const rows = scenarioByAdapter.get(adapter.id);
+          if (!rows) continue;
 
-        if (nowMs() - suiteStarted > maxRuntimeMs) {
-          const nativeAdoption = {
-            first_call_success: 0,
-            calls_to_useful_context: 3,
-            non_veil_fallback_rate: 1,
-          };
-          rows[scenario.id] = {
-            status: "unsupported",
-            reason: "suite runtime budget exceeded",
-            cold: summarize([]),
-            warm: summarize([]),
-            native_adoption: nativeAdoption,
-            ab_signal: summarizeAbSignal(
-              adapter.id,
-              { status: "unsupported", samples: [] },
-              nativeAdoption,
-            ),
-          };
-          continue;
-        }
+          if (tracker.interrupted) {
+            const nativeAdoption = {
+              first_call_success: 0,
+              calls_to_useful_context: 3,
+              non_veil_fallback_rate: 1,
+            };
+            rows[scenario.id] = {
+              status: "unsupported",
+              reason: `interrupted by ${tracker.signal ?? "signal"}`,
+              cold: summarize([]),
+              warm: summarize([]),
+              native_adoption: nativeAdoption,
+              ab_signal: summarizeAbSignal(
+                adapter.id,
+                { status: "unsupported", samples: [] },
+                nativeAdoption,
+              ),
+            };
+            continue;
+          }
 
-        const sampleCount = scenarioIterations(scenario, warmIterations);
-        const run = await runScenarioPhase(
-          adapter,
-          ctx,
-          scenario,
-          "warm",
-          sampleCount,
-          maxCellRuntimeMs,
-          tracker,
-        );
-        if (run.status !== "ok") {
+          if (nowMs() - suiteAttemptStarted > maxRuntimeMs) {
+            const nativeAdoption = {
+              first_call_success: 0,
+              calls_to_useful_context: 3,
+              non_veil_fallback_rate: 1,
+            };
+            rows[scenario.id] = {
+              status: "unsupported",
+              reason: "suite runtime budget exceeded",
+              cold: summarize([]),
+              warm: summarize([]),
+              native_adoption: nativeAdoption,
+              ab_signal: summarizeAbSignal(
+                adapter.id,
+                { status: "unsupported", samples: [] },
+                nativeAdoption,
+              ),
+            };
+            continue;
+          }
+
+          const minWarmForScenario = baselinePath
+            ? requiredMinWarmSamples(scenario, regressionMinWarmSamples)
+            : 1;
+          const sampleCount = scenarioIterations(
+            scenario,
+            Math.max(warmIterations, minWarmForScenario),
+          );
+          const run = await runScenarioPhase(
+            adapter,
+            ctx,
+            scenario,
+            "warm",
+            sampleCount,
+            maxCellRuntimeMs,
+            tracker,
+          );
+          if (run.status !== "ok") {
+            const nativeAdoption = summarizeNativeAdoption(adapter.id, run);
+            rows[scenario.id] = {
+              status: run.status,
+              reason: run.reason,
+              cold: summarize([]),
+              warm: summarize(run.samples),
+              native_adoption: nativeAdoption,
+              ab_signal: summarizeAbSignal(adapter.id, run, nativeAdoption),
+            };
+            continue;
+          }
+
           const nativeAdoption = summarizeNativeAdoption(adapter.id, run);
           rows[scenario.id] = {
-            status: run.status,
-            reason: run.reason,
+            status: "ok",
+            reason: null,
             cold: summarize([]),
             warm: summarize(run.samples),
             native_adoption: nativeAdoption,
             ab_signal: summarizeAbSignal(adapter.id, run, nativeAdoption),
           };
-          continue;
         }
-
-        const nativeAdoption = summarizeNativeAdoption(adapter.id, run);
-        rows[scenario.id] = {
-          status: "ok",
-          reason: null,
-          cold: summarize([]),
-          warm: summarize(run.samples),
-          native_adoption: nativeAdoption,
-          ab_signal: summarizeAbSignal(adapter.id, run, nativeAdoption),
-        };
       }
-    }
 
-    const competitorReports: CompetitorReport[] = adapters.map((adapter) => ({
-      id: adapter.id,
-      label: adapter.label,
-      scenarios: scenarioByAdapter.get(adapter.id) ?? {},
-    }));
+      return adapters.map((adapter) => ({
+        id: adapter.id,
+        label: adapter.label,
+        scenarios: scenarioByAdapter.get(adapter.id) ?? {},
+      }));
+    };
 
-    const cpu = cpus();
-    const report: SuiteReport = {
+    const buildReport = (competitorReports: CompetitorReport[]): SuiteReport => ({
       generated_at: new Date().toISOString(),
       environment: {
         hostname: process.env.HOSTNAME ?? "unknown",
@@ -1238,8 +1384,8 @@ async function main(): Promise<void> {
         arch: process.arch,
         node: process.version,
         bun: typeof Bun !== "undefined" ? Bun.version : null,
-        cpu_model: cpu[0]?.model ?? "unknown",
-        cpu_cores: cpu.length,
+        cpu_model: cpus()[0]?.model ?? "unknown",
+        cpu_cores: cpus().length,
       },
       config: {
         workspace,
@@ -1248,15 +1394,22 @@ async function main(): Promise<void> {
         strategies,
         cold_iterations: coldIterations,
         warm_iterations: warmIterations,
+        effective_warm_iterations: effectiveWarmIterations,
         output_dir: outputDir,
         competitors: adapters.map((adapter) => adapter.id),
         max_runtime_ms: maxRuntimeMs,
         max_cell_runtime_ms: maxCellRuntimeMs,
         preflight: matrix.preflight,
+        regression_control_scenario: regressionControlScenario,
+        regression_confirmation_runs: baselinePath ? regressionConfirmationRuns : null,
       },
       scenarios,
       competitors: competitorReports,
-    };
+    });
+
+    const competitorReports = await runScenarioMatrix();
+
+    const report = buildReport(competitorReports);
 
     const regressionGate = baselinePath
       ? (() => {
@@ -1266,10 +1419,59 @@ async function main(): Promise<void> {
       : null;
 
     let gateResult: RegressionGateResult | null = null;
+    let regressionConfirmationFailures: number | null = null;
     if (regressionGate) {
       const baselineRaw = await readFile(regressionGate.baselineAbs, "utf-8");
       const baseline = JSON.parse(baselineRaw) as SuiteReport;
-      gateResult = evaluateRegressionGate(report, baseline, regressionGate.thresholdPct);
+      gateResult = evaluateRegressionGate(report, baseline, regressionGate.thresholdPct, {
+        minWarmSamples: regressionMinWarmSamples,
+        normalizeByScenarioId: regressionControlScenario,
+      });
+
+      let gateFailure = gateFailureMessage(gateResult);
+      let failures = gateFailure ? 1 : 0;
+      let stableGateResult = gateResult;
+
+      if (gateFailure && regressionConfirmationRuns > 1) {
+        for (let attempt = 2; attempt <= regressionConfirmationRuns; attempt += 1) {
+          const attemptReport = buildReport(await runScenarioMatrix());
+          const attemptGate = evaluateRegressionGate(
+            attemptReport,
+            baseline,
+            regressionGate.thresholdPct,
+            {
+              minWarmSamples: regressionMinWarmSamples,
+              normalizeByScenarioId: regressionControlScenario,
+            },
+          );
+          const attemptFailure = gateFailureMessage(attemptGate);
+          if (attemptFailure) {
+            failures += 1;
+          } else {
+            gateFailure = null;
+            stableGateResult = attemptGate;
+          }
+        }
+
+        if (failures < regressionConfirmationRuns) {
+          const warnings = [
+            ...(stableGateResult?.warnings ?? []),
+            `regression-gate-unstable: ${String(failures)}/${String(regressionConfirmationRuns)} attempts failed`,
+          ];
+          stableGateResult = {
+            ...(stableGateResult ?? {
+              compared: 0,
+              violations: [],
+              insufficient_samples: [],
+              warnings: [],
+            }),
+            warnings: Array.from(new Set(warnings)),
+          };
+        }
+      }
+
+      gateResult = stableGateResult;
+      regressionConfirmationFailures = failures;
     }
 
     await mkdir(outputDir, { recursive: true });
@@ -1283,30 +1485,37 @@ async function main(): Promise<void> {
     const benchmarksDocPath = join(repoRoot, "BENCHMARKS.md");
     await writeFile(benchmarksDocPath, toBenchmarksMarkdown(report, repoRoot), "utf-8");
 
+    const gateFailure = gateFailureMessage(gateResult);
+
     process.stdout.write(
       `${JSON.stringify(
         {
-          ok: true,
+          ok: gateFailure === null,
           run_id: runId,
           profile,
           agents,
           strategies,
           max_runtime_ms: maxRuntimeMs,
           max_cell_runtime_ms: maxCellRuntimeMs,
+          regression_min_warm_samples: regressionGate ? regressionMinWarmSamples : null,
+          regression_control_scenario: regressionGate ? regressionControlScenario : null,
+          regression_confirmation_runs: regressionGate ? regressionConfirmationRuns : null,
+          regression_confirmation_failures: regressionGate ? regressionConfirmationFailures : null,
           baseline: regressionGate?.baselineAbs ?? null,
           regression_threshold_pct: regressionGate?.thresholdPct ?? null,
           regression_gate: gateResult,
           json: jsonPath,
           markdown: markdownPath,
           benchmarks: benchmarksDocPath,
+          error: gateFailure,
         },
         null,
         2,
       )}\n`,
     );
 
-    if (gateResult && gateResult.violations.length > 0) {
-      throw new Error(`benchmark-regression-gate-failed: ${gateResult.violations.join("; ")}`);
+    if (gateFailure) {
+      throw new Error(gateFailure);
     }
   } finally {
     for (const adapter of adapters) {

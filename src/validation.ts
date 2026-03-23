@@ -14,12 +14,12 @@ export function trimQuery(value: string | undefined): string {
 }
 
 export const TOOL_LIMITS = {
-  files_limit: { min: 1, max: 200, default: 20 },
-  symbols_limit: { min: 1, max: 200, default: 20 },
-  search_limit: { min: 1, max: 100, default: 10 },
-  lookup_files_limit: { min: 1, max: 200, default: 8 },
-  lookup_symbols_limit: { min: 1, max: 200, default: 12 },
-  lookup_search_limit: { min: 1, max: 100, default: 8 },
+  files_limit: { min: 1, max: 200, default: 16 },
+  symbols_limit: { min: 1, max: 200, default: 16 },
+  search_limit: { min: 1, max: 100, default: 8 },
+  lookup_files_limit: { min: 1, max: 200, default: 6 },
+  lookup_symbols_limit: { min: 1, max: 200, default: 10 },
+  lookup_search_limit: { min: 1, max: 100, default: 6 },
   chunk_content_max_chars: { min: 40, max: 20000, default: 240 },
   web_search_limit: { min: 1, max: 25, default: 8 },
   web_search_timeout_ms: { min: 100, max: 20000, default: 5000 },

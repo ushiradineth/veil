@@ -17,6 +17,7 @@
   "files": [
     "bin",
     "dist",
+    "skills/SKILL.md",
     "README.md",
     "LICENSE"
   ],

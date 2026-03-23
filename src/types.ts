@@ -99,6 +99,30 @@ export type IndexStatus = {
   grammar_suggestions?: GrammarSuggestion[];
 };
 
+export type UpdateSource = "network" | "cache" | "unavailable";
+
+export type McpUpdateStatus = {
+  package_name: string;
+  current: string;
+  latest: string | null;
+  outdated: boolean | null;
+  source: UpdateSource;
+  checked_at: string;
+  warning?: string;
+};
+
+export type SkillUpdateStatus = {
+  expected: string | null;
+  reported: string | null;
+  outdated: boolean | null;
+  reason: string | null;
+};
+
+export type UpdateCheckResult = {
+  mcp: McpUpdateStatus;
+  skill: SkillUpdateStatus;
+};
+
 export type WorkspaceIndexReason = "fresh" | "dirty-only" | "refresh-disabled" | "refreshed";
 
 export type WorkspaceIndexResult = {

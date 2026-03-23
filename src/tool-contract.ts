@@ -4,11 +4,9 @@ export const TOOL_DESCRIPTIONS = {
   veil_build: "Use when you need a full index rebuild.",
   veil_files: "Use when you need file path matches.",
   veil_symbols: "Use when you need symbol name matches.",
-  veil_search: "Use when you need indexed keyword matches. Omit default args unless overriding.",
-  veil_lookup:
-    "Use when you need ranked natural-language code context. Defaults are compact; request full detail only when needed.",
-  veil_discover:
-    "Use when you need one broad first retrieval call. Omit default args unless overriding.",
+  veil_search: "Use when you need indexed keyword matches.",
+  veil_lookup: "Use when you need ranked natural-language code context. Defaults are compact.",
+  veil_discover: "Use when you need one broad first retrieval call.",
   veil_chunk: "Use when you need full content for one chunk id.",
   veil_grammar_list: "Use when you need parser availability and enabled state.",
   veil_grammar_install: "Use when you need to enable parser IDs.",
@@ -19,10 +17,8 @@ export const TOOL_DESCRIPTIONS = {
   veil_grammar_runtime_install:
     "Use when you need explicit, approved runtime package install for parser IDs.",
   veil_web_search: "Use when you need external docs or web references.",
-  veil_fetch_url:
-    "Use when you need markdown-first page content from a URL. Defaults are bounded for token safety; override only when needed.",
-  veil_git_status:
-    "Use when you need branch or dirty-tree context. Path lists are opt-in; request them only when needed.",
+  veil_fetch_url: "Use when you need markdown-first page content from a URL.",
+  veil_git_status: "Use when you need branch or dirty-tree context.",
   veil_git_log: "Use when you need commit history context.",
   veil_git_diff: "Use when you need diff content for changes.",
   veil_git_show: "Use when you need commit details for one revision.",

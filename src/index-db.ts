@@ -8,12 +8,26 @@ import type { ChunkRecord, FileRecord, Manifest, SymbolRecord } from "./types";
 export const INDEX_DB_CORRUPT_REASON = "index-db-corrupt";
 
 class IndexDbCorruptError extends Error {
+  readonly code = INDEX_DB_CORRUPT_REASON;
   readonly reason = INDEX_DB_CORRUPT_REASON;
+  readonly db_path: string;
 
   constructor(path: string) {
-    super(`${INDEX_DB_CORRUPT_REASON}: ${path}`);
+    super(INDEX_DB_CORRUPT_REASON);
     this.name = "IndexDbCorruptError";
+    this.db_path = path;
   }
+}
+
+function isCorruptDbError(error: unknown): boolean {
+  if (error instanceof IndexDbCorruptError) return true;
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  const code = record.code;
+  if (typeof code === "string" && code === INDEX_DB_CORRUPT_REASON) return true;
+  const reason = record.reason;
+  if (typeof reason === "string" && reason === INDEX_DB_CORRUPT_REASON) return true;
+  return false;
 }
 
 type SqlJsStatement = {
@@ -438,7 +452,7 @@ export async function isIndexDbCorrupt(workspace: string, stateRoot?: string): P
     await loadDb(path);
     return false;
   } catch (error) {
-    return error instanceof IndexDbCorruptError;
+    return isCorruptDbError(error);
   }
 }
 
@@ -497,3 +511,7 @@ export function countsToManifest(
     chunk_count: counts.chunk_count,
   };
 }
+
+export const __internalIndexDb = {
+  isCorruptDbError,
+};

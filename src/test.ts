@@ -1431,7 +1431,7 @@ describe("Phase 3: Cache behavior", () => {
     await writeFile(join(repo, "c.ts"), "export const gamma = () => 'untracked-dirty-gamma'\n");
     git(repo, ["add", "b.ts"]);
 
-    const status = await getStatus(repo);
+    const status = await getStatus(repo, { bypass_cache: true });
     expect(status.reasons.includes("workspace-dirty")).toBe(true);
 
     await buildIndex(repo, "changed");
@@ -2560,7 +2560,7 @@ describe("Phase 4: Edge cases", () => {
     const dbPath = join(repo, ".veil", "index", "index.sqlite");
     await writeFile(dbPath, Buffer.from([0xde, 0xad, 0xbe, 0xef]));
 
-    const before = await getStatus(repo);
+    const before = await getStatus(repo, { bypass_cache: true });
     expect(before.stale).toBe(true);
     expect(before.reasons.includes("index-db-corrupt")).toBe(true);
 
@@ -4288,11 +4288,13 @@ describe("Bench suite planning helpers", () => {
       ok?: boolean;
       regression_min_warm_samples?: number;
       regression_control_scenario?: string | null;
+      regression_confirmation_runs?: number | null;
       json?: string;
     };
     expect(payload.ok).toBe(true);
     expect(payload.regression_min_warm_samples).toBe(3);
     expect(payload.regression_control_scenario).toBe("status-bootstrap");
+    expect(payload.regression_confirmation_runs).toBe(2);
     const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
       config?: { effective_warm_iterations?: number };
     };
@@ -4338,10 +4340,12 @@ describe("Bench suite planning helpers", () => {
     const payload = JSON.parse(run.stdout.trim()) as {
       ok?: boolean;
       regression_min_warm_samples?: number;
+      regression_confirmation_runs?: number | null;
       json?: string;
     };
     expect(payload.ok).toBe(true);
     expect(payload.regression_min_warm_samples).toBe(5);
+    expect(payload.regression_confirmation_runs).toBe(2);
     const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
       config?: { effective_warm_iterations?: number };
     };
@@ -4387,10 +4391,12 @@ describe("Bench suite planning helpers", () => {
     const payload = JSON.parse(run.stdout.trim()) as {
       ok?: boolean;
       regression_min_warm_samples?: number;
+      regression_confirmation_runs?: number | null;
       json?: string;
     };
     expect(payload.ok).toBe(true);
     expect(payload.regression_min_warm_samples).toBe(3);
+    expect(payload.regression_confirmation_runs).toBe(2);
     const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
       config?: { effective_warm_iterations?: number };
     };
@@ -4436,10 +4442,12 @@ describe("Bench suite planning helpers", () => {
     const payload = JSON.parse(run.stdout.trim()) as {
       ok?: boolean;
       regression_control_scenario?: string | null;
+      regression_confirmation_runs?: number | null;
       json?: string;
     };
     expect(payload.ok).toBe(true);
     expect(payload.regression_control_scenario).toBeNull();
+    expect(payload.regression_confirmation_runs).toBe(2);
     const report = JSON.parse(await readFile(String(payload.json), "utf-8")) as {
       config?: { effective_warm_iterations?: number };
     };
@@ -4481,6 +4489,48 @@ describe("Bench suite planning helpers", () => {
 
     expect(run.status).not.toBe(0);
     expect((run.stderr ?? "").includes("invalid-regression-control-scenario")).toBe(true);
+  });
+
+  test("Bench suite CLI allows overriding regression confirmation runs", async () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const outRoot = await mkdtemp(join(tmpdir(), "veil-bench-cli-confirm-runs-"));
+    const baselinePath = join(outRoot, "baseline.json");
+    await writeFile(
+      baselinePath,
+      `${JSON.stringify({ scenarios: [], competitors: [] })}\n`,
+      "utf-8",
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        "run",
+        "src/bench-suite.ts",
+        "--workspace",
+        repoRoot,
+        "--profile",
+        "smoke",
+        "--agents",
+        "firecrawl",
+        "--strategies",
+        "mcp_transport",
+        "--baseline",
+        baselinePath,
+        "--regression-confirmation-runs",
+        "1",
+        "--out",
+        outRoot,
+      ],
+      { cwd: repoRoot, encoding: "utf-8" },
+    );
+
+    expect(run.status).toBe(0);
+    const payload = JSON.parse(run.stdout.trim()) as {
+      ok?: boolean;
+      regression_confirmation_runs?: number | null;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.regression_confirmation_runs).toBe(1);
   });
 
   test("Bench suite CLI emits ok=false payload on regression-gate failure", async () => {

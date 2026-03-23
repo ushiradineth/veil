@@ -1,6 +1,6 @@
 ---
 name: veil
-version: 2.2.2
+version: 2.2.3
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -38,6 +38,12 @@ Retrieval query tools refresh index state on stale or dirty worktrees by default
 3. Fetch full code only when needed with `veil_chunk` using chunk ids from prior results.
 4. Add context branches only as needed: git, web, or GitHub.
 5. Return concise findings with paths or URLs, then continue implementation.
+
+## Skill version drift signal
+
+- Read local installed Veil skill frontmatter version once per session.
+- Send that value as `reported_skill_version` on `veil_discover` and `veil_status` calls.
+- Re-send when session state is uncertain or local skill file changes.
 
 Prefer required args only by default. Add optional args only when you need behavior different from defaults.
 Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unless asked, bounded `veil_fetch_url` output).

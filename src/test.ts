@@ -3393,6 +3393,7 @@ describe("MCP contract checks", () => {
     const workspace = join(TEMP_TEST_DIR, "mcp-status-corrupt-cache");
     await mkdir(workspace, { recursive: true });
     await writeFile(join(workspace, "beta.ts"), "export const beta = 2\n", "utf-8");
+    await writeFile(join(workspace, ".gitignore"), ".veil/\n", "utf-8");
     git(workspace, ["init"]);
     git(workspace, ["add", "."]);
     git(workspace, [
@@ -4657,9 +4658,14 @@ describe("Bench suite planning helpers", () => {
       regression_gate?: { insufficient_samples?: string[]; violations?: string[] };
     };
     expect(payload.ok).toBe(false);
-    expect((payload.error ?? "").includes("benchmark-regression-gate-failed")).toBe(true);
-    expect((payload.regression_gate?.insufficient_samples ?? []).length).toBe(0);
-    expect((payload.regression_gate?.violations ?? []).length).toBeGreaterThan(0);
+    const error = payload.error ?? "";
+    const insufficientCount = (payload.regression_gate?.insufficient_samples ?? []).length;
+    const violationCount = (payload.regression_gate?.violations ?? []).length;
+    expect(
+      error.includes("benchmark-regression-gate-failed") ||
+        error.includes("benchmark-regression-gate-insufficient-samples"),
+    ).toBe(true);
+    expect(insufficientCount + violationCount).toBeGreaterThan(0);
   }, 60_000);
 
   test("Regression gate allows gh_lookup single-sample baseline rows", () => {

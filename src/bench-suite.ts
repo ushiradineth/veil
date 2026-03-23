@@ -1034,8 +1034,14 @@ function evaluateRegressionGate(
     for (const scenario of current.scenarios) {
       const row = competitor.scenarios[scenario.id] as ScenarioSummary | undefined;
       const baselineRow = baselineCompetitor.scenarios[scenario.id] as ScenarioSummary | undefined;
-      if (!row || !baselineRow) continue;
-      if (row.status !== "ok" || baselineRow.status !== "ok") continue;
+      if (!baselineRow) continue;
+      if (baselineRow.status !== "ok") continue;
+      if (!row || row.status !== "ok") {
+        insufficientSamples.push(
+          `${competitor.id}:${scenario.id} (current-status=${row?.status ?? "missing"}, baseline-status=${baselineRow.status})`,
+        );
+        continue;
+      }
       const currentCount = row.warm.count;
       const baselineCount = baselineRow.warm.count;
       const requiredSamples = requiredMinWarmSamples(scenario, options.minWarmSamples);

@@ -267,6 +267,70 @@ function collectNodesByType(root: NodeLike, types: Set<string>): NodeLike[] {
   return out;
 }
 
+function loadDynamicLanguageRuntime(language: string): unknown {
+  if (!language || language === "text") return null;
+  return optionalModule(`tree-sitter-${language}`);
+}
+
+function genericSymbolKind(nodeType: string): SymbolRecord["kind"] | null {
+  if (nodeType.includes("function") || nodeType.includes("lambda")) return "function";
+  if (nodeType.includes("method")) return "method";
+  if (nodeType.includes("class")) return "class";
+  if (nodeType.includes("interface") || nodeType.includes("trait")) return "interface";
+  if (
+    nodeType.includes("type") ||
+    nodeType.includes("struct") ||
+    nodeType.includes("enum") ||
+    nodeType.includes("module")
+  ) {
+    return "type";
+  }
+  return null;
+}
+
+function extractGenericSymbols(
+  path: string,
+  language: string,
+  content: string,
+  runtimeLanguage: unknown,
+): SymbolRecord[] | null {
+  const parser = getParser(language, runtimeLanguage);
+  if (!parser) return null;
+  try {
+    const tree = parser.parse(content);
+    const stack: NodeLike[] = [tree.rootNode];
+    const seen = new Set<string>();
+    const out: SymbolRecord[] = [];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node) continue;
+      const kind = genericSymbolKind(node.type);
+      if (kind) {
+        const name = detectNodeName(node, content);
+        if (name) {
+          const key = `${name}:${String(node.startPosition.row)}:${kind}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            out.push({
+              path,
+              line: node.startPosition.row + 1,
+              kind,
+              name,
+              signature_hint: maybeSignature(node, content),
+            });
+          }
+        }
+      }
+      for (const child of node.namedChildren) {
+        stack.push(child);
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 export function extractSymbolsWithTreeSitter(
   path: string,
   language: string,
@@ -277,7 +341,12 @@ export function extractSymbolsWithTreeSitter(
     return enabledParsers.has("json") ? [] : null;
   }
   const config = RUNTIME_LANGUAGE_MAP[language];
-  if (!config) return null;
+  if (!config) {
+    if (!enabledParsers.has(language)) return null;
+    const dynamicRuntime = loadDynamicLanguageRuntime(language);
+    if (!dynamicRuntime) return null;
+    return extractGenericSymbols(path, language, content, dynamicRuntime);
+  }
   if (!enabledParsers.has(config.parserId)) return null;
 
   const languageRuntime = config.loader();

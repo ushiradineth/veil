@@ -16,7 +16,9 @@ export type GuidanceTool =
   | "git_diff"
   | "git_show"
   | "gh_lookup"
-  | "diagnostics";
+  | "diagnostics"
+  | "grammar_recommend"
+  | "grammar_runtime_install";
 
 type GuidanceOptions = {
   query?: string;
@@ -92,6 +94,10 @@ function nextCalls(tool: GuidanceTool): string[] {
       return ["discover", "lookup"];
     case "diagnostics":
       return ["status", "discover"];
+    case "grammar_recommend":
+      return ["grammar_runtime_install", "grammar_install"];
+    case "grammar_runtime_install":
+      return ["refresh", "discover"];
     default:
       return ["discover", "lookup"];
   }

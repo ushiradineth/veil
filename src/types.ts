@@ -76,12 +76,27 @@ export type AgentGuidance = {
   recommended_query?: string;
 };
 
+export type GrammarSuggestionReason = "parser-disabled" | "runtime-missing";
+
+export type GrammarSuggestion = {
+  language: string;
+  parser_id: string;
+  files: number;
+  reason: GrammarSuggestionReason;
+  runtime_package: string | null;
+  install_tool: "veil_grammar_runtime_install";
+  install_args: {
+    parsers: string[];
+  };
+};
+
 export type IndexStatus = {
   exists: boolean;
   stale: boolean;
   reasons: string[];
   manifest: Manifest | null;
   current_git_head: string | null;
+  grammar_suggestions?: GrammarSuggestion[];
 };
 
 export type WorkspaceIndexReason = "fresh" | "dirty-only" | "refresh-disabled" | "refreshed";

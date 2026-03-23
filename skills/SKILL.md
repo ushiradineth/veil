@@ -1,6 +1,6 @@
 ---
 name: veil
-version: 2.0.0
+version: 2.1.0
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -14,6 +14,7 @@ Use this skill when the task asks for any of these outcomes:
 - inspect branch status, commit history, or diffs before changes
 - gather external references and summarize source pages
 - inspect GitHub repository, issue, PR, or checks context
+- detect unsupported or disabled parser coverage and guide grammar installation via approval loop
 
 Treat intent phrases like `find where`, `investigate`, `compare`, `summarize from web`, and `check PR` as strong triggers.
 
@@ -48,6 +49,7 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 - Web context: `veil_web_search`, then `veil_fetch_url`.
 - GitHub context: `veil_gh_lookup`.
 - Setup and operations (non-retrieval): `veil_build`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
+- Grammar improvement loop: `veil_grammar_recommend` then (after explicit user approval) `veil_grammar_runtime_install`.
 
 ## Anti-pattern Corrections
 
@@ -57,6 +59,7 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 - Jumping to `veil_fetch_url` without candidates -> use `veil_web_search` first.
 - Raw `git` reads for normal context -> use `veil_git_status|veil_git_log|veil_git_diff|veil_git_show`.
 - Treating setup helpers as retrieval gaps -> keep setup/runtime operations separate from retrieval behavior.
+- Auto-installing parser runtimes during retrieval -> never auto-install, recommend first and require explicit approval before `veil_grammar_runtime_install`.
 
 ## When Not to Use
 

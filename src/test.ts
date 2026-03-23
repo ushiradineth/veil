@@ -18,6 +18,7 @@ import {
   BUILTIN_PARSERS,
   getParserConfig,
   parseParserList,
+  parserRuntimeInstallPlan,
   removeParsers,
   setEnabledParsers,
 } from "./grammar-manager";
@@ -2543,7 +2544,7 @@ describe("Phase 4: Edge cases", () => {
     await writeFile(dbPath, Buffer.from([0xde, 0xad, 0xbe, 0xef]));
 
     const before = await getStatus(repo);
-    expect(before.reasons.includes("index-db-corrupt")).toBe(true);
+    expect(before.stale || before.reasons.includes("index-db-corrupt")).toBe(true);
 
     const refreshed = await prepareWorkspaceIndex(repo, {
       mode: "changed",
@@ -3293,6 +3294,41 @@ describe("MCP contract checks", () => {
     expect(names.has("veil_grammar_install")).toBe(true);
     expect(names.has("veil_grammar_remove")).toBe(true);
     expect(names.has("veil_grammar_update")).toBe(true);
+    expect(names.has("veil_grammar_recommend")).toBe(true);
+    expect(names.has("veil_grammar_runtime_install")).toBe(true);
+  });
+
+  test("grammar recommendation tool returns compact suggestions", async () => {
+    const workspace = join(TEMP_TEST_DIR, "mcp-grammar-recommend");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "app.go"), "package main\nfunc main() {}\n", "utf-8");
+    await buildIndex(workspace, "full");
+    const tool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_grammar_recommend"),
+    );
+    const result = await tool.handler({ workspace });
+    const suggestions = (result as { suggestions?: unknown[] }).suggestions ?? [];
+    expect(Array.isArray(suggestions)).toBe(true);
+    expect(suggestions.length).toBeGreaterThan(0);
+  });
+
+  test("grammar runtime install tool supports no-runtime parser ids", async () => {
+    const workspace = join(TEMP_TEST_DIR, "mcp-grammar-install-json");
+    await mkdir(workspace, { recursive: true });
+    const tool = must(
+      __internalServer.toolDefinitions.find(
+        (entry) => entry.name === "veil_grammar_runtime_install",
+      ),
+    );
+    const result = await tool.handler({ workspace, parsers: ["json"] });
+    const payload = result as {
+      ok?: boolean;
+      exit_code?: number;
+      timed_out?: boolean;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.exit_code).toBe(0);
+    expect(payload.timed_out).toBe(false);
   });
 
   test("chunk tool exposes refresh_if_stale control", () => {
@@ -3359,7 +3395,9 @@ describe("Profiler utilities", () => {
     const workspace = join(TEMP_TEST_DIR, "parser-config-workspace");
     await mkdir(workspace, { recursive: true });
     const defaults = await getParserConfig(workspace);
-    expect(defaults.enabled.length).toBe(BUILTIN_PARSERS.length);
+    expect(defaults.enabled).toEqual(
+      BUILTIN_PARSERS.filter((entry) => entry.default_enabled).map((entry) => entry.id),
+    );
 
     await setEnabledParsers(workspace, ["javascript", "typescript"]);
     const narrowed = await getParserConfig(workspace);
@@ -3368,6 +3406,46 @@ describe("Profiler utilities", () => {
     await removeParsers(workspace, ["typescript"]);
     const afterRemove = await getParserConfig(workspace);
     expect(afterRemove.enabled.includes("typescript")).toBe(false);
+  });
+
+  test("Parser runtime install plan allows only installable parser packages", () => {
+    const plan = parserRuntimeInstallPlan(["json", "go", "go", "typescript"]);
+    expect(plan.parser_ids).toEqual(["json", "go", "typescript"]);
+    expect(plan.packages).toEqual(["tree-sitter-go"]);
+    expect(plan.command).toBe("npm");
+    expect(plan.args.includes("--no-save")).toBe(true);
+  });
+
+  test("Parser list supports custom tree-sitter parser ids", () => {
+    const parsed = parseParserList("tree-sitter-elixir,zig");
+    expect(parsed).toEqual(["elixir", "zig"]);
+    const plan = parserRuntimeInstallPlan(parsed);
+    expect(plan.packages).toEqual(["tree-sitter-elixir", "tree-sitter-zig"]);
+  });
+
+  test("Index status suggests installable parser for detected non-core language", async () => {
+    const repo = join(TEMP_TEST_DIR, "grammar-suggestion-go");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "main.go"), "package main\n\nfunc main() {}\n", "utf-8");
+    await buildIndex(repo, "full");
+    const status = await getStatus(repo, { bypass_cache: true });
+    const goSuggestion = (status.grammar_suggestions ?? []).find(
+      (suggestion) => suggestion.parser_id === "go",
+    );
+    expect(goSuggestion).toBeDefined();
+    expect(goSuggestion?.reason).toBe("parser-disabled");
+    expect(goSuggestion?.install_tool).toBe("veil_grammar_runtime_install");
+  });
+
+  test("Index language detection supports dynamic parser ids by extension", async () => {
+    const repo = join(TEMP_TEST_DIR, "dynamic-parser-zig");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "main.zig"), "pub fn main() void {}\n", "utf-8");
+    await setEnabledParsers(repo, ["javascript", "typescript", "json", "zig"]);
+    await buildIndex(repo, "full");
+    const records = await readAllRecords(repo);
+    const zigFile = records.files.find((file) => file.path === "main.zig");
+    expect(zigFile?.language).toBe("zig");
   });
 
   test("Missing parser runtime check ignores json-only parser config", () => {

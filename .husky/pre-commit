@@ -1,0 +1,3 @@
+nix run nixpkgs#bun -- run lint
+nix run nixpkgs#bun -- run format:check
+nix run nixpkgs#bun -- run knip

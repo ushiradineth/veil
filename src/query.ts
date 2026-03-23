@@ -23,12 +23,18 @@ export function scoreFile(
   let score = pathLower.includes(parsed.normalized) ? 8 : 2;
   const reasons: LookupReason[] = [];
   if (pathLower.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-path-match", detail: "Path contains the full normalized query" });
+    reasons.push({
+      label: "exact-path-match",
+      detail: "Path contains the full normalized query",
+    });
   }
   for (const token of parsed.tokens) {
     if (pathLower.includes(token)) {
       score += 1.5;
-      reasons.push({ label: "token-path-match", detail: `Path contains token '${token}'` });
+      reasons.push({
+        label: "token-path-match",
+        detail: `Path contains token '${token}'`,
+      });
     }
   }
   return { score, reasons };
@@ -43,7 +49,10 @@ export function scoreSymbol(
   let score = nameLower.includes(parsed.normalized) ? 9 : 3;
   const reasons: LookupReason[] = [];
   if (nameLower.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-symbol-match", detail: "Symbol name contains the full query" });
+    reasons.push({
+      label: "exact-symbol-match",
+      detail: "Symbol name contains the full query",
+    });
   }
   for (const token of parsed.tokens) {
     if (nameLower.includes(token)) {
@@ -73,7 +82,10 @@ export function scoreChunk(
   let score = hay.includes(parsed.normalized) ? 7 : 2;
   const reasons: LookupReason[] = [];
   if (hay.includes(parsed.normalized)) {
-    reasons.push({ label: "exact-content-match", detail: "Chunk content contains the full query" });
+    reasons.push({
+      label: "exact-content-match",
+      detail: "Chunk content contains the full query",
+    });
   }
   for (const token of parsed.tokens) {
     if (hay.includes(token)) {
@@ -85,7 +97,10 @@ export function scoreChunk(
     }
     if (pathLower.includes(token)) {
       score += 1;
-      reasons.push({ label: "token-path-match", detail: `Chunk path contains token '${token}'` });
+      reasons.push({
+        label: "token-path-match",
+        detail: `Chunk path contains token '${token}'`,
+      });
     }
   }
   return { score, reasons };
@@ -104,7 +119,12 @@ export function rankLookupResults<T>(
   items: T[],
   scorer: (item: T) => { score: number; reasons: LookupReason[] },
   fallbackReason: { label: string; detail: string },
-): { item: T; score: number; confidence: LookupConfidence; reasons: LookupReason[] }[] {
+): {
+  item: T;
+  score: number;
+  confidence: LookupConfidence;
+  reasons: LookupReason[];
+}[] {
   return items
     .map((item) => {
       const scored = scorer(item);
@@ -113,7 +133,12 @@ export function rankLookupResults<T>(
         fallbackReason.label,
         fallbackReason.detail,
       );
-      return { item, score: scored.score, confidence: toConfidence(scored.score), reasons };
+      return {
+        item,
+        score: scored.score,
+        confidence: toConfidence(scored.score),
+        reasons,
+      };
     })
     .sort((a, b) => b.score - a.score);
 }

@@ -565,12 +565,20 @@ async function runCommand(
         return;
       }
       if (timedOut) {
-        finish({ status: "error", text: out, reason: `ETIMEDOUT after ${String(timeoutMs)}ms` });
+        finish({
+          status: "error",
+          text: out,
+          reason: `ETIMEDOUT after ${String(timeoutMs)}ms`,
+        });
         return;
       }
       if (!allowedExitCodes.includes(code ?? -1)) {
         const detail = stderr.trim().length > 0 ? `: ${stderr.trim().slice(0, 200)}` : "";
-        finish({ status: "error", text: out, reason: `exit status ${String(code)}${detail}` });
+        finish({
+          status: "error",
+          text: out,
+          reason: `exit status ${String(code)}${detail}`,
+        });
         return;
       }
       finish({ status: "ok", text: out });
@@ -597,22 +605,45 @@ function veilMcpCallForScenario(workspace: string, scenario: Scenario): McpToolC
     case "refresh":
       return { toolName: "veil_refresh", args: { workspace, mode: "changed" } };
     case "files":
-      return { toolName: "veil_files", args: { workspace, query: scenario.query, limit: 20 } };
+      return {
+        toolName: "veil_files",
+        args: { workspace, query: scenario.query, limit: 20 },
+      };
     case "symbols":
-      return { toolName: "veil_symbols", args: { workspace, query: scenario.query, limit: 20 } };
+      return {
+        toolName: "veil_symbols",
+        args: { workspace, query: scenario.query, limit: 20 },
+      };
     case "search":
       return {
         toolName: "veil_search",
-        args: { workspace, query: scenario.query, limit: 10, prefer_code: true },
+        args: {
+          workspace,
+          query: scenario.query,
+          limit: 10,
+          prefer_code: true,
+        },
       };
     case "lookup":
-      return { toolName: "veil_lookup", args: { workspace, query: scenario.query } };
+      return {
+        toolName: "veil_lookup",
+        args: { workspace, query: scenario.query },
+      };
     case "discover":
-      return { toolName: "veil_discover", args: { workspace, query: scenario.query } };
+      return {
+        toolName: "veil_discover",
+        args: { workspace, query: scenario.query },
+      };
     case "web_search":
-      return { toolName: "veil_web_search", args: { workspace, query: scenario.query, limit: 5 } };
+      return {
+        toolName: "veil_web_search",
+        args: { workspace, query: scenario.query, limit: 5 },
+      };
     case "fetch_url":
-      return { toolName: "veil_fetch_url", args: { url: scenario.query, format: "markdown" } };
+      return {
+        toolName: "veil_fetch_url",
+        args: { url: scenario.query, format: "markdown" },
+      };
     case "diagnostics":
       return { toolName: "veil_diagnostics", args: {} };
     case "git_status":
@@ -626,7 +657,12 @@ function veilMcpCallForScenario(workspace: string, scenario: Scenario): McpToolC
     case "gh_lookup":
       return {
         toolName: "veil_gh_lookup",
-        args: { workspace, repo: scenario.query, kind: "repo_context", limit: 1 },
+        args: {
+          workspace,
+          repo: scenario.query,
+          kind: "repo_context",
+          limit: 1,
+        },
       };
     default:
       return null;
@@ -643,7 +679,11 @@ function firecrawlMcpCallForScenario(scenario: Scenario): McpToolCall | null {
   if (scenario.kind === "fetch_url") {
     return {
       toolName: "firecrawl_scrape",
-      args: { url: scenario.query, formats: ["markdown"], onlyMainContent: true },
+      args: {
+        url: scenario.query,
+        formats: ["markdown"],
+        onlyMainContent: true,
+      },
     };
   }
   return null;
@@ -730,7 +770,11 @@ function createAgentAdapter(
       if (agent === "veil") {
         const call = veilMcpCallForScenario(ctx.workspace, scenario);
         if (!call) {
-          return { status: "unsupported", text: "", reason: "scenario not mapped for veil MCP" };
+          return {
+            status: "unsupported",
+            text: "",
+            reason: "scenario not mapped for veil MCP",
+          };
         }
         return await callMcpToolOverStdio(
           {
@@ -792,7 +836,10 @@ async function createAgentMatrixAdapters(
   agents: AgentId[],
   strategies: StrategyId[],
   tracker: ProcessTracker,
-): Promise<{ adapters: Adapter[]; preflight: Record<string, PreflightStatus> }> {
+): Promise<{
+  adapters: Adapter[];
+  preflight: Record<string, PreflightStatus>;
+}> {
   const adapters: Adapter[] = [];
   const preflight: Record<string, PreflightStatus> = {};
   for (const agent of agents) {
@@ -814,7 +861,11 @@ async function runScenarioPhase(
   iterations: number,
   maxCellRuntimeMs: number,
   tracker: ProcessTracker,
-): Promise<{ status: "ok" | "unsupported" | "error"; reason: string | null; samples: Sample[] }> {
+): Promise<{
+  status: "ok" | "unsupported" | "error";
+  reason: string | null;
+  samples: Sample[];
+}> {
   const samples: Sample[] = [];
   const startedPhase = nowMs();
   let status: "ok" | "unsupported" | "error" = "ok";
@@ -824,7 +875,11 @@ async function runScenarioPhase(
     const elapsedCell = nowMs() - startedPhase;
     const remaining = Math.floor(maxCellRuntimeMs - elapsedCell);
     if (remaining <= 0) {
-      return { status: "unsupported", reason: "cell runtime budget exceeded", samples };
+      return {
+        status: "unsupported",
+        reason: "cell runtime budget exceeded",
+        samples,
+      };
     }
 
     const started = nowMs();
@@ -886,7 +941,6 @@ function summarizeAbSignal(
   run: { status: "ok" | "unsupported" | "error"; samples: Sample[] },
   nativeAdoption: NativeAdoption,
 ): AbSignal {
-  const strategy: StrategyId = "mcp_transport";
   let firstUsefulActionMs = 0;
   for (const sample of run.samples) {
     if (sample.relevance > 0) {

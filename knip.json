@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/bin.ts",
+    "src/server.ts",
+    "src/test.ts",
+    "scripts/build-package.mjs",
+    "scripts/update-homebrew-formula.mjs"
+  ],
+  "project": ["src/**/*.ts", "scripts/**/*.mjs", "bin/**/*.mjs"],
+  "ignore": ["src/indexer/build.ts"],
+  "ignoreDependencies": [
+    "@types/bun",
+    "tree-sitter-bash",
+    "tree-sitter-go",
+    "tree-sitter-javascript",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-typescript"
+  ]
+}

@@ -1,0 +1,357 @@
+{
+  "generated_at": "2026-03-23T16:20:40.538Z",
+  "environment": {
+    "hostname": "unknown",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v24.3.0",
+    "bun": "1.3.3",
+    "cpu_model": "Apple M2 Pro",
+    "cpu_cores": 10
+  },
+  "config": {
+    "workspace": "/Users/shu/Code/veil",
+    "profile": "smoke",
+    "agents": [
+      "veil"
+    ],
+    "strategies": [
+      "mcp_transport"
+    ],
+    "cold_iterations": 1,
+    "warm_iterations": 5,
+    "effective_warm_iterations": 5,
+    "output_dir": "/Users/shu/Code/veil/benchmarks/results/20260323-162024Z",
+    "competitors": [
+      "veil-mcp_transport"
+    ],
+    "max_runtime_ms": 120000,
+    "max_cell_runtime_ms": 20000,
+    "preflight": {
+      "veil-mcp_transport": {
+        "ready": true,
+        "mode_control": "strict",
+        "reason": "local veil MCP stdio transport"
+      }
+    },
+    "regression_control_scenario": null,
+    "regression_confirmation_runs": null
+  },
+  "scenarios": [
+    {
+      "id": "status-bootstrap",
+      "kind": "status",
+      "title": "Repository status bootstrap",
+      "prompt": "Get repository index and freshness status",
+      "query": "status",
+      "expected_patterns": [
+        "exists",
+        "stale",
+        "manifest"
+      ]
+    },
+    {
+      "id": "files-homebrew",
+      "kind": "files",
+      "title": "File lookup by path intent",
+      "prompt": "Find files related to homebrew",
+      "query": "homebrew",
+      "expected_patterns": [
+        "homebrew",
+        "brew",
+        "nix"
+      ]
+    },
+    {
+      "id": "symbols-build",
+      "kind": "symbols",
+      "title": "Symbol lookup by name intent",
+      "prompt": "Find symbols related to build",
+      "query": "build",
+      "expected_patterns": [
+        "build",
+        "install",
+        "package"
+      ]
+    },
+    {
+      "id": "search-pnpm-install",
+      "kind": "search",
+      "title": "Code content lookup",
+      "prompt": "Locate code snippets that contain pnpm install",
+      "query": "pnpm install",
+      "expected_patterns": [
+        "pnpm",
+        "install"
+      ]
+    },
+    {
+      "id": "lookup-build-index",
+      "kind": "lookup",
+      "title": "Intent-aware lookup",
+      "prompt": "Find where buildIndex is defined",
+      "query": "where is buildIndex defined",
+      "expected_patterns": [
+        "buildindex",
+        "indexer",
+        "score"
+      ]
+    },
+    {
+      "id": "discover-combined",
+      "kind": "discover",
+      "title": "Combined discovery workflow",
+      "prompt": "Find files, symbols, and code for homebrew pnpm build",
+      "query": "homebrew pnpm build",
+      "expected_patterns": [
+        "homebrew",
+        "pnpm",
+        "build"
+      ]
+    },
+    {
+      "id": "git-status-check",
+      "kind": "git_status",
+      "title": "Git status lookup",
+      "prompt": "Inspect repository git status",
+      "query": "status",
+      "expected_patterns": [
+        "branch",
+        "clean",
+        "dirty"
+      ]
+    }
+  ],
+  "competitors": [
+    {
+      "id": "veil-mcp_transport",
+      "label": "veil (mcp_transport)",
+      "scenarios": {
+        "status-bootstrap": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 351.5163,
+            "p95_ms": 412.5676,
+            "p99_ms": 412.5676,
+            "mean_ms": 359.1782,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 412.5676,
+            "fallback_rate": 0
+          }
+        },
+        "files-homebrew": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 454.1285,
+            "p95_ms": 656.084,
+            "p99_ms": 656.084,
+            "mean_ms": 492.0843,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 656.084,
+            "fallback_rate": 0
+          }
+        },
+        "symbols-build": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 548.6772,
+            "p95_ms": 738.563,
+            "p99_ms": 738.563,
+            "mean_ms": 580.7024,
+            "success_rate": 1,
+            "relevance_rate": 0.3333
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 481.1573,
+            "fallback_rate": 0
+          }
+        },
+        "search-pnpm-install": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 461.6388,
+            "p95_ms": 485.3905,
+            "p99_ms": 485.3905,
+            "mean_ms": 463.9412,
+            "success_rate": 1,
+            "relevance_rate": 0
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 2,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 0,
+            "fallback_rate": 0
+          }
+        },
+        "lookup-build-index": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 480.2447,
+            "p95_ms": 559.1512,
+            "p99_ms": 559.1512,
+            "mean_ms": 498.7602,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 480.2447,
+            "fallback_rate": 0
+          }
+        },
+        "discover-combined": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 479.9609,
+            "p95_ms": 482.2489,
+            "p99_ms": 482.2489,
+            "mean_ms": 473.1186,
+            "success_rate": 1,
+            "relevance_rate": 1
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 482.2489,
+            "fallback_rate": 0
+          }
+        },
+        "git-status-check": {
+          "status": "ok",
+          "reason": null,
+          "cold": {
+            "count": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "mean_ms": 0,
+            "success_rate": 0,
+            "relevance_rate": 0
+          },
+          "warm": {
+            "count": 5,
+            "p50_ms": 370.5032,
+            "p95_ms": 406.103,
+            "p99_ms": 406.103,
+            "mean_ms": 381.0013,
+            "success_rate": 1,
+            "relevance_rate": 0.6667
+          },
+          "native_adoption": {
+            "first_call_success": 1,
+            "calls_to_useful_context": 1,
+            "non_veil_fallback_rate": 0
+          },
+          "ab_signal": {
+            "schema_overhead_tokens": 12000,
+            "first_useful_action_ms": 406.103,
+            "fallback_rate": 0
+          }
+        }
+      }
+    }
+  ]
+}

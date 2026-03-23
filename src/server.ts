@@ -50,7 +50,7 @@ import {
 } from "./validation";
 import { diagnosticsStatePath } from "./state-root";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
-import { VEIL_VERSION } from "./version";
+import { buildUpdateCheck, VEIL_VERSION } from "./version";
 import { webSearch } from "./web-search";
 
 const LOCAL_READ_ANNOTATIONS: ToolAnnotations = {
@@ -279,7 +279,30 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         bypass_cache: true,
       });
-      return withAgentGuidanceCompact("status", status);
+      const updates = await buildUpdateCheck({ allow_network: false });
+      return withAgentGuidanceCompact("status", { ...status, updates });
+    },
+  },
+  {
+    name: "veil_update_check",
+    title: "Veil Update Check",
+    description: TOOL_DESCRIPTIONS.veil_update_check,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      reported_skill_version: z.string().optional(),
+      force_refresh: z.boolean().optional(),
+      timeout_ms: z.number().int().positive().max(10000).optional(),
+    },
+    annotations: EXTERNAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      resolveWorkspace(asString(args.workspace), asString(args.state_root));
+      const result = await buildUpdateCheck({
+        reported_skill_version: asString(args.reported_skill_version),
+        force_refresh: asBoolean(args.force_refresh),
+        timeout_ms: asNumber(args.timeout_ms),
+      });
+      return withAgentGuidanceCompact("update_check", result);
     },
   },
   {

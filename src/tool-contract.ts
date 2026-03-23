@@ -1,5 +1,6 @@
 export const TOOL_DESCRIPTIONS = {
   veil_status: "Use when you need index status or staleness.",
+  veil_update_check: "Use when you need MCP package and skill update status.",
   veil_refresh: "Use when you need to rebuild index state.",
   veil_build: "Use when you need a full index rebuild.",
   veil_files: "Use when you need file path matches.",

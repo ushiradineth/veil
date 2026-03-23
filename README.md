@@ -62,6 +62,7 @@ Add to `~/.config/opencode/opencode.json`:
 | Capability                          | MCP tool                                                                                  |
 | ----------------------------------- | ----------------------------------------------------------------------------------------- |
 | Index status                        | `veil_status`                                                                             |
+| MCP and skill update check          | `veil_update_check`                                                                       |
 | Incremental refresh                 | `veil_refresh`                                                                            |
 | Full rebuild                        | `veil_build`                                                                              |
 | Discover files/symbols/chunks       | `veil_discover`                                                                           |

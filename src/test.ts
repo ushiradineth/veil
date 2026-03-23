@@ -64,6 +64,7 @@ import {
   missingRequiredParsers,
 } from "./symbols-tree-sitter";
 import { TOOL_DESCRIPTIONS } from "./tool-contract";
+import { __internalVersion } from "./version";
 import { webSearch } from "./web-search";
 
 import "./test/server-http.test";
@@ -3105,6 +3106,7 @@ describe("Agent guidance helpers", () => {
     expect(descriptions.veil_files.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_symbols.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_search.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_update_check.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_gh_lookup.includes("GitHub")).toBe(true);
   });
 
@@ -3381,6 +3383,7 @@ describe("MCP contract checks", () => {
   test("MCP tool surface includes operational tools", () => {
     const names = new Set(__internalServer.toolNames);
     expect(names.has("veil_build")).toBe(true);
+    expect(names.has("veil_update_check")).toBe(true);
     expect(names.has("veil_grammar_list")).toBe(true);
     expect(names.has("veil_grammar_install")).toBe(true);
     expect(names.has("veil_grammar_remove")).toBe(true);
@@ -3587,6 +3590,44 @@ describe("MCP contract checks", () => {
     const mcpData = (mcp as { data?: { paths?: unknown } }).data;
 
     expect(mcpData?.paths ?? null).toBeNull();
+  });
+
+  test("status update check does not poison network update cache", async () => {
+    const statusTool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_status"),
+    );
+    const updateTool = must(
+      __internalServer.toolDefinitions.find((entry) => entry.name === "veil_update_check"),
+    );
+
+    __internalVersion.resetUpdateCache();
+    let fetchCalls = 0;
+    __internalVersion.setFetchImplForTests(async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ version: "9.9.9" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    try {
+      const statusResult = (await statusTool.handler({ workspace: SMALL_REPO })) as {
+        updates?: { mcp?: { source?: string } };
+      };
+      expect(statusResult.updates?.mcp?.source).toBe("unavailable");
+
+      const updateResult = (await updateTool.handler({
+        reported_skill_version: "0.0.1",
+      })) as {
+        mcp?: { source?: string; latest?: string | null };
+      };
+      expect(updateResult.mcp?.source).toBe("network");
+      expect(updateResult.mcp?.latest).toBe("9.9.9");
+      expect(fetchCalls).toBe(1);
+    } finally {
+      __internalVersion.resetUpdateCache();
+      __internalVersion.setFetchImplForTests();
+    }
   });
 });
 

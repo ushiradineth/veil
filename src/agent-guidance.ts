@@ -2,6 +2,7 @@ import type { AgentGuidance } from "./types";
 
 export type GuidanceTool =
   | "status"
+  | "update_check"
   | "refresh"
   | "files"
   | "symbols"
@@ -90,6 +91,8 @@ function nextCalls(tool: GuidanceTool): string[] {
       return ["discover", "lookup"];
     case "status":
       return ["discover", "lookup"];
+    case "update_check":
+      return ["status", "discover"];
     case "refresh":
       return ["discover", "lookup"];
     case "diagnostics":
@@ -149,6 +152,10 @@ function hasStructuralPayload(tool: GuidanceTool, payload: RecordLike): boolean 
   }
   if (tool === "status") {
     return typeof payload.exists === "boolean";
+  }
+  if (tool === "update_check") {
+    const mcp = asRecord(payload.mcp);
+    return typeof mcp.current === "string";
   }
   if (tool === "refresh") {
     return typeof payload.ok === "boolean";

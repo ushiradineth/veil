@@ -3,6 +3,9 @@
 ## Commands
 
 - Install deps: `nix run nixpkgs#bun -- install`
+- Run lint: `nix run nixpkgs#bun -- run lint`
+- Run format check: `nix run nixpkgs#bun -- run format:check`
+- Run dead-code check: `nix run nixpkgs#bun -- run knip`
 - Run tests: `nix run nixpkgs#bun -- test ./src/test.ts`
 - Run coverage: `nix run nixpkgs#bun -- test --coverage ./src/test.ts`
 - MCP server (stdio): `nix run nixpkgs#bun -- run src/bin.ts`

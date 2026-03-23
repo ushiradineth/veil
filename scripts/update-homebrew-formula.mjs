@@ -40,7 +40,7 @@ async function fetchJson(url, options = {}) {
       Authorization: `Bearer ${TOKEN}`,
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
   });
   if (!res.ok) {

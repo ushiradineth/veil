@@ -463,7 +463,13 @@ function extractSymbolsRegex(path: string, language: string, content: string): S
         : /type|interface/.test(line)
           ? "type"
           : "function";
-      symbols.push({ path, line: i + 1, kind, name, signature_hint: line.trim().slice(0, 120) });
+      symbols.push({
+        path,
+        line: i + 1,
+        kind,
+        name,
+        signature_hint: line.trim().slice(0, 120),
+      });
       break;
     }
   }
@@ -486,7 +492,11 @@ async function processFile(
   rel: string,
   enabledParsers: Set<ParserId>,
   stateRoot?: string,
-): Promise<{ file: FileRecord | null; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+): Promise<{
+  file: FileRecord | null;
+  symbols: SymbolRecord[];
+  chunks: ChunkRecord[];
+}> {
   const stateRootRel = relativeStateRoot(workspace, stateRoot);
   if (stateRootRel && (rel === stateRootRel || rel.startsWith(`${stateRootRel}/`)))
     return { file: null, symbols: [], chunks: [] };
@@ -530,7 +540,11 @@ async function computeForPaths(
   paths: string[],
   enabledParsers: Set<ParserId>,
   stateRoot?: string,
-): Promise<{ files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+): Promise<{
+  files: FileRecord[];
+  symbols: SymbolRecord[];
+  chunks: ChunkRecord[];
+}> {
   const files: FileRecord[] = [];
   const symbols: SymbolRecord[] = [];
   const chunks: ChunkRecord[] = [];
@@ -857,7 +871,9 @@ export async function prepareWorkspaceIndex(
     };
   }
 
-  const manifest = await buildIndex(workspace, mode, { state_root: options.state_root });
+  const manifest = await buildIndex(workspace, mode, {
+    state_root: options.state_root,
+  });
   STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
   const statusAfter = await getStatus(workspace, {
     state_root: options.state_root,
@@ -1190,7 +1206,9 @@ export async function lookupIndex(
   let symbolsParsed = parsed;
   let chunksParsed = parsed;
 
-  let files = await queryFiles(workspace, query, filesLimit, { state_root: options.state_root });
+  let files = await queryFiles(workspace, query, filesLimit, {
+    state_root: options.state_root,
+  });
   let symbols = await querySymbols(workspace, query, symbolsLimit, {
     state_root: options.state_root,
   });
@@ -1237,7 +1255,9 @@ export async function lookupIndex(
 
   if (files.length === 0) {
     filesParsed = parseQuery(query, "code");
-    files = await queryFiles(workspace, query, filesLimit, { state_root: options.state_root });
+    files = await queryFiles(workspace, query, filesLimit, {
+      state_root: options.state_root,
+    });
     if (files.length > 0) {
       fallbackStage = fallbackStage === "none" ? "files" : "all";
       fallbackDetail = "Primary strategy had no file hits, retried with broad path routing";
@@ -1293,7 +1313,11 @@ export async function lookupIndex(
 export async function queryChunkById(
   workspace: string,
   id: string,
-  options: { state_root?: string; include_content?: boolean; content_max_chars?: number } = {},
+  options: {
+    state_root?: string;
+    include_content?: boolean;
+    content_max_chars?: number;
+  } = {},
 ): Promise<ChunkRecord | null> {
   const chunk = await readChunkById(workspace, id, options.state_root);
   if (!chunk) return null;

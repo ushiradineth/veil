@@ -1,5 +1,5 @@
 import { errorMessage, isAbortLike } from "./errors";
-import { clampWebSearchLimit, clampWebSearchTimeout } from "./validation";
+import { clampWebSearchLimit, clampWebSearchTimeout, trimQuery } from "./validation";
 import type {
   WebSearchDebugResult,
   WebSearchProvider,
@@ -7,7 +7,6 @@ import type {
   WebSearchResponse,
   WebSearchResult,
 } from "./types";
-import { trimQuery } from "./validation";
 
 type DuckTopic = {
   Text?: string;
@@ -430,7 +429,10 @@ function mergeOutcomes(
   outcomes: ProviderOutcome[],
   limit: number,
   query: string,
-): { detailed_results: WebSearchDebugResult[]; primary_provider: WebSearchProvider } {
+): {
+  detailed_results: WebSearchDebugResult[];
+  primary_provider: WebSearchProvider;
+} {
   const ordered = [...outcomes].sort(
     (a, b) => PROVIDER_ORDER.indexOf(a.provider) - PROVIDER_ORDER.indexOf(b.provider),
   );
@@ -646,7 +648,10 @@ const PROVIDERS: ProviderDef[] = [
       const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=${String(limit)}&sort=relevance&type=link`;
       const response = await fetchImpl(url, {
         method: "GET",
-        headers: { accept: "application/json", "user-agent": "veil-web-search" },
+        headers: {
+          accept: "application/json",
+          "user-agent": "veil-web-search",
+        },
         signal,
       });
       if (!response.ok) {
@@ -767,10 +772,10 @@ export async function webSearch(
         }, remaining);
       });
 
-      const settled = await Promise.race<{ idx: number; outcome: ProviderOutcome } | null>([
-        ...candidates,
-        timeoutSentinel,
-      ]);
+      const settled = await Promise.race<{
+        idx: number;
+        outcome: ProviderOutcome;
+      } | null>([...candidates, timeoutSentinel]);
       if (!settled) {
         timedOut = true;
         break;

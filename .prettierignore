@@ -1,7 +1,0 @@
-benchmarks/results/
-dist/
-coverage/
-node_modules/
-.agents/
-.veil/
-package-lock.json

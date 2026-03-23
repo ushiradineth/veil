@@ -18,15 +18,15 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 ## Latest Run
 
-- Run directory: `benchmarks/results/20260319-121814Z`
-- Result JSON: `benchmarks/results/20260319-121814Z/results.json`
-- Summary markdown: `benchmarks/results/20260319-121814Z/SUMMARY.md`
-- Generated: `2026-03-19T12:18:18.751Z`
+- Run directory: `benchmarks/results/20260323-162024Z`
+- Result JSON: `benchmarks/results/20260323-162024Z/results.json`
+- Summary markdown: `benchmarks/results/20260323-162024Z/SUMMARY.md`
+- Generated: `2026-03-23T16:20:40.538Z`
 - Workspace: `/Users/shu/Code/veil`
 - Profile: `smoke`
 - Agents: `veil`
 - Strategies: `mcp_transport`
-- Iterations: `cold=1`, `warm=1`
+- Iterations: `cold=1`, `warm=5`
 - Runtime budget: `120000ms`
 - Cell budget: `20000ms`
 
@@ -46,25 +46,25 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 
 | Scenario | veil (mcp_transport) |
 | --- | --- |
-| status-bootstrap | 395.9953 / 395.9953 |
-| files-homebrew | 640.8661 / 640.8661 |
-| symbols-build | 599.2184 / 599.2184 |
-| search-pnpm-install | 596.0915 / 596.0915 |
-| lookup-build-index | 608.3995 / 608.3995 |
-| discover-combined | 656.0138 / 656.0138 |
-| git-status-check | 354.2710 / 354.2710 |
+| status-bootstrap | 351.5163 / 412.5676 |
+| files-homebrew | 454.1285 / 656.0840 |
+| symbols-build | 548.6772 / 738.5630 |
+| search-pnpm-install | 461.6388 / 485.3905 |
+| lookup-build-index | 480.2447 / 559.1512 |
+| discover-combined | 479.9609 / 482.2489 |
+| git-status-check | 370.5032 / 406.1030 |
 
 ## A/B Signals (schema_overhead_tokens / first_useful_action_ms / fallback_rate)
 
 | Scenario | veil (mcp_transport) |
 | --- | --- |
-| status-bootstrap | 12000 / 395.9953 / 0.00 |
-| files-homebrew | 12000 / 640.8661 / 0.00 |
-| symbols-build | 12000 / 599.2184 / 0.00 |
-| search-pnpm-install | 12000 / 596.0915 / 0.00 |
-| lookup-build-index | 12000 / 608.3995 / 0.00 |
-| discover-combined | 12000 / 656.0138 / 0.00 |
-| git-status-check | 12000 / 354.2710 / 0.00 |
+| status-bootstrap | 12000 / 412.5676 / 0.00 |
+| files-homebrew | 12000 / 656.0840 / 0.00 |
+| symbols-build | 12000 / 481.1573 / 0.00 |
+| search-pnpm-install | 12000 / 0.0000 / 0.00 |
+| lookup-build-index | 12000 / 480.2447 / 0.00 |
+| discover-combined | 12000 / 482.2489 / 0.00 |
+| git-status-check | 12000 / 406.1030 / 0.00 |
 
 ## Preflight
 
@@ -79,7 +79,7 @@ nix run nixpkgs#bun -- run src/bench-suite.ts --workspace /path/to/repo --profil
 | status-bootstrap | 1.00 / 1.00 / 0.00 |
 | files-homebrew | 1.00 / 1.00 / 0.00 |
 | symbols-build | 1.00 / 1.00 / 0.00 |
-| search-pnpm-install | 1.00 / 1.00 / 0.00 |
+| search-pnpm-install | 1.00 / 2.00 / 0.00 |
 | lookup-build-index | 1.00 / 1.00 / 0.00 |
 | discover-combined | 1.00 / 1.00 / 0.00 |
 | git-status-check | 1.00 / 1.00 / 0.00 |

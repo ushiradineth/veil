@@ -207,7 +207,11 @@ export async function getAllFilePaths(workspace: string, stateRoot?: string): Pr
 
 export async function replaceAllRecords(
   workspace: string,
-  records: { files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] },
+  records: {
+    files: FileRecord[];
+    symbols: SymbolRecord[];
+    chunks: ChunkRecord[];
+  },
   stateRoot?: string,
 ): Promise<void> {
   const path = dbPath(workspace, stateRoot);
@@ -252,7 +256,11 @@ export async function replaceAllRecords(
 export async function applyChangedRecords(
   workspace: string,
   changedPaths: Set<string>,
-  records: { files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] },
+  records: {
+    files: FileRecord[];
+    symbols: SymbolRecord[];
+    chunks: ChunkRecord[];
+  },
   stateRoot?: string,
 ): Promise<void> {
   const path = dbPath(workspace, stateRoot);
@@ -299,7 +307,11 @@ export async function applyChangedRecords(
 export async function readAllRecords(
   workspace: string,
   stateRoot?: string,
-): Promise<{ files: FileRecord[]; symbols: SymbolRecord[]; chunks: ChunkRecord[] }> {
+): Promise<{
+  files: FileRecord[];
+  symbols: SymbolRecord[];
+  chunks: ChunkRecord[];
+}> {
   const path = dbPath(workspace, stateRoot);
   if (!existsSync(path)) {
     return { files: [], symbols: [], chunks: [] };
@@ -449,6 +461,20 @@ export async function readCounts(
     symbol_count: symbolCountRows.length > 0 ? symbolCountRows[0].c : 0,
     chunk_count: chunkCountRows.length > 0 ? chunkCountRows[0].c : 0,
   };
+}
+
+export async function readLanguageCounts(
+  workspace: string,
+  stateRoot?: string,
+): Promise<{ language: string; count: number }[]> {
+  const path = dbPath(workspace, stateRoot);
+  if (!existsSync(path)) return [];
+  const db = await loadDb(path);
+  return rowsFromExec<{ language: string; count: number }>(
+    db.exec(
+      "SELECT language, COUNT(*) AS count FROM files GROUP BY language ORDER BY count DESC, language ASC",
+    ),
+  );
 }
 
 export function indexDbPath(workspace: string, stateRoot?: string): string {

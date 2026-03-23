@@ -7,7 +7,12 @@ import { join, relative } from "node:path";
 import { TopKHeap, getLru, setLru } from "./cache";
 import { diagnostics } from "./diagnostics";
 import { listIndexableFiles } from "./file-discovery";
-import { getParserConfig, type ParserId } from "./grammar-manager";
+import {
+  getParserConfig,
+  languageSupportById,
+  runtimePackageInstalled,
+  type ParserId,
+} from "./grammar-manager";
 import {
   applyChangedRecords,
   countsToManifest,
@@ -20,6 +25,7 @@ import {
   readChunkCandidates,
   readCounts,
   readFileCandidates,
+  readLanguageCounts,
   readSymbolCandidates,
   replaceAllRecords,
 } from "./index-db";
@@ -37,6 +43,7 @@ import type {
   QueryIntent,
   ResolvedQueryIntent,
   SymbolRecord,
+  GrammarSuggestion,
 } from "./types";
 
 const SCHEMA_VERSION = "2";
@@ -380,7 +387,17 @@ function hashText(content: string): string {
   return createHash("sha1").update(content).digest("hex");
 }
 
-function detectLanguage(path: string): string {
+const EXTENSION_LANGUAGE_ALIAS: Record<string, string> = {
+  ex: "elixir",
+  exs: "elixir",
+  cs: "c-sharp",
+  cjs: "javascript",
+  mjs: "javascript",
+  jsx: "javascript",
+  tsx: "typescript",
+};
+
+function detectLanguage(path: string, enabledParsers: Set<ParserId>): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
   if (
@@ -398,6 +415,11 @@ function detectLanguage(path: string): string {
   if (lower.endsWith(".py")) return "python";
   if (lower.endsWith(".go")) return "go";
   if (lower.endsWith(".rs")) return "rust";
+  const extension = lower.includes(".") ? (lower.split(".").at(-1) ?? "") : "";
+  if (extension) {
+    const aliased = EXTENSION_LANGUAGE_ALIAS[extension] ?? extension;
+    if (enabledParsers.has(aliased)) return aliased;
+  }
   return "text";
 }
 
@@ -520,7 +542,7 @@ async function processFile(
   }
   if (content.includes("\u0000")) return { file: null, symbols: [], chunks: [] };
 
-  const language = detectLanguage(rel);
+  const language = detectLanguage(rel, enabledParsers);
   const fileRecord: FileRecord = {
     path: rel,
     language,
@@ -648,6 +670,63 @@ async function writeHumanDocs(
   );
 }
 
+async function grammarSuggestionsForWorkspace(
+  workspace: string,
+  stateRoot?: string,
+): Promise<GrammarSuggestion[]> {
+  if (!indexDbExists(workspace, stateRoot)) return [];
+  const parserConfig = await getParserConfig(workspace, stateRoot);
+  const enabledParsers = new Set(parserConfig.enabled);
+  const counts = await readLanguageCounts(workspace, stateRoot);
+  const suggestions: GrammarSuggestion[] = [];
+  for (const row of counts) {
+    if (suggestions.length >= 5) break;
+    const language = row.language.trim().toLowerCase();
+    const support = languageSupportById(language);
+    if (!support || !support.installable) continue;
+    const parserId = support.parser_id;
+    const isEnabled = enabledParsers.has(parserId);
+    const runtimeInstalled = runtimePackageInstalled(parserId);
+    const reason = !isEnabled ? "parser-disabled" : !runtimeInstalled ? "runtime-missing" : null;
+    if (!reason) continue;
+    suggestions.push({
+      language,
+      parser_id: parserId,
+      files: row.count,
+      reason,
+      runtime_package: support.runtime_package,
+      install_tool: "veil_grammar_runtime_install",
+      install_args: { parsers: [parserId] },
+    });
+  }
+  return suggestions;
+}
+
+async function withGrammarSuggestions(
+  workspace: string,
+  status: IndexStatus,
+  stateRoot?: string,
+): Promise<IndexStatus> {
+  if (!status.exists) {
+    return {
+      ...status,
+      grammar_suggestions: [],
+    };
+  }
+  try {
+    const grammarSuggestions = await grammarSuggestionsForWorkspace(workspace, stateRoot);
+    return {
+      ...status,
+      grammar_suggestions: grammarSuggestions,
+    };
+  } catch {
+    return {
+      ...status,
+      grammar_suggestions: [],
+    };
+  }
+}
+
 export async function buildIndex(
   workspace: string,
   mode: BuildMode = "full",
@@ -768,9 +847,10 @@ export async function getStatus(
       manifest: null,
       current_git_head: currentHead,
     };
-    setStatusCache(key, status);
+    const withSuggestions = await withGrammarSuggestions(workspace, status, options.state_root);
+    setStatusCache(key, withSuggestions);
     diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
-    return status;
+    return withSuggestions;
   }
 
   let manifest: Manifest;
@@ -786,9 +866,10 @@ export async function getStatus(
     };
     const workspaceState = await hasDirtyWorkspace(workspace);
     if (workspaceState.dirty) malformed.reasons.push("workspace-dirty");
-    setStatusCache(key, malformed);
+    const withSuggestions = await withGrammarSuggestions(workspace, malformed, options.state_root);
+    setStatusCache(key, withSuggestions);
     diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
-    return malformed;
+    return withSuggestions;
   }
 
   const reasons: string[] = [];
@@ -810,9 +891,10 @@ export async function getStatus(
     manifest,
     current_git_head: currentHead,
   };
-  setStatusCache(key, status);
+  const withSuggestions = await withGrammarSuggestions(workspace, status, options.state_root);
+  setStatusCache(key, withSuggestions);
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
-  return status;
+  return withSuggestions;
 }
 
 export function shouldRefreshDiscover(status: IndexStatus): boolean {

@@ -14,6 +14,10 @@ export const TOOL_DESCRIPTIONS = {
   veil_grammar_install: "Use when you need to enable parser IDs.",
   veil_grammar_remove: "Use when you need to disable parser IDs.",
   veil_grammar_update: "Use when you need parser metadata refresh.",
+  veil_grammar_recommend:
+    "Use when you need parser improvement suggestions for unsupported or disabled language coverage.",
+  veil_grammar_runtime_install:
+    "Use when you need explicit, approved runtime package install for parser IDs.",
   veil_web_search: "Use when you need external docs or web references.",
   veil_fetch_url:
     "Use when you need markdown-first page content from a URL. Defaults are bounded for token safety; override only when needed.",

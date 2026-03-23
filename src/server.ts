@@ -14,11 +14,15 @@ import { fetchUrl } from "./fetch-url";
 import { toToon } from "./format";
 import { ghLookup, gitDiff, gitLog, gitShow, gitStatus } from "./git";
 import {
+  BUILTIN_PARSERS,
   installParsers,
+  installParserRuntimes,
+  parserRuntimeInstallPlan,
   listParsers,
   parseParserList,
   removeParsers,
   updateParsers,
+  type ParserId,
 } from "./grammar-manager";
 import {
   buildIndex,
@@ -135,6 +139,9 @@ function compactStatusSummary(value: unknown): Record<string, unknown> {
     exists: record.exists === true,
     stale: record.stale === true,
     reasons: Array.isArray(record.reasons) ? record.reasons : [],
+    grammar_suggestions: Array.isArray(record.grammar_suggestions)
+      ? record.grammar_suggestions
+      : [],
   };
 }
 
@@ -147,6 +154,59 @@ function parseParserIds(value: unknown): ReturnType<typeof parseParserList> {
     return parseParserList(value);
   }
   return [];
+}
+
+function parserDisplayName(parserId: ParserId): string {
+  const parser = BUILTIN_PARSERS.find((entry) => entry.id === parserId);
+  return parser?.label ?? parserId;
+}
+
+function countPayloadResults(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const payload = value as {
+    items?: unknown[];
+    files?: unknown[];
+    symbols?: unknown[];
+    chunks?: unknown[];
+  };
+  return (
+    (Array.isArray(payload.items) ? payload.items.length : 0) +
+    (Array.isArray(payload.files) ? payload.files.length : 0) +
+    (Array.isArray(payload.symbols) ? payload.symbols.length : 0) +
+    (Array.isArray(payload.chunks) ? payload.chunks.length : 0)
+  );
+}
+
+function suggestionMatchesQuery(
+  suggestion: { language: string; parser_id: string },
+  query: string | undefined,
+): boolean {
+  if (!query || query.trim() === "") return true;
+  const q = query.toLowerCase();
+  if (q.includes(suggestion.language.toLowerCase())) return true;
+  const parser = BUILTIN_PARSERS.find((entry) => entry.id === suggestion.parser_id);
+  if (!parser) return false;
+  if (q.includes(parser.id.toLowerCase())) return true;
+  return parser.aliases.some((alias) => q.includes(alias.toLowerCase()));
+}
+
+async function maybeAttachGrammarSuggestions(
+  workspace: string,
+  stateRoot: string | undefined,
+  payload: Record<string, unknown>,
+  query: string | undefined,
+): Promise<Record<string, unknown>> {
+  const resultCount = countPayloadResults(payload);
+  if (resultCount > 0) return payload;
+  const status = await getStatus(workspace, { state_root: stateRoot });
+  const suggestions = (status.grammar_suggestions ?? []).filter((suggestion) =>
+    suggestionMatchesQuery(suggestion, query),
+  );
+  if (suggestions.length === 0) return payload;
+  return {
+    ...payload,
+    grammar_suggestions: suggestions,
+  };
 }
 
 function successResult(value: unknown): CallToolResult {
@@ -314,6 +374,79 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     },
   },
   {
+    name: "veil_grammar_recommend",
+    title: "Veil Grammar Recommend",
+    description: TOOL_DESCRIPTIONS.veil_grammar_recommend,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      query: z.string().optional(),
+      limit: z.number().int().positive().max(10).optional(),
+    },
+    annotations: LOCAL_READ_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const query = asString(args.query);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const status = await getStatus(ws, { state_root: stateRoot });
+      const limit = Math.max(1, Math.min(asNumber(args.limit) ?? 5, 10));
+      const suggestions = (status.grammar_suggestions ?? [])
+        .filter((suggestion) => suggestionMatchesQuery(suggestion, query))
+        .slice(0, limit)
+        .map((suggestion) => {
+          const parserIds = parseParserList(suggestion.parser_id);
+          const installPlan = parserRuntimeInstallPlan(parserIds);
+          return {
+            ...suggestion,
+            parser_label: parserDisplayName(suggestion.parser_id),
+            install_plan: installPlan,
+            note:
+              suggestion.reason === "parser-disabled"
+                ? "Parser is available but disabled. Installing runtime and enabling parser improves symbol extraction accuracy."
+                : "Parser runtime package is missing. Installing runtime restores symbol extraction accuracy.",
+          };
+        });
+      return withAgentGuidanceCompact("grammar_recommend", {
+        query: query ?? null,
+        suggestions,
+      });
+    },
+  },
+  {
+    name: "veil_grammar_runtime_install",
+    title: "Veil Grammar Runtime Install",
+    description: TOOL_DESCRIPTIONS.veil_grammar_runtime_install,
+    inputSchema: {
+      workspace: z.string().optional(),
+      state_root: z.string().optional(),
+      parsers: z.array(z.string()).optional(),
+      timeout_ms: z.number().int().positive().max(300000).optional(),
+    },
+    annotations: INDEX_WRITE_ANNOTATIONS,
+    handler: async (args) => {
+      const workspace = asString(args.workspace);
+      const stateRoot = asString(args.state_root);
+      const ws = resolveWorkspace(workspace, stateRoot);
+      const parserIds = parseParserIds(args.parsers);
+      const installResult = await installParserRuntimes(
+        ws,
+        parserIds,
+        stateRoot,
+        asNumber(args.timeout_ms),
+      );
+      const status = await getStatus(ws, {
+        state_root: stateRoot,
+        bypass_cache: true,
+      });
+      return withAgentGuidanceCompact("grammar_runtime_install", {
+        ...installResult,
+        status: compactStatusSummary(status),
+        grammar_suggestions: status.grammar_suggestions ?? [],
+      });
+    },
+  },
+  {
     name: "veil_files",
     title: "Veil Find Files",
     description: TOOL_DESCRIPTIONS.veil_files,
@@ -336,8 +469,11 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         state_root: stateRoot,
         refresh_if_stale: refreshIfStale,
       });
-      const items = await queryFiles(ws, query, clampFilesLimit(limit), { state_root: stateRoot });
-      return withAgentGuidanceCompact("files", { items }, { query });
+      const items = await queryFiles(ws, query, clampFilesLimit(limit), {
+        state_root: stateRoot,
+      });
+      const payload = await maybeAttachGrammarSuggestions(ws, stateRoot, { items }, query);
+      return withAgentGuidanceCompact("files", payload, { query });
     },
   },
   {
@@ -366,7 +502,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
       const items = await querySymbols(ws, query, clampSymbolsLimit(limit), {
         state_root: stateRoot,
       });
-      return withAgentGuidanceCompact("symbols", { items }, { query });
+      const payload = await maybeAttachGrammarSuggestions(ws, stateRoot, { items }, query);
+      return withAgentGuidanceCompact("symbols", payload, { query });
     },
   },
   {
@@ -416,7 +553,8 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
             : "auto",
         state_root: stateRoot,
       });
-      return withAgentGuidanceCompact("search", { items }, { query });
+      const payload = await maybeAttachGrammarSuggestions(ws, stateRoot, { items }, query);
+      return withAgentGuidanceCompact("search", payload, { query });
     },
   },
   {
@@ -473,7 +611,13 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
         response_mode: args.response_mode === "full" ? "full" : "compact",
         state_root: stateRoot,
       });
-      return withAgentGuidanceCompact("lookup", result, { query });
+      const payload = await maybeAttachGrammarSuggestions(
+        ws,
+        stateRoot,
+        result as unknown as Record<string, unknown>,
+        query,
+      );
+      return withAgentGuidanceCompact("lookup", payload, { query });
     },
   },
   {
@@ -536,6 +680,9 @@ const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
           files: discovered.files,
           symbols: discovered.symbols,
           chunks: discovered.chunks,
+          grammar_suggestions: (prepareResult.status_after.grammar_suggestions ?? []).filter(
+            (suggestion) => suggestionMatchesQuery(suggestion, query),
+          ),
         },
         { query },
       );

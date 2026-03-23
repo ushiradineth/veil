@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 
 import { resolveStateRoot } from "./state-root";
 
@@ -12,7 +13,20 @@ export type BuiltinParserId =
   | "json"
   | "bash"
   | "go"
-  | "rust";
+  | "rust"
+  | "nix"
+  | "elixir"
+  | "zig"
+  | "c"
+  | "cpp"
+  | "c-sharp"
+  | "markdown"
+  | "java"
+  | "php"
+  | "ruby"
+  | "lua"
+  | "kotlin"
+  | "swift";
 
 export type ParserId = string;
 
@@ -23,7 +37,20 @@ export type SupportedLanguageId =
   | "python"
   | "shell"
   | "go"
-  | "rust";
+  | "rust"
+  | "nix"
+  | "elixir"
+  | "zig"
+  | "c"
+  | "cpp"
+  | "c-sharp"
+  | "markdown"
+  | "java"
+  | "php"
+  | "ruby"
+  | "lua"
+  | "kotlin"
+  | "swift";
 
 export type LanguageSupportEntry = {
   id: SupportedLanguageId;
@@ -47,9 +74,11 @@ type ParserState = {
   version: 1;
   enabled: ParserId[];
   installed: ParserId[];
+  runtime_install_failed: ParserId[];
 };
 
 const PARSER_STATE_FILE = "grammars.json";
+const PARSER_RUNTIME_DIR = "grammars-runtime";
 const require = createRequire(import.meta.url);
 const DEFAULT_INSTALL_TIMEOUT_MS = 120_000;
 const MAX_INSTALL_OUTPUT_BYTES = 2_000_000;
@@ -111,6 +140,110 @@ export const BUILTIN_PARSERS: ParserCatalogEntry[] = [
     runtime_package: "tree-sitter-rust",
     core_default: false,
   },
+  {
+    id: "nix",
+    aliases: ["nix"],
+    label: "Nix",
+    default_enabled: false,
+    runtime_package: "tree-sitter-nix",
+    core_default: false,
+  },
+  {
+    id: "elixir",
+    aliases: ["elixir", "ex"],
+    label: "Elixir",
+    default_enabled: false,
+    runtime_package: "tree-sitter-elixir",
+    core_default: false,
+  },
+  {
+    id: "zig",
+    aliases: ["zig"],
+    label: "Zig",
+    default_enabled: false,
+    runtime_package: "tree-sitter-zig",
+    core_default: false,
+  },
+  {
+    id: "c",
+    aliases: ["c"],
+    label: "C",
+    default_enabled: false,
+    runtime_package: "tree-sitter-c",
+    core_default: false,
+  },
+  {
+    id: "cpp",
+    aliases: ["cpp", "c++", "cplusplus"],
+    label: "C++",
+    default_enabled: false,
+    runtime_package: "tree-sitter-cpp",
+    core_default: false,
+  },
+  {
+    id: "c-sharp",
+    aliases: ["c-sharp", "c#", "csharp", "cs"],
+    label: "C#",
+    default_enabled: false,
+    runtime_package: "tree-sitter-c-sharp",
+    core_default: false,
+  },
+  {
+    id: "markdown",
+    aliases: ["markdown", "md"],
+    label: "Markdown",
+    default_enabled: false,
+    runtime_package: "tree-sitter-markdown",
+    core_default: false,
+  },
+  {
+    id: "java",
+    aliases: ["java"],
+    label: "Java",
+    default_enabled: false,
+    runtime_package: "tree-sitter-java",
+    core_default: false,
+  },
+  {
+    id: "php",
+    aliases: ["php"],
+    label: "PHP",
+    default_enabled: false,
+    runtime_package: "tree-sitter-php",
+    core_default: false,
+  },
+  {
+    id: "ruby",
+    aliases: ["ruby", "rb"],
+    label: "Ruby",
+    default_enabled: false,
+    runtime_package: "tree-sitter-ruby",
+    core_default: false,
+  },
+  {
+    id: "lua",
+    aliases: ["lua"],
+    label: "Lua",
+    default_enabled: false,
+    runtime_package: "tree-sitter-lua",
+    core_default: false,
+  },
+  {
+    id: "kotlin",
+    aliases: ["kotlin", "kt"],
+    label: "Kotlin",
+    default_enabled: false,
+    runtime_package: "tree-sitter-kotlin",
+    core_default: false,
+  },
+  {
+    id: "swift",
+    aliases: ["swift"],
+    label: "Swift",
+    default_enabled: false,
+    runtime_package: "tree-sitter-swift",
+    core_default: false,
+  },
 ];
 
 export const LANGUAGE_SUPPORT_CATALOG: LanguageSupportEntry[] = [
@@ -170,6 +303,110 @@ export const LANGUAGE_SUPPORT_CATALOG: LanguageSupportEntry[] = [
     installable: true,
     core_default: false,
   },
+  {
+    id: "nix",
+    parser_id: "nix",
+    runtime_package: "tree-sitter-nix",
+    extensions: [".nix"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "elixir",
+    parser_id: "elixir",
+    runtime_package: "tree-sitter-elixir",
+    extensions: [".ex", ".exs"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "zig",
+    parser_id: "zig",
+    runtime_package: "tree-sitter-zig",
+    extensions: [".zig"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "c",
+    parser_id: "c",
+    runtime_package: "tree-sitter-c",
+    extensions: [".c", ".h"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "cpp",
+    parser_id: "cpp",
+    runtime_package: "tree-sitter-cpp",
+    extensions: [".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "c-sharp",
+    parser_id: "c-sharp",
+    runtime_package: "tree-sitter-c-sharp",
+    extensions: [".cs"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "markdown",
+    parser_id: "markdown",
+    runtime_package: "tree-sitter-markdown",
+    extensions: [".md", ".markdown", ".mdown"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "java",
+    parser_id: "java",
+    runtime_package: "tree-sitter-java",
+    extensions: [".java"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "php",
+    parser_id: "php",
+    runtime_package: "tree-sitter-php",
+    extensions: [".php", ".phtml"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "ruby",
+    parser_id: "ruby",
+    runtime_package: "tree-sitter-ruby",
+    extensions: [".rb"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "lua",
+    parser_id: "lua",
+    runtime_package: "tree-sitter-lua",
+    extensions: [".lua"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "kotlin",
+    parser_id: "kotlin",
+    runtime_package: "tree-sitter-kotlin",
+    extensions: [".kt", ".kts"],
+    installable: true,
+    core_default: false,
+  },
+  {
+    id: "swift",
+    parser_id: "swift",
+    runtime_package: "tree-sitter-swift",
+    extensions: [".swift"],
+    installable: true,
+    core_default: false,
+  },
 ];
 
 const LANGUAGE_SUPPORT_BY_ID = new Map(LANGUAGE_SUPPORT_CATALOG.map((entry) => [entry.id, entry]));
@@ -181,6 +418,12 @@ const RUNTIME_PACKAGE_BY_PARSER = new Map(
 );
 
 const BUILTIN_ID_SET = new Set(BUILTIN_PARSERS.map((entry) => entry.id));
+const PARSER_ID_ALIASES = new Map<string, ParserId>([
+  ["c#", "c-sharp"],
+  ["csharp", "c-sharp"],
+  ["c sharp", "c-sharp"],
+  ["md", "markdown"],
+]);
 
 function parserStatePath(workspace: string, stateRoot?: string): string {
   return `${resolveStateRoot(workspace, stateRoot)}/${PARSER_STATE_FILE}`;
@@ -194,6 +437,7 @@ function defaultState(): ParserState {
     version: 1,
     enabled: defaults,
     installed: defaults,
+    runtime_install_failed: [],
   };
 }
 
@@ -203,6 +447,7 @@ function normalizeState(value: unknown): ParserState {
   const raw = value as {
     enabled?: unknown;
     installed?: unknown;
+    runtime_install_failed?: unknown;
     version?: unknown;
   };
   const pick = (items: unknown): ParserId[] => {
@@ -218,12 +463,31 @@ function normalizeState(value: unknown): ParserState {
   };
   const enabled = pick(raw.enabled);
   const installed = pick(raw.installed);
+  const runtimeInstallFailed = pick(raw.runtime_install_failed);
   const normalized: ParserState = {
     version: raw.version === 1 ? 1 : 1,
     enabled: enabled.length > 0 ? enabled : fallback.enabled,
     installed: installed.length > 0 ? installed : fallback.installed,
+    runtime_install_failed: runtimeInstallFailed,
   };
   return normalized;
+}
+
+function withRuntimeFailureCleared(state: ParserState, parserIds: ParserId[]): ParserState {
+  if (parserIds.length === 0) return state;
+  const clear = new Set(parserIds);
+  return {
+    ...state,
+    runtime_install_failed: state.runtime_install_failed.filter((item) => !clear.has(item)),
+  };
+}
+
+function withRuntimeFailureAdded(state: ParserState, parserIds: ParserId[]): ParserState {
+  if (parserIds.length === 0) return state;
+  return {
+    ...state,
+    runtime_install_failed: [...new Set([...state.runtime_install_failed, ...parserIds])],
+  };
 }
 
 async function readState(workspace: string, stateRoot?: string): Promise<ParserState> {
@@ -254,6 +518,8 @@ async function writeState(
 export function normalizeParserId(value: string): ParserId | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return null;
+  const aliasHit = PARSER_ID_ALIASES.get(normalized);
+  if (aliasHit) return aliasHit;
   for (const entry of BUILTIN_PARSERS) {
     if (entry.id === normalized) return entry.id;
     if (entry.aliases.includes(normalized)) return entry.id;
@@ -284,6 +550,14 @@ export async function getParserConfig(
   return { enabled: state.enabled, installed: state.installed };
 }
 
+export async function getRuntimeInstallFailedParsers(
+  workspace: string,
+  stateRoot?: string,
+): Promise<ParserId[]> {
+  const state = await readState(workspace, stateRoot);
+  return state.runtime_install_failed;
+}
+
 export async function setEnabledParsers(
   workspace: string,
   enabled: ParserId[],
@@ -298,6 +572,7 @@ export async function setEnabledParsers(
     version: 1,
     enabled: nextEnabled,
     installed: nextInstalled,
+    runtime_install_failed: state.runtime_install_failed,
   };
   await writeState(workspace, nextState, stateRoot);
   return { enabled: nextState.enabled, installed: nextState.installed };
@@ -314,7 +589,10 @@ export async function installParsers(
     .filter((item): item is ParserId => Boolean(item));
   const installed = [...new Set([...state.installed, ...add])];
   const enabled = [...new Set([...state.enabled, ...add])];
-  const nextState: ParserState = { version: 1, enabled, installed };
+  const nextState: ParserState = withRuntimeFailureCleared(
+    { version: 1, enabled, installed, runtime_install_failed: state.runtime_install_failed },
+    add,
+  );
   await writeState(workspace, nextState, stateRoot);
   return { enabled: nextState.enabled, installed: nextState.installed };
 }
@@ -328,7 +606,12 @@ export async function removeParsers(
   const remove = new Set(parserIds);
   const enabled = state.enabled.filter((item) => !remove.has(item));
   const installed = state.installed.filter((item) => !remove.has(item));
-  const nextState: ParserState = { version: 1, enabled, installed };
+  const nextState: ParserState = {
+    version: 1,
+    enabled,
+    installed,
+    runtime_install_failed: state.runtime_install_failed.filter((item) => !remove.has(item)),
+  };
   await writeState(workspace, nextState, stateRoot);
   return { enabled: nextState.enabled, installed: nextState.installed };
 }
@@ -371,9 +654,45 @@ export function runtimePackageForParser(parserId: ParserId): string | null {
   return `tree-sitter-${normalized}`;
 }
 
-export function runtimePackageInstalled(parserId: ParserId): boolean {
+export function resolveGrammarRuntimeRoot(workspace: string, stateRoot?: string): string {
+  return join(resolveStateRoot(workspace, stateRoot), PARSER_RUNTIME_DIR);
+}
+
+export function allowGlobalRuntimeFallbackForParser(
+  parserId: ParserId,
+  runtimeInstallFailed: Set<ParserId> = new Set<ParserId>(),
+): boolean {
+  const normalized = normalizeParserId(parserId);
+  if (!normalized) return false;
+  if (runtimeInstallFailed.has(normalized)) return true;
+  const builtin = BUILTIN_PARSERS.find((entry) => entry.id === normalized);
+  if (!builtin) return true;
+  return builtin.runtime_package === null;
+}
+
+function runtimePackageInstalledAtRoot(runtimePackage: string, root: string): boolean {
+  try {
+    const localRequire = createRequire(join(root, "__veil_runtime_loader__.cjs"));
+    localRequire.resolve(runtimePackage);
+    return true;
+  } catch {
+    return existsSync(join(root, "node_modules", runtimePackage, "package.json"));
+  }
+}
+
+export function runtimePackageInstalled(
+  parserId: ParserId,
+  workspace?: string,
+  stateRoot?: string,
+  options: { allow_global_fallback?: boolean } = {},
+): boolean {
   const runtimePackage = runtimePackageForParser(parserId);
   if (!runtimePackage) return true;
+  if (workspace) {
+    const runtimeRoot = resolveGrammarRuntimeRoot(workspace, stateRoot);
+    if (runtimePackageInstalledAtRoot(runtimePackage, runtimeRoot)) return true;
+  }
+  if (options.allow_global_fallback !== true) return false;
   try {
     require.resolve(runtimePackage);
     return true;
@@ -501,7 +820,26 @@ async function runCommand(
   });
 }
 
-export function parserRuntimeInstallPlan(parserIds: ParserId[]): {
+export type InstallCommandResult = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  timed_out: boolean;
+  exit_code: number | null;
+  error?: string;
+};
+
+export type InstallCommandRunner = (
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+) => Promise<InstallCommandResult>;
+
+export function parserRuntimeInstallPlan(
+  parserIds: ParserId[],
+  options: { install_root?: string } = {},
+): {
   parser_ids: ParserId[];
   packages: string[];
   command: string;
@@ -513,6 +851,7 @@ export function parserRuntimeInstallPlan(parserIds: ParserId[]): {
   const packages = parserIdsUnique
     .map((parserId) => parserInstallableRuntimePackage(parserId))
     .filter((value): value is string => Boolean(value));
+  const installRoot = options.install_root?.trim();
   return {
     parser_ids: parserIdsUnique,
     packages,
@@ -524,6 +863,7 @@ export function parserRuntimeInstallPlan(parserIds: ParserId[]): {
       "--ignore-scripts",
       "--no-fund",
       "--no-audit",
+      ...(installRoot ? ["--prefix", installRoot] : []),
       ...packages,
     ],
   };
@@ -534,6 +874,7 @@ export async function installParserRuntimes(
   parserIds: ParserId[],
   stateRoot?: string,
   timeoutMs = DEFAULT_INSTALL_TIMEOUT_MS,
+  commandRunner: InstallCommandRunner = runCommand,
 ): Promise<{
   ok: boolean;
   parser_ids: ParserId[];
@@ -545,10 +886,14 @@ export async function installParserRuntimes(
   stdout: string;
   stderr: string;
   error?: string;
+  install_root: string;
+  reuse_scope: "workspace-state-root";
   enabled: ParserId[];
   installed: ParserId[];
 }> {
-  const plan = parserRuntimeInstallPlan(parserIds);
+  const installRoot = resolveGrammarRuntimeRoot(workspace, stateRoot);
+  await mkdir(installRoot, { recursive: true });
+  const plan = parserRuntimeInstallPlan(parserIds, { install_root: installRoot });
   if (plan.packages.length === 0) {
     const parserConfig = await installParsers(workspace, plan.parser_ids, stateRoot);
     return {
@@ -561,13 +906,18 @@ export async function installParserRuntimes(
       exit_code: 0,
       stdout: "No runtime packages required",
       stderr: "",
+      install_root: installRoot,
+      reuse_scope: "workspace-state-root",
       enabled: parserConfig.enabled,
       installed: parserConfig.installed,
     };
   }
 
-  const installResult = await runCommand(plan.command, plan.args, workspace, timeoutMs);
+  const installResult = await commandRunner(plan.command, plan.args, workspace, timeoutMs);
   if (!installResult.ok) {
+    const state = await readState(workspace, stateRoot);
+    const failedState = withRuntimeFailureAdded(state, plan.parser_ids);
+    await writeState(workspace, failedState, stateRoot);
     const parserConfig = await getParserConfig(workspace, stateRoot);
     return {
       ok: false,
@@ -580,12 +930,17 @@ export async function installParserRuntimes(
       stdout: installResult.stdout,
       stderr: installResult.stderr,
       error: installResult.error,
+      install_root: installRoot,
+      reuse_scope: "workspace-state-root",
       enabled: parserConfig.enabled,
       installed: parserConfig.installed,
     };
   }
 
   const parserConfig = await installParsers(workspace, plan.parser_ids, stateRoot);
+  const state = await readState(workspace, stateRoot);
+  const successState = withRuntimeFailureCleared(state, plan.parser_ids);
+  await writeState(workspace, successState, stateRoot);
   return {
     ok: true,
     parser_ids: plan.parser_ids,
@@ -596,6 +951,8 @@ export async function installParserRuntimes(
     exit_code: installResult.exit_code,
     stdout: installResult.stdout,
     stderr: installResult.stderr,
+    install_root: installRoot,
+    reuse_scope: "workspace-state-root",
     enabled: parserConfig.enabled,
     installed: parserConfig.installed,
   };

@@ -1,6 +1,6 @@
 ---
 name: veil
-version: 2.1.0
+version: 2.2.1
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -50,6 +50,10 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 - GitHub context: `veil_gh_lookup`.
 - Setup and operations (non-retrieval): `veil_build`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
 - Grammar improvement loop: `veil_grammar_recommend` then (after explicit user approval) `veil_grammar_runtime_install`.
+- Grammar runtime installs are workspace and state-root scoped (`<state_root>/grammars-runtime`) and reused by
+  later MCP server instances targeting the same workspace.
+- For known installable parsers, treat runtime fallback as strict by default. Only rely on fallback paths when
+  install is recorded as failed or no known runtime package mapping exists.
 
 ## Anti-pattern Corrections
 

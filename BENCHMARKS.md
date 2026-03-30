@@ -88,4 +88,3 @@ Notes:
 
 - Web and GitHub scenarios are network dependent and usually much slower than local index queries.
 - Cells with `unsupported` or `error` indicate that competitor/mode could not execute that scenario.
-

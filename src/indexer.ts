@@ -121,6 +121,8 @@ function toCompactLookupReasons<T extends { reasons: { label: string; detail: st
 const STATUS_CACHE = new Map<string, { value: IndexStatus; ts: number }>();
 const QUERY_PARSE_CACHE = new Map<string, ParsedQuery>();
 const QUERY_RESULT_CACHE = new Map<string, Map<string, unknown[]>>();
+const BUILD_LOCKS = new Map<string, Promise<void>>();
+const REFRESH_IN_FLIGHT = new Map<string, Promise<Manifest>>();
 
 const STOP_TOKENS = new Set([
   "the",
@@ -181,6 +183,52 @@ const CODE_TOP_LEVEL_HINTS = new Set([
 
 function cacheKey(workspace: string, stateRoot?: string): string {
   return `${workspace}::${resolveIndexDir(workspace, stateRoot)}`;
+}
+
+function workspaceIndexKey(workspace: string, stateRoot?: string): string {
+  return cacheKey(workspace, stateRoot);
+}
+
+async function withWorkspaceBuildLock<T>(
+  workspace: string,
+  stateRoot: string | undefined,
+  action: () => Promise<T>,
+): Promise<T> {
+  const key = workspaceIndexKey(workspace, stateRoot);
+  const previous = BUILD_LOCKS.get(key) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => gate);
+  BUILD_LOCKS.set(key, queued);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    const releaseFn = release;
+    if (releaseFn) releaseFn();
+    if (BUILD_LOCKS.get(key) === queued) {
+      BUILD_LOCKS.delete(key);
+    }
+  }
+}
+
+async function refreshWorkspaceIndexSingleFlight(
+  workspace: string,
+  mode: BuildMode,
+  stateRoot?: string,
+): Promise<Manifest> {
+  const key = workspaceIndexKey(workspace, stateRoot);
+  const existing = REFRESH_IN_FLIGHT.get(key);
+  if (existing) return existing;
+  const run = buildIndex(workspace, mode, { state_root: stateRoot }).finally(() => {
+    if (REFRESH_IN_FLIGHT.get(key) === run) {
+      REFRESH_IN_FLIGHT.delete(key);
+    }
+  });
+  REFRESH_IN_FLIGHT.set(key, run);
+  return run;
 }
 
 function setStatusCache(key: string, value: IndexStatus): void {
@@ -816,7 +864,7 @@ async function withGrammarSuggestions(
   }
 }
 
-export async function buildIndex(
+async function buildIndexUnlocked(
   workspace: string,
   mode: BuildMode = "full",
   options: { state_root?: string } = {},
@@ -933,6 +981,16 @@ export async function buildIndex(
   diagnostics.recordCacheInvalidation();
   diagnostics.updateCacheSizes(QUERY_RESULT_CACHE.size, STATUS_CACHE.size);
   return manifest;
+}
+
+export async function buildIndex(
+  workspace: string,
+  mode: BuildMode = "full",
+  options: { state_root?: string } = {},
+): Promise<Manifest> {
+  return withWorkspaceBuildLock(workspace, options.state_root, async () =>
+    buildIndexUnlocked(workspace, mode, options),
+  );
 }
 
 export async function getStatus(
@@ -1068,9 +1126,7 @@ export async function prepareWorkspaceIndex(
     };
   }
 
-  const manifest = await buildIndex(workspace, mode, {
-    state_root: options.state_root,
-  });
+  const manifest = await refreshWorkspaceIndexSingleFlight(workspace, mode, options.state_root);
   STATUS_CACHE.delete(cacheKey(workspace, options.state_root));
   const statusAfter = await getStatus(workspace, {
     state_root: options.state_root,

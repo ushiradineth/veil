@@ -1272,6 +1272,29 @@ describe("Phase 3: Cache behavior", () => {
     expect(result.status_after.reasons.includes("manifest-missing")).toBe(false);
   });
 
+  test("prepareWorkspaceIndex coalesces concurrent stale refreshes", async () => {
+    const repo = join(TEMP_TEST_DIR, "init-concurrent-refresh");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "alpha.ts"), "export const alpha = 1\n");
+
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        prepareWorkspaceIndex(repo, {
+          refresh_if_stale: true,
+          strict_query_freshness: true,
+        }),
+      ),
+    );
+
+    expect(results.some((result) => result.refreshed)).toBe(true);
+    const generated = results.map((result) => result.status_after.manifest?.generated_at ?? "");
+    expect(generated.every((value) => value.length > 0)).toBe(true);
+    expect(new Set(generated).size).toBe(1);
+
+    const files = await queryFiles(repo, "alpha", 10);
+    expect(files.some((item) => item.path === "alpha.ts")).toBe(true);
+  });
+
   test("prepareWorkspaceIndex skips dirty-only refresh", async () => {
     const repo = join(TEMP_TEST_DIR, "init-dirty-only");
     await mkdir(repo, { recursive: true });
@@ -2651,6 +2674,35 @@ describe("Phase 4: Edge cases", () => {
     expect(operations[2].length).toBeGreaterThanOrEqual(0);
     expect(operations[3].exists).toBe(true);
   });
+
+  test("Concurrent buildIndex calls keep workspace index queryable", async () => {
+    const repo = join(TEMP_TEST_DIR, "concurrent-build-same-workspace");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "zeta.ts"), "export const zeta = 1\n");
+    git(repo, ["init"]);
+    git(repo, ["add", "."]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "init",
+    ]);
+    await buildIndex(repo, "full");
+
+    await writeFile(join(repo, "zeta.ts"), "export const zeta = 2\n");
+
+    await Promise.all([
+      buildIndex(repo, "changed"),
+      buildIndex(repo, "changed"),
+      buildIndex(repo, "changed"),
+    ]);
+
+    const chunks = await queryChunks(repo, "zeta = 2", 5);
+    expect(chunks.length).toBeGreaterThan(0);
+  });
 });
 
 describe("Phase 4.5: Query accuracy verification", () => {
@@ -3653,6 +3705,25 @@ describe("Profiler utilities", () => {
     await removeParsers(workspace, ["typescript"]);
     const afterRemove = await getParserConfig(workspace);
     expect(afterRemove.enabled.includes("typescript")).toBe(false);
+  });
+
+  test("Concurrent parser installs preserve merged parser state", async () => {
+    const workspace = join(TEMP_TEST_DIR, "parser-concurrent-install");
+    await mkdir(workspace, { recursive: true });
+
+    await Promise.all([
+      installParsers(workspace, ["python"]),
+      installParsers(workspace, ["go"]),
+      installParsers(workspace, ["ruby"]),
+    ]);
+
+    const config = await getParserConfig(workspace);
+    expect(config.enabled.includes("python")).toBe(true);
+    expect(config.enabled.includes("go")).toBe(true);
+    expect(config.enabled.includes("ruby")).toBe(true);
+    expect(config.installed.includes("python")).toBe(true);
+    expect(config.installed.includes("go")).toBe(true);
+    expect(config.installed.includes("ruby")).toBe(true);
   });
 
   test("Parser runtime install plan allows only installable parser packages", () => {

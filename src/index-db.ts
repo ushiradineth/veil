@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 import { resolveIndexDir } from "./state-root";
@@ -137,10 +137,30 @@ function ensureSchema(db: SqlJsDatabase): void {
 
 async function persist(db: SqlJsDatabase, path: string): Promise<void> {
   const encoded = db.export();
-  await mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-  await writeFile(path, Buffer.from(encoded));
+  const dir = path.slice(0, path.lastIndexOf("/"));
+  const tmpPath = `${path}.tmp-${String(process.pid)}-${String(Date.now())}-${Math.random().toString(16).slice(2)}`;
+  await mkdir(dir, { recursive: true });
+  try {
+    await writeFile(tmpPath, Buffer.from(encoded));
+    await rename(tmpPath, path);
+  } catch (error) {
+    try {
+      await rm(tmpPath, { force: true });
+    } catch {
+      // ignore cleanup failures
+    }
+    throw error;
+  }
   const mtimeMs = await fileMtime(path);
   DB_CACHE.set(path, { db, mtimeMs });
+}
+
+function rollbackTransaction(db: SqlJsDatabase): void {
+  try {
+    db.run("ROLLBACK");
+  } catch {
+    // ignore rollback errors
+  }
 }
 
 async function loadDb(path: string): Promise<SqlJsDatabase> {
@@ -232,38 +252,43 @@ export async function replaceAllRecords(
   const db = await loadDbRecover(path);
 
   db.run("BEGIN TRANSACTION");
-  db.run("DELETE FROM files");
-  db.run("DELETE FROM symbols");
-  db.run("DELETE FROM chunks");
+  try {
+    db.run("DELETE FROM files");
+    db.run("DELETE FROM symbols");
+    db.run("DELETE FROM chunks");
 
-  for (const file of records.files) {
-    db.run("INSERT INTO files(path, language, size, hash, top_level) VALUES (?, ?, ?, ?, ?)", [
-      file.path,
-      file.language,
-      file.size,
-      file.hash,
-      file.top_level,
-    ]);
+    for (const file of records.files) {
+      db.run("INSERT INTO files(path, language, size, hash, top_level) VALUES (?, ?, ?, ?, ?)", [
+        file.path,
+        file.language,
+        file.size,
+        file.hash,
+        file.top_level,
+      ]);
+    }
+    for (const symbol of records.symbols) {
+      db.run("INSERT INTO symbols(path, line, kind, name, signature_hint) VALUES (?, ?, ?, ?, ?)", [
+        symbol.path,
+        symbol.line,
+        symbol.kind,
+        symbol.name,
+        symbol.signature_hint ?? null,
+      ]);
+    }
+    for (const chunk of records.chunks) {
+      db.run("INSERT INTO chunks(id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)", [
+        chunk.id,
+        chunk.path,
+        chunk.start_line,
+        chunk.end_line,
+        chunk.content,
+      ]);
+    }
+    db.run("COMMIT");
+  } catch (error) {
+    rollbackTransaction(db);
+    throw error;
   }
-  for (const symbol of records.symbols) {
-    db.run("INSERT INTO symbols(path, line, kind, name, signature_hint) VALUES (?, ?, ?, ?, ?)", [
-      symbol.path,
-      symbol.line,
-      symbol.kind,
-      symbol.name,
-      symbol.signature_hint ?? null,
-    ]);
-  }
-  for (const chunk of records.chunks) {
-    db.run("INSERT INTO chunks(id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)", [
-      chunk.id,
-      chunk.path,
-      chunk.start_line,
-      chunk.end_line,
-      chunk.content,
-    ]);
-  }
-  db.run("COMMIT");
   await persist(db, path);
 }
 
@@ -281,40 +306,45 @@ export async function applyChangedRecords(
   const db = await loadDbRecover(path);
 
   db.run("BEGIN TRANSACTION");
-  for (const rel of changedPaths) {
-    db.run("DELETE FROM files WHERE path = ?", [rel]);
-    db.run("DELETE FROM symbols WHERE path = ?", [rel]);
-    db.run("DELETE FROM chunks WHERE path = ?", [rel]);
-  }
+  try {
+    for (const rel of changedPaths) {
+      db.run("DELETE FROM files WHERE path = ?", [rel]);
+      db.run("DELETE FROM symbols WHERE path = ?", [rel]);
+      db.run("DELETE FROM chunks WHERE path = ?", [rel]);
+    }
 
-  for (const file of records.files) {
-    db.run("INSERT INTO files(path, language, size, hash, top_level) VALUES (?, ?, ?, ?, ?)", [
-      file.path,
-      file.language,
-      file.size,
-      file.hash,
-      file.top_level,
-    ]);
+    for (const file of records.files) {
+      db.run("INSERT INTO files(path, language, size, hash, top_level) VALUES (?, ?, ?, ?, ?)", [
+        file.path,
+        file.language,
+        file.size,
+        file.hash,
+        file.top_level,
+      ]);
+    }
+    for (const symbol of records.symbols) {
+      db.run("INSERT INTO symbols(path, line, kind, name, signature_hint) VALUES (?, ?, ?, ?, ?)", [
+        symbol.path,
+        symbol.line,
+        symbol.kind,
+        symbol.name,
+        symbol.signature_hint ?? null,
+      ]);
+    }
+    for (const chunk of records.chunks) {
+      db.run("INSERT INTO chunks(id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)", [
+        chunk.id,
+        chunk.path,
+        chunk.start_line,
+        chunk.end_line,
+        chunk.content,
+      ]);
+    }
+    db.run("COMMIT");
+  } catch (error) {
+    rollbackTransaction(db);
+    throw error;
   }
-  for (const symbol of records.symbols) {
-    db.run("INSERT INTO symbols(path, line, kind, name, signature_hint) VALUES (?, ?, ?, ?, ?)", [
-      symbol.path,
-      symbol.line,
-      symbol.kind,
-      symbol.name,
-      symbol.signature_hint ?? null,
-    ]);
-  }
-  for (const chunk of records.chunks) {
-    db.run("INSERT INTO chunks(id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)", [
-      chunk.id,
-      chunk.path,
-      chunk.start_line,
-      chunk.end_line,
-      chunk.content,
-    ]);
-  }
-  db.run("COMMIT");
   await persist(db, path);
 }
 

@@ -82,6 +82,7 @@ const PARSER_RUNTIME_DIR = "grammars-runtime";
 const require = createRequire(import.meta.url);
 const DEFAULT_INSTALL_TIMEOUT_MS = 120_000;
 const MAX_INSTALL_OUTPUT_BYTES = 2_000_000;
+const STATE_WRITE_LOCKS = new Map<string, Promise<void>>();
 
 export const BUILTIN_PARSERS: ParserCatalogEntry[] = [
   {
@@ -429,6 +430,31 @@ function parserStatePath(workspace: string, stateRoot?: string): string {
   return `${resolveStateRoot(workspace, stateRoot)}/${PARSER_STATE_FILE}`;
 }
 
+async function withStateWriteLock<T>(
+  workspace: string,
+  stateRoot: string | undefined,
+  action: () => Promise<T>,
+): Promise<T> {
+  const key = parserStatePath(workspace, stateRoot);
+  const previous = STATE_WRITE_LOCKS.get(key) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => gate);
+  STATE_WRITE_LOCKS.set(key, queued);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    const releaseFn = release;
+    if (releaseFn) releaseFn();
+    if (STATE_WRITE_LOCKS.get(key) === queued) {
+      STATE_WRITE_LOCKS.delete(key);
+    }
+  }
+}
+
 function defaultState(): ParserState {
   const defaults = BUILTIN_PARSERS.filter((entry) => entry.default_enabled).map(
     (entry) => entry.id,
@@ -487,6 +513,47 @@ function withRuntimeFailureAdded(state: ParserState, parserIds: ParserId[]): Par
   return {
     ...state,
     runtime_install_failed: [...new Set([...state.runtime_install_failed, ...parserIds])],
+  };
+}
+
+function parserConfigSnapshot(state: ParserState): { enabled: ParserId[]; installed: ParserId[] } {
+  return { enabled: state.enabled, installed: state.installed };
+}
+
+function applySetEnabledParsersState(state: ParserState, enabled: ParserId[]): ParserState {
+  const nextEnabled = [
+    ...new Set(enabled.map((item) => normalizeParserId(item)).filter(Boolean)),
+  ] as ParserId[];
+  const nextInstalled = [...new Set([...state.installed, ...nextEnabled])];
+  return {
+    version: 1,
+    enabled: nextEnabled,
+    installed: nextInstalled,
+    runtime_install_failed: state.runtime_install_failed,
+  };
+}
+
+function applyInstallParsersState(state: ParserState, parserIds: ParserId[]): ParserState {
+  const add = parserIds
+    .map((item) => normalizeParserId(item))
+    .filter((item): item is ParserId => Boolean(item));
+  const installed = [...new Set([...state.installed, ...add])];
+  const enabled = [...new Set([...state.enabled, ...add])];
+  return withRuntimeFailureCleared(
+    { version: 1, enabled, installed, runtime_install_failed: state.runtime_install_failed },
+    add,
+  );
+}
+
+function applyRemoveParsersState(state: ParserState, parserIds: ParserId[]): ParserState {
+  const remove = new Set(parserIds.map((item) => normalizeParserId(item)).filter(Boolean));
+  const enabled = state.enabled.filter((item) => !remove.has(item));
+  const installed = state.installed.filter((item) => !remove.has(item));
+  return {
+    version: 1,
+    enabled,
+    installed,
+    runtime_install_failed: state.runtime_install_failed.filter((item) => !remove.has(item)),
   };
 }
 
@@ -563,19 +630,12 @@ export async function setEnabledParsers(
   enabled: ParserId[],
   stateRoot?: string,
 ): Promise<{ enabled: ParserId[]; installed: ParserId[] }> {
-  const state = await readState(workspace, stateRoot);
-  const nextEnabled = [
-    ...new Set(enabled.map((item) => normalizeParserId(item)).filter(Boolean)),
-  ] as ParserId[];
-  const nextInstalled = [...new Set([...state.installed, ...nextEnabled])];
-  const nextState: ParserState = {
-    version: 1,
-    enabled: nextEnabled,
-    installed: nextInstalled,
-    runtime_install_failed: state.runtime_install_failed,
-  };
-  await writeState(workspace, nextState, stateRoot);
-  return { enabled: nextState.enabled, installed: nextState.installed };
+  return withStateWriteLock(workspace, stateRoot, async () => {
+    const state = await readState(workspace, stateRoot);
+    const nextState = applySetEnabledParsersState(state, enabled);
+    await writeState(workspace, nextState, stateRoot);
+    return parserConfigSnapshot(nextState);
+  });
 }
 
 export async function installParsers(
@@ -583,18 +643,12 @@ export async function installParsers(
   parserIds: ParserId[],
   stateRoot?: string,
 ): Promise<{ enabled: ParserId[]; installed: ParserId[] }> {
-  const state = await readState(workspace, stateRoot);
-  const add = parserIds
-    .map((item) => normalizeParserId(item))
-    .filter((item): item is ParserId => Boolean(item));
-  const installed = [...new Set([...state.installed, ...add])];
-  const enabled = [...new Set([...state.enabled, ...add])];
-  const nextState: ParserState = withRuntimeFailureCleared(
-    { version: 1, enabled, installed, runtime_install_failed: state.runtime_install_failed },
-    add,
-  );
-  await writeState(workspace, nextState, stateRoot);
-  return { enabled: nextState.enabled, installed: nextState.installed };
+  return withStateWriteLock(workspace, stateRoot, async () => {
+    const state = await readState(workspace, stateRoot);
+    const nextState = applyInstallParsersState(state, parserIds);
+    await writeState(workspace, nextState, stateRoot);
+    return parserConfigSnapshot(nextState);
+  });
 }
 
 export async function removeParsers(
@@ -602,18 +656,12 @@ export async function removeParsers(
   parserIds: ParserId[],
   stateRoot?: string,
 ): Promise<{ enabled: ParserId[]; installed: ParserId[] }> {
-  const state = await readState(workspace, stateRoot);
-  const remove = new Set(parserIds);
-  const enabled = state.enabled.filter((item) => !remove.has(item));
-  const installed = state.installed.filter((item) => !remove.has(item));
-  const nextState: ParserState = {
-    version: 1,
-    enabled,
-    installed,
-    runtime_install_failed: state.runtime_install_failed.filter((item) => !remove.has(item)),
-  };
-  await writeState(workspace, nextState, stateRoot);
-  return { enabled: nextState.enabled, installed: nextState.installed };
+  return withStateWriteLock(workspace, stateRoot, async () => {
+    const state = await readState(workspace, stateRoot);
+    const nextState = applyRemoveParsersState(state, parserIds);
+    await writeState(workspace, nextState, stateRoot);
+    return parserConfigSnapshot(nextState);
+  });
 }
 
 export async function updateParsers(
@@ -895,7 +943,12 @@ export async function installParserRuntimes(
   await mkdir(installRoot, { recursive: true });
   const plan = parserRuntimeInstallPlan(parserIds, { install_root: installRoot });
   if (plan.packages.length === 0) {
-    const parserConfig = await installParsers(workspace, plan.parser_ids, stateRoot);
+    const parserConfig = await withStateWriteLock(workspace, stateRoot, async () => {
+      const state = await readState(workspace, stateRoot);
+      const nextState = applyInstallParsersState(state, plan.parser_ids);
+      await writeState(workspace, nextState, stateRoot);
+      return parserConfigSnapshot(nextState);
+    });
     return {
       ok: true,
       parser_ids: plan.parser_ids,
@@ -915,10 +968,12 @@ export async function installParserRuntimes(
 
   const installResult = await commandRunner(plan.command, plan.args, workspace, timeoutMs);
   if (!installResult.ok) {
-    const state = await readState(workspace, stateRoot);
-    const failedState = withRuntimeFailureAdded(state, plan.parser_ids);
-    await writeState(workspace, failedState, stateRoot);
-    const parserConfig = await getParserConfig(workspace, stateRoot);
+    const parserConfig = await withStateWriteLock(workspace, stateRoot, async () => {
+      const state = await readState(workspace, stateRoot);
+      const failedState = withRuntimeFailureAdded(state, plan.parser_ids);
+      await writeState(workspace, failedState, stateRoot);
+      return parserConfigSnapshot(failedState);
+    });
     return {
       ok: false,
       parser_ids: plan.parser_ids,
@@ -937,10 +992,12 @@ export async function installParserRuntimes(
     };
   }
 
-  const parserConfig = await installParsers(workspace, plan.parser_ids, stateRoot);
-  const state = await readState(workspace, stateRoot);
-  const successState = withRuntimeFailureCleared(state, plan.parser_ids);
-  await writeState(workspace, successState, stateRoot);
+  const parserConfig = await withStateWriteLock(workspace, stateRoot, async () => {
+    const state = await readState(workspace, stateRoot);
+    const successState = applyInstallParsersState(state, plan.parser_ids);
+    await writeState(workspace, successState, stateRoot);
+    return parserConfigSnapshot(successState);
+  });
   return {
     ok: true,
     parser_ids: plan.parser_ids,

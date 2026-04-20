@@ -3154,10 +3154,13 @@ describe("Agent guidance helpers", () => {
   test("tool descriptions are intent-first for canonical MCP tools", () => {
     const descriptions = TOOL_DESCRIPTIONS;
     expect(descriptions.veil_discover.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_discover.includes("intent is unclear")).toBe(true);
     expect(descriptions.veil_lookup.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_lookup.includes("natural-language")).toBe(true);
     expect(descriptions.veil_files.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_symbols.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_search.startsWith("Use when you need")).toBe(true);
+    expect(descriptions.veil_search.includes("exact")).toBe(true);
     expect(descriptions.veil_update_check.startsWith("Use when you need")).toBe(true);
     expect(descriptions.veil_gh_lookup.includes("GitHub")).toBe(true);
   });
@@ -3170,7 +3173,7 @@ describe("Agent guidance helpers", () => {
     });
     expect(guidance.confidence).toBe("high");
     expect(guidance.coverage).toBe("full");
-    expect(guidance.next_calls.length).toBeGreaterThan(0);
+    expect(guidance.next_calls).toEqual(["lookup"]);
   });
 
   test("buildAgentGuidance returns recovery hints for empty lookup", () => {
@@ -3181,7 +3184,133 @@ describe("Agent guidance helpers", () => {
     );
     expect(guidance.confidence).toBe("medium");
     expect(guidance.coverage).toBe("partial");
-    expect(guidance.recommended_query?.includes("broaden ")).toBe(true);
+    expect(guidance.next_calls).toEqual(["search"]);
+    expect(guidance.recommended_query).toBe("build index");
+  });
+
+  test("buildAgentGuidance compacts prompt-like queries into focused suggestions", () => {
+    const guidance = buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      {
+        query:
+          "please help find where verifySkillVersion is defined in src/version.ts for update checks",
+      },
+    );
+    expect(guidance.recommended_query?.includes("please")).toBe(false);
+    expect(guidance.recommended_query?.includes("help")).toBe(false);
+    expect(guidance.recommended_query?.includes("verifySkillVersion")).toBe(true);
+    expect(guidance.recommended_query?.includes("src/version.ts")).toBe(true);
+  });
+
+  test("buildAgentGuidance keeps follow-up recommendations single-step", () => {
+    const discoverGuidance = buildAgentGuidance(
+      "discover",
+      { files: [], symbols: [], chunks: [] },
+      { query: "where is buildIndex" },
+    );
+    expect(discoverGuidance.next_calls).toEqual(["lookup"]);
+
+    const searchGuidance = buildAgentGuidance(
+      "search",
+      { items: [] },
+      { query: "index-db-corrupt" },
+    );
+    expect(searchGuidance.next_calls).toEqual(["lookup"]);
+  });
+
+  test("buildAgentGuidance prefers enable flow for parser-disabled grammar suggestions", () => {
+    const guidance = buildAgentGuidance(
+      "grammar_recommend",
+      { suggestions: [{ reason: "parser-disabled" }] },
+      { query: "markdown parser" },
+    );
+    expect(guidance.next_calls).toEqual(["grammar_install"]);
+  });
+
+  test("buildAgentGuidance keeps runtime install flow for runtime-missing grammar suggestions", () => {
+    const guidance = buildAgentGuidance(
+      "grammar_recommend",
+      { suggestions: [{ reason: "runtime-missing" }] },
+      { query: "go parser" },
+    );
+    expect(guidance.next_calls).toEqual(["grammar_runtime_install"]);
+  });
+
+  test("buildAgentGuidance returns both grammar remediation options when reason is unclear", () => {
+    const guidance = buildAgentGuidance(
+      "grammar_recommend",
+      { suggestions: [] },
+      { query: "parser" },
+    );
+    expect(guidance.next_calls).toEqual(["grammar_runtime_install", "grammar_install"]);
+  });
+
+  test("buildAgentGuidance next_calls mapping stays stable across tools", () => {
+    const cases: [Parameters<typeof buildAgentGuidance>[0], string[]][] = [
+      ["discover", ["lookup"]],
+      ["chunk", ["lookup"]],
+      ["lookup", ["search"]],
+      ["files", ["lookup"]],
+      ["symbols", ["lookup"]],
+      ["search", ["lookup"]],
+      ["web_search", ["fetch_url"]],
+      ["fetch_url", ["web_search"]],
+      ["git_status", ["git_diff"]],
+      ["git_log", ["git_show"]],
+      ["git_diff", ["git_show"]],
+      ["git_show", ["git_log"]],
+      ["gh_lookup", ["lookup"]],
+      ["status", ["lookup"]],
+      ["update_check", ["status"]],
+      ["refresh", ["lookup"]],
+      ["diagnostics", ["status"]],
+      ["grammar_recommend", ["grammar_runtime_install", "grammar_install"]],
+      ["grammar_runtime_install", ["refresh"]],
+    ];
+
+    for (const [tool, expected] of cases) {
+      const guidance = buildAgentGuidance(tool, { meta: { ok: false } }, { query: "q" });
+      expect(guidance.next_calls).toEqual(expected);
+    }
+  });
+
+  test("buildAgentGuidance keeps compact fallback query for stopword-only prompts", () => {
+    const guidance = buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "please help me" },
+    );
+    expect(guidance.recommended_query).toBe("please help me");
+  });
+
+  test("buildAgentGuidance keeps punctuated identifiers in suggested query", () => {
+    const guidance = buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "please help with C++ parser crash in src/parse.cpp" },
+    );
+    expect(guidance.recommended_query?.includes("C++")).toBe(true);
+    expect(guidance.recommended_query?.includes("src/parse.cpp")).toBe(true);
+  });
+
+  test("buildAgentGuidance keeps scoped package names in suggested query", () => {
+    const guidance = buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "check @scope/pkg parser config in src/index.ts" },
+    );
+    expect(guidance.recommended_query?.includes("@scope/pkg")).toBe(true);
+  });
+
+  test("buildAgentGuidance keeps unicode identifiers in suggested query", () => {
+    const guidance = buildAgentGuidance(
+      "lookup",
+      { files: [], symbols: [], chunks: [] },
+      { query: "请帮我定位 解析器错误 在 src/服务.ts" },
+    );
+    expect(guidance.recommended_query?.includes("解析器错误")).toBe(true);
+    expect(guidance.recommended_query?.includes("src/服务.ts")).toBe(true);
   });
 
   test("buildAgentGuidance returns low confidence for error responses", () => {

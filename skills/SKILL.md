@@ -1,6 +1,6 @@
 ---
 name: veil
-version: 2.2.3
+version: 2.2.4
 description: Use this skill whenever Veil MCP tools are available and the task involves repository retrieval, git context, web references, or GitHub context. Trigger on direct or indirect phrasing like "find where", "investigate", "what changed", "summarize from web", or "check PR context", even when the user suggests shell-style discovery.
 ---
 
@@ -25,7 +25,7 @@ Veil MCP responses are compact TOON payloads. Guidance fields appear only on low
 ## Your Task
 
 1. Route discovery and context gathering through Veil MCP tools first.
-2. Keep calls minimal: one broad retrieval tool, then one narrowing tool.
+2. Start with one best-fit retrieval call, not multiple broad calls.
 3. Add git, web, or GitHub branches only when they change the answer.
 4. Return concise findings with file paths or URLs, then continue implementation.
 
@@ -33,11 +33,23 @@ Veil MCP responses are compact TOON payloads. Guidance fields appear only on low
 
 Retrieval query tools refresh index state on stale or dirty worktrees by default.
 
-1. Start broad once with `veil_discover`.
-2. Narrow once with `veil_lookup` or one targeted call: `veil_files|veil_symbols|veil_search`.
+1. Pick one primary retrieval tool first:
+   - `veil_lookup` for natural-language implementation questions (`where is`, `how does`, `what changed in code path`).
+   - `veil_search` for exact text or keyword hunting (error strings, flags, literals, log lines).
+   - `veil_files` or `veil_symbols` when file-name or symbol intent is already clear.
+   - `veil_discover` only when intent is unclear or you need one broad triage pass.
+2. Do not auto-run `discover` and `search` together. Run a second retrieval call only if the first call has low confidence or missing context.
 3. Fetch full code only when needed with `veil_chunk` using chunk ids from prior results.
 4. Add context branches only as needed: git, web, or GitHub.
 5. Return concise findings with paths or URLs, then continue implementation.
+
+## Query shaping rules
+
+- Do not paste the full user prompt into retrieval queries by default.
+- Prefer compact query strings with entity + intent (usually 3-8 terms).
+- Preserve high-signal identifiers exactly: file names, symbols, error codes, config keys.
+- Drop filler phrasing (`please`, `help`, long narrative context) unless it changes retrieval intent.
+- If first query misses, refine once with nearby synonyms or adjacent identifiers.
 
 ## Skill version drift signal
 
@@ -55,7 +67,7 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 - Web context: `veil_web_search`, then `veil_fetch_url`.
 - GitHub context: `veil_gh_lookup`.
 - Setup and operations (non-retrieval): `veil_status`, `veil_update_check`, `veil_build`, `veil_grammar_list|install|remove|update`, `veil_diagnostics` with `reset`.
-- Grammar improvement loop: `veil_grammar_recommend` then (after explicit user approval) `veil_grammar_runtime_install`.
+- Grammar improvement loop: `veil_grammar_recommend`, then choose follow-up by reason (enable parser via `veil_grammar_install` when disabled, or `veil_grammar_runtime_install` when runtime is missing).
 - Grammar runtime installs are workspace and state-root scoped (`<state_root>/grammars-runtime`) and reused by
   later MCP server instances targeting the same workspace.
 - For known installable parsers, treat runtime fallback as strict by default. Only rely on fallback paths when
@@ -63,8 +75,10 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 
 ## Anti-pattern Corrections
 
-- Shell-first discovery with ad hoc tools -> start with `veil_discover`, then narrow once.
+- Shell-first discovery with ad hoc tools -> pick the best-fit retrieval tool first, use `veil_discover` only when intent is unclear.
+- Running both `discover` and `search` on every prompt -> choose one best-fit tool first, then escalate only if needed.
 - Repeating broad retrieval calls -> rewrite query with entity + intent, then run one focused follow-up.
+- Copy-pasting full user prompts as queries -> compress to identifiers and intent words.
 - Asking for full code in broad calls -> keep compact defaults and fetch only selected chunk ids with `veil_chunk`.
 - Jumping to `veil_fetch_url` without candidates -> use `veil_web_search` first.
 - Raw `git` reads for normal context -> use `veil_git_status|veil_git_log|veil_git_diff|veil_git_show`.
@@ -78,6 +92,7 @@ Prefer compact defaults (`veil_lookup` compact reasons, git path lists off unles
 
 ## Quick Examples
 
-- `Find implementation points for a feature request` -> `veil_discover` then `veil_lookup`.
+- `Find implementation points for a feature request` -> `veil_lookup`; use `veil_discover` only if intent is broad or unclear.
+- `Find exact error string handling` -> `veil_search` with the error text.
 - `Check what changed on this branch before editing` -> `veil_git_status`, `veil_git_log`, then `veil_git_diff`.
 - `Summarize dependency docs with source links` -> `veil_web_search`, then `veil_fetch_url`.

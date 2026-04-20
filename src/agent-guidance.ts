@@ -61,48 +61,65 @@ function countResults(payload: RecordLike): number {
   return 0;
 }
 
-function nextCalls(tool: GuidanceTool): string[] {
+function grammarRecommendNextCalls(payload: RecordLike | undefined): string[] {
+  const suggestions = asArray(payload?.suggestions);
+  let hasParserDisabled = false;
+  let hasRuntimeMissing = false;
+  for (const suggestion of suggestions) {
+    const reason = asRecord(suggestion).reason;
+    if (reason === "parser-disabled") hasParserDisabled = true;
+    if (reason === "runtime-missing") hasRuntimeMissing = true;
+  }
+  if (hasParserDisabled && hasRuntimeMissing) {
+    return ["grammar_install", "grammar_runtime_install"];
+  }
+  if (hasParserDisabled) return ["grammar_install"];
+  if (hasRuntimeMissing) return ["grammar_runtime_install"];
+  return ["grammar_runtime_install", "grammar_install"];
+}
+
+function nextCalls(tool: GuidanceTool, payload?: RecordLike): string[] {
   switch (tool) {
     case "discover":
-      return ["lookup", "search"];
+      return ["lookup"];
     case "chunk":
-      return ["lookup", "search"];
+      return ["lookup"];
     case "lookup":
-      return ["discover", "search"];
+      return ["search"];
     case "files":
-      return ["search", "lookup"];
+      return ["lookup"];
     case "symbols":
-      return ["lookup", "search"];
+      return ["lookup"];
     case "search":
-      return ["lookup", "files"];
+      return ["lookup"];
     case "web_search":
-      return ["fetch_url", "discover"];
+      return ["fetch_url"];
     case "fetch_url":
-      return ["web_search", "discover"];
+      return ["web_search"];
     case "git_status":
-      return ["git_diff", "git_log"];
+      return ["git_diff"];
     case "git_log":
-      return ["git_show", "git_diff"];
+      return ["git_show"];
     case "git_diff":
-      return ["git_show", "git_status"];
+      return ["git_show"];
     case "git_show":
-      return ["git_log", "git_diff"];
+      return ["git_log"];
     case "gh_lookup":
-      return ["discover", "lookup"];
+      return ["lookup"];
     case "status":
-      return ["discover", "lookup"];
+      return ["lookup"];
     case "update_check":
-      return ["status", "discover"];
+      return ["status"];
     case "refresh":
-      return ["discover", "lookup"];
+      return ["lookup"];
     case "diagnostics":
-      return ["status", "discover"];
+      return ["status"];
     case "grammar_recommend":
-      return ["grammar_runtime_install", "grammar_install"];
+      return grammarRecommendNextCalls(payload);
     case "grammar_runtime_install":
-      return ["refresh", "discover"];
+      return ["refresh"];
     default:
-      return ["discover", "lookup"];
+      return ["lookup"];
   }
 }
 
@@ -166,10 +183,69 @@ function hasStructuralPayload(tool: GuidanceTool, payload: RecordLike): boolean 
   return false;
 }
 
+const QUERY_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "be",
+  "by",
+  "for",
+  "from",
+  "help",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "me",
+  "need",
+  "of",
+  "on",
+  "or",
+  "please",
+  "show",
+  "that",
+  "the",
+  "this",
+  "to",
+  "use",
+  "what",
+  "where",
+  "with",
+]);
+
+function isHighSignalToken(token: string): boolean {
+  if (token.length <= 1) return false;
+  if (/[._/:#@+-]/.test(token)) return true;
+  if (/[A-Z]/.test(token)) return true;
+  if (/\p{N}/u.test(token)) return true;
+  return !QUERY_STOP_WORDS.has(token.toLowerCase());
+}
+
+function sanitizeToken(token: string): string {
+  return token.replace(/^[^\p{L}\p{N}_./:#@+-]+|[^\p{L}\p{N}_./:#@+-]+$/gu, "");
+}
+
 function recommendQuery(query: string | undefined): string | undefined {
   if (!query || query.trim().length === 0) return undefined;
   const normalized = query.trim().replace(/\s+/g, " ");
-  return `broaden ${normalized}`;
+  const tokens = normalized
+    .split(" ")
+    .map(sanitizeToken)
+    .filter((token) => token.length > 0)
+    .filter((token) => isHighSignalToken(token));
+  if (tokens.length === 0) {
+    const fallback = normalized
+      .split(" ")
+      .map(sanitizeToken)
+      .filter((token) => token.length > 0)
+      .slice(0, 6)
+      .join(" ");
+    return fallback.length > 0 ? fallback : undefined;
+  }
+  return tokens.slice(0, 8).join(" ");
 }
 
 export function buildAgentGuidance(
@@ -183,7 +259,7 @@ export function buildAgentGuidance(
 
   if (!ok) {
     return {
-      next_calls: nextCalls(tool),
+      next_calls: nextCalls(tool, payload),
       confidence: "low",
       coverage: "none",
       missing_context: defaultMissingContext(tool),
@@ -194,13 +270,13 @@ export function buildAgentGuidance(
   if (resultCount === 0) {
     if (hasStructuralPayload(tool, payload)) {
       return {
-        next_calls: nextCalls(tool),
+        next_calls: nextCalls(tool, payload),
         confidence: "high",
         coverage: "full",
       };
     }
     return {
-      next_calls: nextCalls(tool),
+      next_calls: nextCalls(tool, payload),
       confidence: "medium",
       coverage: "partial",
       missing_context: defaultMissingContext(tool),
@@ -209,7 +285,7 @@ export function buildAgentGuidance(
   }
 
   return {
-    next_calls: nextCalls(tool),
+    next_calls: nextCalls(tool, payload),
     confidence: "high",
     coverage: "full",
   };
